@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "facade-spec/1#I7a",
-  "title": "facade-spec/1 - subset for increments I1-I4 + pilot A zones (reference, planes, stories, zones[wall], openings, linear, objects, systems catalog)",
+  "title": "facade-spec/1 - subset for increments I1-I6 + pilot A (reference, planes, stories, zones[wall], openings, cw_fields, balconies, railings, linear, objects, systems catalog)",
   "description": "Machine specification of one facade (ADR-001, ch. 4). Local facade coordinates: s = m along the reference line a->b (left to right seen from outside), v = m above reference.z0, w = m out of the facade plane. Every number that drives the model carries a source (src) and a certainty (conf).",
   "type": "object",
   "required": [
@@ -387,7 +387,10 @@
               "door",
               "profile",
               "linear",
-              "gdl"
+              "gdl",
+              "curtain_wall",
+              "slab",
+              "railing"
             ]
           },
           "favorite": {
@@ -564,6 +567,119 @@
           "classification": {
             "type": "string",
             "description": "gdl: classification item (its ID, unique in the project) given to the placed objects - needed for the FS_* properties"
+          },
+          "frame": {
+            "type": "object",
+            "required": [
+              "width",
+              "depth",
+              "offset"
+            ],
+            "additionalProperties": false,
+            "description": "mullions and transoms of the curtain wall (one frame class 'FS <system> rám')",
+            "properties": {
+              "width": {
+                "$ref": "#/$defs/value"
+              },
+              "depth": {
+                "$ref": "#/$defs/value"
+              },
+              "offset": {
+                "$ref": "#/$defs/value"
+              },
+              "material": {
+                "type": "string",
+                "description": "building material name"
+              },
+              "surface": {
+                "type": "string",
+                "description": "surface name"
+              }
+            }
+          },
+          "boundary": {
+            "type": "object",
+            "required": [
+              "width",
+              "depth",
+              "offset"
+            ],
+            "additionalProperties": false,
+            "description": "boundary frames of the curtain wall (edge of the field = jamb, head, sill)",
+            "properties": {
+              "width": {
+                "$ref": "#/$defs/value"
+              },
+              "depth": {
+                "$ref": "#/$defs/value"
+              },
+              "offset": {
+                "$ref": "#/$defs/value"
+              },
+              "material": {
+                "type": "string",
+                "description": "building material name"
+              },
+              "surface": {
+                "type": "string",
+                "description": "surface name"
+              }
+            }
+          },
+          "panels": {
+            "type": "object",
+            "description": "panel kinds of the curtain wall -> panel class 'FS <system> <kind>': glass / opaque (thickness, material, surface) or a door panel (libpart, e.g. 'CW Door 27')",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "thickness": {
+                  "$ref": "#/$defs/value"
+                },
+                "material": {
+                  "type": "string"
+                },
+                "surface": {
+                  "type": "string"
+                },
+                "libpart": {
+                  "type": "string"
+                },
+                "note": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "thickness": {
+            "$ref": "#/$defs/value",
+            "description": "slab thickness"
+          },
+          "height": {
+            "$ref": "#/$defs/value",
+            "description": "railing height above its base (top of the top rail)"
+          },
+          "post_spacing": {
+            "$ref": "#/$defs/value",
+            "description": "railing pattern length = distance of the posts"
+          },
+          "post_distribution": {
+            "enum": [
+              "FixedLength",
+              "BestDivision"
+            ]
+          },
+          "baluster_spacing": {
+            "$ref": "#/$defs/value",
+            "description": "distance of the balusters (bars) of the infill"
+          },
+          "infill": {
+            "$ref": "#/$defs/anyValue",
+            "description": "railing infill: balusters / panel / rails"
+          },
+          "favorite_baluster_spacing": {
+            "type": "number",
+            "description": "baluster spacing the base favourite carries (fixed by the favourite: ModifyRailingDetails cannot change it, R1)"
           }
         }
       }
@@ -953,6 +1069,187 @@
           }
         }
       }
+    },
+    "cw_fields": {
+      "type": "array",
+      "description": "glazed fields (shop windows, glazed entrances) as Curtain Walls: a CW in a rectangular hole of the wall of its zone (Empty Window), raster = inner axes",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "zone",
+          "rect",
+          "system",
+          "reveal"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/itemId"
+          },
+          "zone": {
+            "type": "string"
+          },
+          "rect": {
+            "$ref": "#/$defs/rect"
+          },
+          "system": {
+            "type": "string"
+          },
+          "replaces": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "openings of the earlier spec the field replaces"
+          },
+          "u_axes": {
+            "$ref": "#/$defs/valueList",
+            "description": "s of the mullion axes inside the field, ascending"
+          },
+          "v_axes": {
+            "$ref": "#/$defs/valueList",
+            "description": "v of the transom axes inside the field, ascending"
+          },
+          "cells": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "col",
+                "row",
+                "panel"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "col": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "row": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "panel": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "reveal": {
+            "$ref": "#/$defs/value",
+            "description": "outer face of the frames behind the outside face of the zone wall"
+          },
+          "photo_edges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/photoEdge"
+            }
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "balconies": {
+      "type": "array",
+      "description": "balcony slabs in front of the facade: back edge on the wall faces, sides to w_side, circular front through the crown w_crown",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "s",
+          "w_side",
+          "w_crown",
+          "v_top",
+          "system"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/itemId"
+          },
+          "plane": {
+            "$ref": "#/$defs/planeId"
+          },
+          "host": {
+            "type": "string"
+          },
+          "system": {
+            "type": "string"
+          },
+          "s": {
+            "$ref": "#/$defs/valueList"
+          },
+          "w_side": {
+            "$ref": "#/$defs/value"
+          },
+          "w_crown": {
+            "$ref": "#/$defs/value"
+          },
+          "v_top": {
+            "$ref": "#/$defs/value"
+          },
+          "front": {
+            "enum": [
+              "arc"
+            ]
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "railings": {
+      "type": "array",
+      "description": "railings (I6): reference line in (s, w) of a plane at the base v; straight segments only",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "system",
+          "path_sw",
+          "v"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/itemId"
+          },
+          "plane": {
+            "$ref": "#/$defs/planeId"
+          },
+          "on": {
+            "type": "string",
+            "description": "balcony it stands on"
+          },
+          "system": {
+            "type": "string"
+          },
+          "path_sw": {
+            "$ref": "#/$defs/pointList"
+          },
+          "v": {
+            "$ref": "#/$defs/value"
+          },
+          "inset": {
+            "type": "number"
+          },
+          "chords": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "approx_error": {
+            "type": "number",
+            "description": "largest distance of the chords from the arc (m)"
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      }
     }
   },
   "$defs": {
@@ -1145,6 +1442,59 @@
         },
         "search": {
           "type": "number"
+        }
+      }
+    },
+    "valueList": {
+      "type": "object",
+      "required": [
+        "v",
+        "src",
+        "conf"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "v": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "src": {
+          "$ref": "#/$defs/src"
+        },
+        "conf": {
+          "$ref": "#/$defs/conf"
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "pointList": {
+      "type": "object",
+      "required": [
+        "v",
+        "src",
+        "conf"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "v": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/xy"
+          },
+          "minItems": 2
+        },
+        "src": {
+          "$ref": "#/$defs/src"
+        },
+        "conf": {
+          "$ref": "#/$defs/conf"
+        },
+        "note": {
+          "type": "string"
         }
       }
     }

@@ -701,5 +701,179 @@
   "openings[O4].rect": "prijať; spodok vstupu overiť (kvety)",
   "systems[prof.rimsa_okap_m062].w": "prijať 0,40 m (vyloženie odkvapu)",
   "camera.s": "prijať (kamera z rektifikácie M015_J, rovnaká fotka)"
+ },
+ "i6": {
+  "about": "I5/I6 (2026-10-19): výklad s dverami ako Curtain Wall; raster z fotky (cw_photo.find_bar na kontrola/fasada_M062_J_rektif.jpg, S = 120 px/m)",
+  "systems": {
+   "cw.vyklad_m062": {
+    "type": "curtain_wall",
+    "favorite": "FS cw.vyklad_m062",
+    "conf": "odhad",
+    "src": "S1",
+    "note": "výklad cestovnej kancelárie, biele hliníkové rámy (fotka); profily a sklo ODHAD",
+    "frame": {
+     "width": {
+      "v": 0.06,
+      "src": "S1",
+      "conf": "meranie",
+      "note": "dolná priečka výkladov na fotke ~0,05-0,06 m (v = 1,12 / 1,11)"
+     },
+     "depth": {
+      "v": 0.1,
+      "src": null,
+      "conf": "odhad",
+      "note": "hĺbka profilu nie je na čelnej fotke viditeľná (typický hliníkový výkladový profil)"
+     },
+     "offset": {
+      "v": 0.05,
+      "src": null,
+      "conf": "odhad",
+      "note": "polovica hĺbky pred rovinou skla"
+     },
+     "material": "Hliník",
+     "surface": "Barva 01 - bílá lesklá"
+    },
+    "boundary": {
+     "width": {
+      "v": 0.045,
+      "src": "S1",
+      "conf": "odhad",
+      "note": "obvodový rám; na spoločných osteniach 2 x 0,045 = 0,09 (fotka 0,06-0,08)"
+     },
+     "depth": {
+      "v": 0.1,
+      "src": null,
+      "conf": "odhad",
+      "note": "ako priečky"
+     },
+     "offset": {
+      "v": 0.05,
+      "src": null,
+      "conf": "odhad",
+      "note": "ako priečky"
+     },
+     "material": "Hliník",
+     "surface": "Barva 01 - bílá lesklá"
+    },
+    "panels": {
+     "glass": {
+      "thickness": {
+       "v": 0.024,
+       "src": null,
+       "conf": "odhad",
+       "note": "izolačné dvojsklo (typ nie je z fotky čitateľný)"
+      },
+      "material": "Sklo",
+      "surface": "Sklo - čiré rychlé"
+     },
+     "door": {
+      "libpart": "CW Door 27",
+      "note": "jednokrídlové dvere ako panel CW"
+     }
+    }
+   }
+  },
+  "cw_fields": [
+   {
+    "id": "O1",
+    "replaces": [
+     "O1"
+    ],
+    "system": "cw.vyklad_m062",
+    "rect": {
+     "v": [
+      1.43,
+      2.73,
+      0.62,
+      2.5
+     ],
+     "src": "S1",
+     "conf": "meranie",
+     "note": "ľavé výkladové pole = O1 (I1)"
+    },
+    "v_axes": {
+     "v": [
+      1.12
+     ],
+     "src": "S1",
+     "conf": "meranie",
+     "note": "dolná priečka v = 1,12 (stred lišty 1,117, kontrast 47)"
+    }
+   },
+   {
+    "id": "O2",
+    "replaces": [
+     "O2"
+    ],
+    "system": "cw.vyklad_m062",
+    "rect": {
+     "v": [
+      2.73,
+      3.58,
+      0.2,
+      2.5
+     ],
+     "src": "S1",
+     "conf": "meranie",
+     "note": "dverový stĺpec = O2 (I1)"
+    },
+    "v_axes": {
+     "v": [
+      2.14
+     ],
+     "src": "S1",
+     "conf": "meranie",
+     "note": "priečka nadsvetlíka v = 2,14 (stred lišty 2,142, kontrast 103; pilot 2,04 ODHAD)"
+    },
+    "cells": [
+     {
+      "col": 0,
+      "row": 0,
+      "panel": "door"
+     }
+    ]
+   },
+   {
+    "id": "O3",
+    "replaces": [
+     "O3"
+    ],
+    "system": "cw.vyklad_m062",
+    "rect": {
+     "v": [
+      3.58,
+      4.77,
+      0.62,
+      2.5
+     ],
+     "src": "S1",
+     "conf": "meranie",
+     "note": "pravé výkladové pole = O3 (I1)"
+    },
+    "v_axes": {
+     "v": [
+      1.11
+     ],
+     "src": "S1",
+     "conf": "meranie",
+     "note": "dolná priečka v = 1,11 (stred lišty 1,108, kontrast 70)"
+    }
+   }
+  ],
+  "drop_simplifications": [
+   "openings[O1..O3]"
+  ],
+  "simplifications": [
+   {
+    "ref": "cw_fields[O1, O2, O3]",
+    "text": "Výklad = 3 Curtain Walls (ľavé pole, dverový stĺpec s panelom CW Door 27, pravé pole) v otvoroch steny, ktoré sa dotýkajú (jeden otvor tvaru T); na spoločných osteniach dva obvodové rámy 0,09 m. Dverový stĺpec má na fotke pevné zasklenie vľavo od krídla (2,73-3,10) s priečkou 1,12 - modelovaný ako jedno dverové pole 0,85 m (vykázané). Vrch je za markízou (ponechané 2,50 z pilota), ľavá hrana za kmeňom stromu.",
+    "proposal": "prijať; pevné pole vedľa krídla doplniť po overení na mieste"
+   },
+   {
+    "ref": "cw_fields[O1, O2, O3] (raster)",
+    "text": "Raster je čítaný v rovine fotky ako obdĺžniky otvorov (konvencia pilota, nález 6 ADR); paralaxa hĺbky rámu nie je opravená.",
+    "proposal": "prijať"
+   }
+  ]
  }
 }

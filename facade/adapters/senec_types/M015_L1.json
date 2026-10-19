@@ -871,5 +871,217 @@
  ],
  "pilot_mapping": {
   "sbox:eaves": "model: linear L1 (lin.rimsa_okap, profile FS prof.rimsa_okap)"
+ },
+ "i6": {
+  "about": "I5/I6 (2026-10-19): výkladové steny parteru ako Curtain Wall (dvere = dverový panel CW Door 27), raster z fotky (stredy priečok cw_photo.find_bar na kontrola/fasada_M015_J_rektif.jpg, S = 120 px/m)",
+  "systems": {
+   "cw.vyklad_m015": {
+    "type": "curtain_wall",
+    "favorite": "FS cw.vyklad_m015",
+    "conf": "odhad",
+    "src": "S1",
+    "note": "výkladová stena parteru, modré hliníkové rámy (fotka); profily a sklo ODHAD",
+    "frame": {
+     "width": {
+      "v": 0.07,
+      "src": "S1",
+      "conf": "meranie",
+      "note": "priečky na fotke 0,06-0,08 m (O3 nadsvetlík v = 2,67, O4 v = 2,19)"
+     },
+     "depth": {
+      "v": 0.1,
+      "src": null,
+      "conf": "odhad",
+      "note": "hĺbka profilu nie je na čelnej fotke viditeľná (typický hliníkový výkladový profil)"
+     },
+     "offset": {
+      "v": 0.05,
+      "src": null,
+      "conf": "odhad",
+      "note": "polovica hĺbky pred rovinou skla"
+     },
+     "material": "Hliník",
+     "surface": "Barva 18 - královská modrá"
+    },
+    "boundary": {
+     "width": {
+      "v": 0.045,
+      "src": "S1",
+      "conf": "odhad",
+      "note": "obvodový rám; na spoločnom ostení dverí a výkladu stoja dva rámy 2 x 0,045 = 0,09 (fotka: stĺpik 0,08, stred 6,29)"
+     },
+     "depth": {
+      "v": 0.1,
+      "src": null,
+      "conf": "odhad",
+      "note": "ako priečky"
+     },
+     "offset": {
+      "v": 0.05,
+      "src": null,
+      "conf": "odhad",
+      "note": "ako priečky"
+     },
+     "material": "Hliník",
+     "surface": "Barva 18 - královská modrá"
+    },
+    "panels": {
+     "glass": {
+      "thickness": {
+       "v": 0.024,
+       "src": null,
+       "conf": "odhad",
+       "note": "izolačné dvojsklo (typ nie je z fotky čitateľný)"
+      },
+      "material": "Sklo",
+      "surface": "Sklo - čiré rychlé"
+     },
+     "door": {
+      "libpart": "CW Door 27",
+      "note": "jednokrídlové dvere ako panel CW"
+     }
+    }
+   }
+  },
+  "cw_fields": [
+   {
+    "id": "O1",
+    "replaces": [
+     "O1"
+    ],
+    "system": "cw.vyklad_m015",
+    "rect": {
+     "v": [
+      1.0,
+      1.87,
+      0.15,
+      2.76
+     ],
+     "src": "S6",
+     "conf": "meranie",
+     "note": "dverový stĺpec výkladu O1 (kvetinárstvo): ľavá hrana, spodok a vrch = O1 (I1); pravá = stĺpik medzi dverami a výkladom s = 1,87 (S6; stred lišty na fotke 1,90)"
+    },
+    "v_axes": {
+     "v": [
+      2.21
+     ],
+     "src": "S6",
+     "conf": "meranie",
+     "note": "priečka nadsvetlíka v = 2,21 (stred lišty na fotke 2,21-2,23)"
+    },
+    "cells": [
+     {
+      "col": 0,
+      "row": 0,
+      "panel": "door"
+     }
+    ]
+   },
+   {
+    "id": "O1b",
+    "replaces": [
+     "O1"
+    ],
+    "system": "cw.vyklad_m015",
+    "rect": {
+     "v": [
+      1.87,
+      2.47,
+      0.78,
+      2.76
+     ],
+     "src": "S6",
+     "conf": "odhad",
+     "note": "výkladové pole O1 vpravo od dverí: spodok výkladu v = 0,78 (parapet čiastočne za kvetmi, ODHAD), vrch a pravá hrana = O1"
+    },
+    "v_axes": {
+     "v": [
+      2.21
+     ],
+     "src": "S6",
+     "conf": "meranie",
+     "note": "priečka nadsvetlíka v = 2,21 (stred lišty 2,21), rovnaká nad dverami aj výkladom"
+    }
+   },
+   {
+    "id": "O3",
+    "replaces": [
+     "O3"
+    ],
+    "system": "cw.vyklad_m015",
+    "rect": {
+     "v": [
+      5.31,
+      6.33,
+      0.17,
+      3.13
+     ],
+     "src": "S1",
+     "conf": "meranie",
+     "note": "dverový stĺpec obchodu = O3 (I1)"
+    },
+    "v_axes": {
+     "v": [
+      2.19,
+      2.67
+     ],
+     "src": "S6",
+     "conf": "meranie",
+     "note": "priečka nad dverami v = 2,19 (stred lišty 2,20) a priečka v nadsvetlíku v = 2,67 (stred lišty 2,675; I2 2,66)"
+    },
+    "cells": [
+     {
+      "col": 0,
+      "row": 0,
+      "panel": "door"
+     }
+    ]
+   },
+   {
+    "id": "O4",
+    "replaces": [
+     "O4"
+    ],
+    "system": "cw.vyklad_m015",
+    "rect": {
+     "v": [
+      6.33,
+      7.17,
+      0.65,
+      3.13
+     ],
+     "src": "S1",
+     "conf": "meranie",
+     "note": "výklad obchodu = O4 (I1); spoločné ostenie s O3 v s = 6,33 (stred stĺpika na fotke 6,29)"
+    },
+    "v_axes": {
+     "v": [
+      2.19
+     ],
+     "src": "S6",
+     "conf": "meranie",
+     "note": "priečka v = 2,19 (stred lišty 2,192, kontrast 91)"
+    }
+   }
+  ],
+  "drop_simplifications": [
+   "openings[O3]"
+  ],
+  "simplifications": [
+   {
+    "ref": "cw_fields[O1, O1b, O3, O4]",
+    "text": "Výklady parteru sú Curtain Wall (I5): každý obchod = dverový stĺpec (CW s dverovým panelom CW Door 27 a nadsvetlíkom) + výkladové pole (CW na murovanom parapete), každý CW v obdĺžnikovom otvore steny (Empty Window), dva otvory sa dotýkajú = jeden otvor tvaru L. Jeden CW cez dvere aj výklad by nahradil kamenný parapet panelom - preto dva. Na spoločnom ostení stoja dva obvodové rámy (0,09 m; fotka 0,08 m). Raster je čítaný v rovine fotky ako obdĺžniky otvorov (konvencia pilota, nález 6 ADR); paralaxa hĺbky rámu (0,25-0,30 m) nie je opravená.",
+    "proposal": "prijať; jeden CW s výrezom parapetu až s úpravou obrysu CW cez API (gap)"
+   },
+   {
+    "ref": "cw_fields[O1, O3]",
+    "text": "Pod dverovým panelom prechádza spodný obvodový rám CW (CW má obvodový rám vždy po celom obvode) - na fotke je prah; delenie nadsvetlíka nad dverami O3 (v = 2,67) je teraz len nad dverami, ako na fotke.",
+    "proposal": "prijať"
+   }
+  ],
+  "g1_proposals": {
+   "cw_fields[O1b].rect": "prijať spodok výkladu 0,78 m; overiť za kvetmi",
+   "systems[cw.vyklad_m015].favorite": "prijať profily 0,07 / 0,045 x 0,10 m, modré; overiť výrobcu"
+  }
  }
 }

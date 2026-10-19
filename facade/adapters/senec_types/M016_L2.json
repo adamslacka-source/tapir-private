@@ -1047,5 +1047,367 @@
   "objects[A1].origin": "prijať pätku 8,00 a stred 7,35 (pilot)",
   "openings[O6].rect": "overiť (strom)",
   "linear[K1].s": "prijať nárožný pilaster 0,45 m (Street View)"
+ },
+ "i6": {
+  "about": "I5/I6 (2026-10-19): výklady a presklený vstup ako Curtain Wall (vstup = dverový panel CW Double Door 27), balkóny rizalitu (doska s oblúkovým čelom + tyčkové zábradlie); raster a výšky z kontrola/fasada_M016_J_rektif.jpg (S = 100 px/m)",
+  "systems": {
+   "cw.vyklad_m016": {
+    "type": "curtain_wall",
+    "favorite": "FS cw.vyklad_m016",
+    "conf": "odhad",
+    "src": "S1",
+    "note": "výklady a vstup ČSOB, biele plastové/hliníkové rámy (fotka); profily a sklo ODHAD",
+    "frame": {
+     "width": {
+      "v": 0.09,
+      "src": "S1",
+      "conf": "meranie",
+      "note": "stĺpiky výkladov na fotke 0,08-0,10 m"
+     },
+     "depth": {
+      "v": 0.1,
+      "src": null,
+      "conf": "odhad",
+      "note": "hĺbka profilu nie je na čelnej fotke viditeľná (typický hliníkový výkladový profil)"
+     },
+     "offset": {
+      "v": 0.05,
+      "src": null,
+      "conf": "odhad",
+      "note": "polovica hĺbky pred rovinou skla"
+     },
+     "material": "Hliník",
+     "surface": "Barva 01 - bílá lesklá"
+    },
+    "boundary": {
+     "width": {
+      "v": 0.07,
+      "src": "S1",
+      "conf": "odhad",
+      "note": "obvodový rám výkladu na fotke ~0,07 m"
+     },
+     "depth": {
+      "v": 0.1,
+      "src": null,
+      "conf": "odhad",
+      "note": "ako priečky"
+     },
+     "offset": {
+      "v": 0.05,
+      "src": null,
+      "conf": "odhad",
+      "note": "ako priečky"
+     },
+     "material": "Hliník",
+     "surface": "Barva 01 - bílá lesklá"
+    },
+    "panels": {
+     "glass": {
+      "thickness": {
+       "v": 0.024,
+       "src": null,
+       "conf": "odhad",
+       "note": "izolačné dvojsklo (typ nie je z fotky čitateľný)"
+      },
+      "material": "Sklo",
+      "surface": "Sklo - čiré rychlé"
+     },
+     "door2": {
+      "libpart": "CW Double Door 27",
+      "note": "dvojkrídlové vstupné dvere ako panel CW"
+     }
+    }
+   },
+   "slab.balkon_m016": {
+    "type": "slab",
+    "favorite": "FS slab.balkon_m016",
+    "structure": "Basic",
+    "material": "Beton vyztužený",
+    "thickness": {
+     "v": 0.16,
+     "src": "S1",
+     "conf": "odhad",
+     "note": "čelo dosky na fotke 0,15-0,17 m (BK1) a 0,14-0,15 m (BK2), paralaxa ~5 %"
+    },
+    "conf": "odhad",
+    "src": "S1",
+    "note": "železobetónová balkónová doska (materiál ODHAD)"
+   },
+   "rail.tycky_m016": {
+    "type": "railing",
+    "base_favorite": "Ocelové vertikální zábradlí",
+    "favorite": "FS rail.tycky_m016",
+    "height": {
+     "v": 0.9,
+     "src": "S1",
+     "conf": "odhad",
+     "note": "madlo - vrch dosky pri koncových stĺpikoch (blízko steny): 0,93 (BK1), 0,92 (BK2) na fotke, paralaxa ~ -0,02"
+    },
+    "post_spacing": {
+     "v": 1.5,
+     "src": "S1",
+     "conf": "odhad",
+     "note": "na fotke stĺpiky len na koncoch; rozostup dlhší než každý úsek lomenej čiary = stĺpiky len vo vrcholoch"
+    },
+    "post_distribution": "BestDivision",
+    "infill": {
+     "v": "balusters",
+     "src": "S1",
+     "conf": "meranie",
+     "note": "kovové zvislé tyčky (fotka)"
+    },
+    "baluster_spacing": {
+     "v": 0.12,
+     "src": "S1",
+     "conf": "odhad",
+     "note": "fotka: 0,10-0,20 m podľa uhla pohľadu na oblúk"
+    },
+    "favorite_baluster_spacing": 0.1,
+    "conf": "odhad",
+    "src": "S1",
+    "note": "Favorite šablóny 'Ocelové vertikální zábradlí' má tyčkovú výplň (R1 netreba); výška a rozostup stĺpikov zo spec"
+   }
+  },
+  "cw_fields": [
+   {
+    "id": "O1",
+    "replaces": [
+     "O1"
+    ],
+    "system": "cw.vyklad_m016",
+    "rect": {
+     "v": [
+      1.28,
+      4.7,
+      0.08,
+      2.3
+     ],
+     "src": "S6",
+     "conf": "meranie",
+     "note": "výklad vľavo = O1 (pilot A)"
+    },
+    "u_axes": {
+     "v": [
+      2.12,
+      3.14,
+      4.1
+     ],
+     "src": "S6",
+     "conf": "meranie",
+     "note": "stĺpiky: stredy líšt 2,12 / 3,14 / 4,10 (priemer dvoch pásov výšky: 2,10-2,13 / 3,12-3,15; 4,10 čiastočne za stĺpom osvetlenia)"
+    },
+    "v_axes": {
+     "v": [
+      1.73
+     ],
+     "src": "S6",
+     "conf": "meranie",
+     "note": "priečka nadsvetlíkov v = 1,73 (stred lišty, kontrast 108)"
+    }
+   },
+   {
+    "id": "O4",
+    "replaces": [
+     "O4"
+    ],
+    "system": "cw.vyklad_m016",
+    "rect": {
+     "v": [
+      5.95,
+      8.5,
+      0.0,
+      2.15
+     ],
+     "src": "S1",
+     "conf": "meranie",
+     "note": "presklený vstup rizalitu = O4 (I1)"
+    },
+    "u_axes": {
+     "v": [
+      6.53,
+      8.15
+     ],
+     "src": "S6",
+     "conf": "meranie",
+     "note": "stĺpiky bočných polí: stredy líšt 6,53 / 8,15 (kontrast 108); stred dverí 7,3 je za stĺpom"
+    },
+    "cells": [
+     {
+      "col": 1,
+      "row": 0,
+      "panel": "door2"
+     }
+    ]
+   },
+   {
+    "id": "O7",
+    "replaces": [
+     "O7"
+    ],
+    "system": "cw.vyklad_m016",
+    "rect": {
+     "v": [
+      9.46,
+      13.44,
+      0.08,
+      2.3
+     ],
+     "src": "S6",
+     "conf": "meranie",
+     "note": "výklad vpravo = O7 (pilot A, murovaný otvor)"
+    },
+    "u_axes": {
+     "v": [
+      10.51,
+      11.46,
+      12.3
+     ],
+     "src": "S6",
+     "conf": "meranie",
+     "note": "stĺpiky: stredy líšt 10,51 / 11,46 / 12,30 (12,28-12,32 podľa výšky pásu)"
+    },
+    "v_axes": {
+     "v": [
+      1.76
+     ],
+     "src": "S6",
+     "conf": "meranie",
+     "note": "priečka nadsvetlíkov v = 1,76 (stred lišty, kontrast 99)"
+    }
+   }
+  ],
+  "balconies": [
+   {
+    "id": "BK1",
+    "host": "O5",
+    "system": "slab.balkon_m016",
+    "front": "arc",
+    "s": {
+     "v": [
+      5.07,
+      9.47
+     ],
+     "src": "S2",
+     "conf": "odhad",
+     "note": "pilot balcony(...) riadok 93: konce opravené o paralaxu = stred na osi dverí 7,27"
+    },
+    "w_side": {
+     "v": 0.42,
+     "src": "S2",
+     "conf": "odhad",
+     "note": "líce rizalitu 0,12 + bočné vyloženie 0,30 (pilot depth_side)"
+    },
+    "w_crown": {
+     "v": 1.12,
+     "src": "S2",
+     "conf": "odhad",
+     "note": "0,12 + 0,30 + 0,70 (pilot bulge); BK2: podhľad na fotke 0,30 m -> w ~1,15 (kamera D 22,4 ODHAD) súhlasí"
+    },
+    "v_top": {
+     "v": 3.18,
+     "src": "S1",
+     "conf": "odhad",
+     "note": "horná hrana dosky na koncoch pri stene (fotka 3,17-3,22); prah dverí O5 3,28"
+    }
+   },
+   {
+    "id": "BK2",
+    "host": "O6",
+    "system": "slab.balkon_m016",
+    "front": "arc",
+    "s": {
+     "v": [
+      5.07,
+      9.47
+     ],
+     "src": "S2",
+     "conf": "odhad",
+     "note": "pilot balcony(...) riadok 94, ako BK1"
+    },
+    "w_side": {
+     "v": 0.42,
+     "src": "S2",
+     "conf": "odhad",
+     "note": "ako BK1"
+    },
+    "w_crown": {
+     "v": 1.12,
+     "src": "S2",
+     "conf": "odhad",
+     "note": "ako BK1"
+    },
+    "v_top": {
+     "v": 6.7,
+     "src": "S1",
+     "conf": "odhad",
+     "note": "horná hrana dosky na koncoch pri stene (fotka 6,68-6,75); spodok dverí O6 na fotke ~6,88 (spec 7,10 ODHAD)"
+    }
+   }
+  ],
+  "railings": [
+   {
+    "id": "R1",
+    "on": "BK1",
+    "system": "rail.tycky_m016",
+    "inset": 0.05,
+    "chords": 6
+   },
+   {
+    "id": "R2",
+    "on": "BK2",
+    "system": "rail.tycky_m016",
+    "inset": 0.05,
+    "chords": 6
+   }
+  ],
+  "pilot_mapping": {
+   "balcony": "model: balkóny rizalitu BK1, BK2 (dosky + zábradlia R1, R2, I6); balkón štítu na východnej strane (riadok 126) nie - vykázané v simplifications"
+  },
+  "drop_simplifications": [
+   "openings[O1, O7, O10, O11]",
+   "openings[O4, O5]"
+  ],
+  "simplifications": [
+   {
+    "ref": "openings[O10, O11]",
+    "text": "Výklad na boku S (O10+O11) ostáva pevné okná z favoritu - bez fotky, raster nečitateľný.",
+    "proposal": "doplniť po zábere boku"
+   },
+   {
+    "ref": "openings[O5]",
+    "text": "Balkónové dvere rizalitu sú dvojkrídlové dvere bez bočných polí (Double Door with Transom 27 bez nadsvetlíka).",
+    "proposal": "prijať"
+   },
+   {
+    "ref": "cw_fields[O1, O4, O7]",
+    "text": "Výklady a vstup sú Curtain Wall v obdĺžnikových otvoroch stien (Empty Window); vstup O4 = dverový panel CW Double Door 27 v strednom poli (6,53-8,15), spodný obvodový rám prechádza aj pod dverami. Raster čítaný v rovine fotky (kamera M016 bez s: paralaxa nie je opraviteľná).",
+    "proposal": "prijať"
+   },
+   {
+    "ref": "balconies[BK1, BK2]",
+    "text": "Balkóny: železobetónová doska 0,16 m, zadná hrana po lícach stien (schod 0,12 na rizalite), boky 0,30 m, čelo kruhový oblúk (tetiva 4,40, vzopätie 0,70, r 3,81) cez vrchol 1,12 m pred rovinou fasády. Tvar a vyloženie ODHAD z pilota a fotky (čelný záber neukazuje hĺbku).",
+    "proposal": "overiť vyloženie jedným meraním"
+   },
+   {
+    "ref": "railings[R1, R2]",
+    "text": "Zábradlia z Favorite 'Ocelové vertikální zábradlí' (tyčková výplň, madlo a stĺpiky z favoritu): oblúk ako 6 tetív (max 2 cm od oblúka), stĺpik v každom vrchole lomenej čiary (9 namiesto 2 na fotke); rozostup tyčiek 0,10 m z favoritu (ModifyRailingDetails ho nevie zmeniť), fotka ~0,12 - výnimka.",
+    "proposal": "prijať; vlastný favorit s rozostupom 0,12 vytvorí architekt (R1)"
+   },
+   {
+    "ref": "openings[O6] (I6)",
+    "text": "Spodok dverí štítu O6 je na fotke ~6,88 (spec 7,10 ODHAD, NEJEDNOZNAČNÉ); medzi doskou BK2 (6,70) a prahom je tak schod 0,40 - O6 nemenené (zmluva oblúkového štítu), vykázané.",
+    "proposal": "spodok O6 posunúť na 6,88 po potvrdení"
+   },
+   {
+    "ref": "pilot balcony (line 126)",
+    "text": "Balkón štítu na východnej strane (bok S nad odkvapom) nie je modelovaný - bez fotky, štít boku nie je v spec.",
+    "proposal": "vykázané"
+   }
+  ],
+  "g1_proposals": {
+   "balconies[BK1].w_crown": "prijať vyloženie 1,12 m (vrchol oblúka); overiť meraním",
+   "systems[rail.tycky_m016].height": "prijať 0,90 m (fotka); nové zábradlie by malo 1,00 m (OVERIŤ NA STN)",
+   "systems[rail.tycky_m016].baluster_spacing": "favorit má 0,10 m; architekt môže pripraviť favorit s 0,12"
+  }
  }
 }

@@ -23,6 +23,19 @@ Acceptance per house (task 2026-10-19):
   P5 second build = 0 changes
   P6 GDL objects: library part = template, 3D extent = expected, arch radii (FS_ArchGable)
   P7 the I1..I4 tests still pass
+
+I5/I6 layer (2026-10-19, ADR-001 section 9 "Pilot A - CW, balkóny, zábradlia"): the houses are built from
+build_spec(house, i6=True) - shop windows / glazed entrances as Curtain Walls (FS cw.*, door = CW door panel) in Empty
+Window holes, balcony slabs (FS slab.*) and railings (FS rail.*) of M016. The base spec (without i6) stays the contract
+of I1..I4 and is still checked offline with the expectations of before.
+  P1 also: Empty Window holes of the glazed fields = cw_fields; curtain walls / slabs / railings on the facade layer = spec
+  P8 curtain walls: every mullion / transom axis and the boundary read back = spec +-1 cm, frame profiles and panel
+     classes per cell as the system (door cell = a door panel with leaves), every 'meranie' axis on the photo +-3 cm,
+     the Curtain Wall tool defaults do not keep any FS class (restoreDefaults, independent probe)
+  P9 balconies: level, thickness, outline corners, arc and crown of the slab +-1 cm (crown: tessellation tolerance)
+  P10 railings: base on the slab top and height +-1 cm, nothing outside the slab, posts + inner posts and balusters
+     = expected from the reference line, measured baluster spacing = favourite; baluster spacing of the spec that the
+     favourite cannot carry is an EXCEPTION (listed, R1)
 """
 from __future__ import annotations
 
@@ -49,10 +62,16 @@ from from_senec import build_spec  # noqa: E402
 OUT = Path(r"C:\FacadePilot\out")
 PROJECT = r"C:\FacadePilot\Fasada_pilot_A.pln"
 HOUSES = {
-    # house: (zones, planes, units window/door, linear, objects, zone roles)
+    # house: (zones, planes, units window/door, linear, objects, zone roles) - base spec (I1..I4 contract)
     "M015_L1": {"zones": 2, "planes": 0, "units": {"window": 3, "door": 3}, "linear": 5, "objects": 3, "roles": {"main", "parter"}},
     "M062_L2": {"zones": 2, "planes": 0, "units": {"window": 6, "door": 2}, "linear": 5, "objects": 0, "roles": {"main", "parter"}},
     "M016_L2": {"zones": 4, "planes": 1, "units": {"window": 10, "door": 3}, "linear": 16, "objects": 1, "roles": {"main", "rizalit", "side"}},
+}
+I6 = {
+    # house: units left as windows / doors, glazed fields (CW) with door panels, balconies, railings
+    "M015_L1": {"units": {"window": 3, "door": 1}, "cw": {"O1", "O1b", "O3", "O4"}, "cw_doors": {"O1", "O3"}, "balconies": 0, "railings": 0},
+    "M062_L2": {"units": {"window": 5, "door": 1}, "cw": {"O1", "O2", "O3"}, "cw_doors": {"O2"}, "balconies": 0, "railings": 0},
+    "M016_L2": {"units": {"window": 8, "door": 2}, "cw": {"O1", "O4", "O7"}, "cw_doors": {"O4"}, "balconies": 2, "railings": 2},
 }
 
 results: list[tuple[str, str, str]] = []
@@ -69,7 +88,7 @@ def ids_in(ref: str) -> set[str]:
     out = set()
     for a, b in re.findall(r"O(\d+)\.\.O(\d+)", ref):
         out |= {f"O{i}" for i in range(int(a), int(b) + 1)}
-    out |= set(re.findall(r"\bO\d+\b", ref))
+    out |= set(re.findall(r"\bO\d+[a-z]?\b", ref))          # O1b = second glazed field of O1 (I5)
     return out
 
 
@@ -130,6 +149,75 @@ def offline() -> dict:
     bad = copy.deepcopy(specs["M016_L2"])
     bad["objects"][0]["params"]["rIn"]["v"] = 1.1
     check("validator: arched head of O6 must fit the ring of A1 (rIn = half width)", any("half width = rIn" in e for e in validate(bad)[0]))
+    return offline_i6(specs)
+
+
+def offline_i6(base_specs: dict) -> dict:
+    """I5/I6 layer: specs with curtain walls, balconies, railings (adapter + validator, positive and negative cases)."""
+    import copy
+    from geom import cw_cell_panels
+    specs = {}
+    for house, want in I6.items():
+        spec = build_spec(house, i6=True)
+        errors, warnings = validate(spec)
+        check(f"{house} I6: spec with curtain walls / balconies / railings is valid", not errors, "; ".join(errors[:3]))
+        units = {"window": 0, "door": 0}
+        for o in spec["openings"]:
+            if not o.get("merged_into"):
+                units[o["kind"]] += 1
+        cws = {c["id"]: c for c in spec.get("cw_fields", [])}
+        doors = {cid for cid, c in cws.items() if any(spec["systems"][c["system"]]["panels"][k].get("libpart") for k in cw_cell_panels(c).values())}
+        replaced = {r for c in cws.values() for r in c.get("replaces", [])}
+        base_ids = {o["id"] for o in base_specs[house]["openings"]}
+        check(f"{house} I6: openings {want['units']} + glazed fields {sorted(want['cw'])} (door panels {sorted(want['cw_doors'])}); "
+              "every replaced opening was an opening of the base spec and is gone",
+              units == want["units"] and set(cws) == want["cw"] and doors == want["cw_doors"] and replaced <= base_ids
+              and not replaced & {o["id"] for o in spec["openings"]}, f"units {units}, cw {sorted(cws)}, doors {sorted(doors)}, replaces {sorted(replaced)}")
+        check(f"{house} I6: {want['balconies']} balconies, {want['railings']} railings",
+              len(spec.get("balconies", [])) == want["balconies"] and len(spec.get("railings", [])) == want["railings"])
+        for r in spec.get("railings", []):
+            check(f"{house} I6: railing {r['id']} - arc as {r['chords']} chords, max {r['approx_error'] * 100:.1f} cm from the arc (<= 2.5 cm), "
+                  f"{len(r['path_sw']['v'])} nodes, base = top of {r['on']}",
+                  r["approx_error"] <= 0.025 and len(r["path_sw"]["v"]) == r["chords"] + 3
+                  and abs(r["v"]["v"] - next(b for b in spec["balconies"] if b["id"] == r["on"])["v_top"]["v"]) < 1e-9)
+        calls = spec["generated"].get("pilot_calls", {})
+        check(f"{house} I6: every pilot call still mapped or skipped with a reason",
+              bool(calls) and all(v["how"].startswith(("model:", "skip:")) for v in calls.values()))
+        specs[house] = spec
+
+    # validator rules of the I6 layer (negative cases)
+    m15, m16 = specs["M015_L1"], specs["M016_L2"]
+    bad = copy.deepcopy(m15)
+    next(c for c in bad["cw_fields"] if c["id"] == "O3")["cells"] = [{"col": 0, "row": 1, "panel": "door"}]
+    check("validator I6: a door panel above the bottom row of a field is an error", any("bottom row" in e for e in validate(bad)[0]))
+    bad = copy.deepcopy(m15)
+    next(c for c in bad["cw_fields"] if c["id"] == "O4")["rect"]["v"][0] = 6.20
+    check("validator I6: a glazed field overlapping another field is an error", any("overlaps glazed field" in e for e in validate(bad)[0]))
+    bad = copy.deepcopy(m15)
+    next(c for c in bad["cw_fields"] if c["id"] == "O4")["v_axes"]["v"] = [3.05]
+    check("validator I6: a transom axis closer than 0.15 m to the edge of the field is an error", any("v_axes" in e for e in validate(bad)[0]))
+    bad = copy.deepcopy(m15)
+    next(c for c in bad["cw_fields"] if c["id"] == "O4")["reveal"]["v"] = 0.45
+    check("validator I6: a curtain wall deeper than its wall is an error", any("does not fit the wall" in e for e in validate(bad)[0]))
+    bad = copy.deepcopy(m15)
+    bad["openings"].append(dict(copy.deepcopy(next(o for o in base_specs["M015_L1"]["openings"] if o["id"] == "O4")), id="O4x", merged_into=None))
+    bad["openings"][-1].pop("merged_into")
+    check("validator I6: a glazed field over an opening is an error", any("overlaps opening" in e for e in validate(bad)[0]))
+    bad = copy.deepcopy(m16)
+    bad["balconies"][0]["v_top"]["v"] = 3.40
+    check("validator I6: a balcony slab above the sill of its door is an error", any("above the sill" in e for e in validate(bad)[0]))
+    bad = copy.deepcopy(m16)
+    bad["railings"][0]["path_sw"]["v"][4] = [7.27, 1.30]
+    check("validator I6: a railing point off its balcony slab is an error", any("outside the slab" in e for e in validate(bad)[0]))
+    bad = copy.deepcopy(m16)
+    bad["railings"][0]["v"]["v"] = 3.0
+    check("validator I6: a railing whose base is not the slab top is an error", any("!= top of balcony" in e for e in validate(bad)[0]))
+    bad = copy.deepcopy(m16)
+    bad["systems"]["rail.tycky_m016"]["favorite"] = "rail.tycky"
+    check("validator I6: a railing / CW / slab system without an 'FS ' favourite is an error", any("needs an 'FS ' favourite" in e for e in validate(bad)[0]))
+    bad = copy.deepcopy(m16)
+    bad["balconies"][1]["v_top"]["v"] = 2.60
+    check("validator I6: a balcony slab through a linear element (band) is an error", any("passes through linear" in e for e in validate(bad)[0]))
     return specs
 
 
@@ -167,14 +255,16 @@ def live_house(house: str, spec: dict, port: int) -> None:
     check(f"{house}: verify PASS", ver["pass"], "; ".join(ver["problems"])[:400])
 
     # P1 counts
-    check(f"P1 {house}: windows / doors in the zone walls = spec (merged = 1)", ver["count"]["ok"] and ver["count"]["model_in_wall"] == want["units"],
-          f"model {ver['count']['model_in_wall']}, spec {ver['count']['spec']}")
+    w6 = I6[house]
+    want_units = dict(w6["units"], opening=len(w6["cw"]))
+    check(f"P1 {house}: windows / doors / Empty Window holes of the glazed fields in the zone walls = spec (merged = 1)",
+          ver["count"]["ok"] and ver["count"]["model_in_wall"] == want_units, f"model {ver['count']['model_in_wall']}, spec {ver['count']['spec']}")
     ac = TapirClient(port=port, timeout=120)
     ac.guard_project(PROJECT)
     st = json.loads((OUT / house / "state.json").read_text(encoding="utf-8"))
     layer = st["layer"]["index"]
     on_layer = {}
-    for typ in ("Wall", "Window", "Door", "Beam", "Column", "Object"):
+    for typ in ("Wall", "Window", "Door", "Beam", "Column", "Object", "CurtainWall", "Slab", "Railing"):
         els = ac.tapir("GetElementsByType", {"elementType": typ})["elements"]
         n = 0
         if els:
@@ -182,8 +272,9 @@ def live_house(house: str, spec: dict, port: int) -> None:
             n = sum(1 for d in dd if d.get("layerIndex") == layer)
         on_layer[typ] = n
     n_lin_beam = sum(1 for it in spec.get("linear", []) if spec["systems"][it["system"]]["tool"] == "beam")
-    exp = {"Wall": want["zones"], "Window": want["units"]["window"], "Door": want["units"]["door"], "Beam": n_lin_beam,
-           "Column": want["linear"] - n_lin_beam, "Object": want["objects"]}
+    exp = {"Wall": want["zones"], "Window": w6["units"]["window"] + len(w6["cw"]), "Door": w6["units"]["door"], "Beam": n_lin_beam,
+           "Column": want["linear"] - n_lin_beam, "Object": want["objects"], "CurtainWall": len(w6["cw"]), "Slab": w6["balconies"],
+           "Railing": w6["railings"]}
     check(f"P1 {house}: elements on the layer '{spec['reference']['layer']}' (independent count) = spec", on_layer == exp, f"{on_layer}")
 
     # P2 deltas
@@ -230,9 +321,75 @@ def live_house(house: str, spec: dict, port: int) -> None:
         lp = [r for r in tr if r["what"] == "library part (FS template)"]
         check(f"P6 {house}: GDL objects placed from their FS template", lp and all(r["status"] == "OK" for r in lp), ", ".join(f"{r['item']}={r['model']}" for r in lp))
 
+    rows = csv_rows(ver["deviations_csv"])
+    trs = csv_rows(ver["types_csv"])
+    # P8 curtain walls
+    for cw in spec.get("cw_fields", []):
+        cid = cw["id"]
+        n_ax = len(cw.get("u_axes", {}).get("v", [])) + len(cw.get("v_axes", {}).get("v", []))
+        ax = [r for r in rows if r["item"] == cid and r["quantity"].startswith(("CW mullion axis", "CW transom axis"))]
+        bd = [r for r in rows if r["item"] == cid and r["quantity"].startswith("CW boundary")]
+        d3 = [r for r in rows if r["item"] == cid and r["quantity"].startswith(("CW 3D", "CW frames 3D"))]
+        check(f"P8 {house} {cid}: raster read back - {n_ax} axes, boundary and 3D (extent, frame plane) = spec +-1 cm",
+              len(ax) == n_ax and len(bd) == 4 and len(d3) == 6 and all(r["ok"] == "True" for r in ax + bd + d3),
+              f"max |delta| {max([abs(float(r['delta_cm'])) for r in ax + bd + d3] or [0]):.2f} cm")
+        ct = [r for r in trs if r["item"] == cid and r["what"].startswith(("CW frame profile", "CW boundary profile", "CW panel class", "CW door panel"))]
+        n_door = sum(1 for k in cw_kinds(spec, cw) if spec["systems"][cw["system"]]["panels"][k].get("libpart"))
+        check(f"P8 {house} {cid}: frame profiles, panel class per cell, {n_door} door panel(s) with leaves",
+              len(ct) == 3 + n_door and all(r["status"] == "OK" for r in ct), "; ".join(f"{r['what'][:30]}={r['model']}" for r in ct if r["status"] != "OK"))
+        n_meas = sum(len(cw[k]["v"]) for k in ("u_axes", "v_axes") if k in cw and cw[k]["conf"] in ("meranie", "kota"))
+        ph = [e for e in ver["photo_edges"] if e["item"] == cid and e["edge"].startswith("photo: ")]
+        check(f"P8 {house} {cid}: every 'meranie' axis ({n_meas}) is on its bar in the photo (+-3 cm)",
+              len(ph) == n_meas and all(abs(e["delta_cm"]) <= e["tol_cm"] for e in ph), ", ".join(f"{e['edge'][7:]} {e['delta_cm']:+.1f}" for e in ph))
+    # P9 balconies, P10 railings
+    for b in spec.get("balconies", []):
+        br = [r for r in rows if r["item"] == b["id"]]
+        check(f"P9 {house} {b['id']}: slab level, thickness, outline corners, arc, crown read back (+-1 cm; crown: tessellation)",
+              len(br) >= 10 and all(r["ok"] == "True" for r in br), f"{len(br)} rows, max |delta| {max([abs(float(r['delta_cm'])) for r in br] or [0]):.2f} cm")
+    for r_ in spec.get("railings", []):
+        rr = [r for r in rows if r["item"] == r_["id"]]
+        rt = [r for r in trs if r["item"] == r_["id"]]
+        h = next((r for r in rr if r["quantity"].startswith("3D height")), None)
+        check(f"P10 {house} {r_['id']}: height {spec['systems'][r_['system']]['height']['v']} m +-1 cm, base on the slab, nothing outside the slab, "
+              "baluster spacing = favourite", h is not None and len(rr) == 4 and all(r["ok"] == "True" for r in rr),
+              "; ".join(f"{r['quantity'][:40]} {r['model_m']}" for r in rr))
+        cnt = [r for r in rt if r["what"].startswith(("posts + inner posts", "balusters", "infill", "top rail end"))]
+        check(f"P10 {house} {r_['id']}: posts + inner posts, balusters (bars) = expected, infill = balusters, rail ends in the wall <= 0.10 m",
+              len(cnt) == 4 and all(r["status"] == "OK" for r in cnt), ", ".join(f"{r['what'][:22]} {r['spec']}/{r['model']}" for r in cnt))
+        exc = [e for e in ver["exceptions"] if e.get("item") == r_["id"] and e["field"] == "baluster_spacing"]
+        sp = spec["systems"][r_["system"]]
+        need = abs(sp["baluster_spacing"]["v"] - sp["favorite_baluster_spacing"]) > 0.005
+        check(f"P10 {house} {r_['id']}: baluster spacing of the spec the favourite cannot carry is reported as an EXCEPTION (R1)",
+              bool(exc) == need, f"spec {sp['baluster_spacing']['v']}, favourite {sp['favorite_baluster_spacing']}, exceptions {len(exc)}")
+
     g1 = write_g1(spec, ver["exceptions"], OUT)
     check(f"{house}: G1 table written", g1.exists(), str(g1))
     print(f"  {house}: {time.monotonic() - t0:.1f} s")
+
+
+def cw_kinds(spec: dict, cw: dict) -> list[str]:
+    from geom import cw_cell_panels
+    return list(cw_cell_panels(cw).values())
+
+
+def cw_defaults_clean(port: int, specs: dict) -> None:
+    """P8: no FS class stays in the Curtain Wall tool defaults - a probe that adds the class names (and restores the
+    defaults) must report every one of them as 'created'."""
+    from tapir_client import TapirClient
+    import systems as fs_systems
+    ac = TapirClient(port=port, timeout=120)
+    ac.guard_project(PROJECT)
+    frames, panels = [], []
+    for spec in specs.values():
+        for sid, s_ in spec["systems"].items():
+            if s_["type"] == "curtain_wall":
+                n = fs_systems.cw_class_names(sid, s_)
+                frames.append({"name": n["frame"]})
+                panels += [{"name": v} for v in n["panels"].values()]
+    probe = ac.tapir("SetCurtainWallSystemDefaults", {"frameClasses": frames, "panelClasses": panels, "restoreDefaults": True})
+    left = [c.get("name") for c in probe.get("frameClasses", []) + probe.get("panelClasses", []) if c.get("result") != "created"]
+    check("P8 Curtain Wall tool defaults restored: no FS class left in them (independent probe)",
+          probe.get("defaultsRestored") is True and bool(frames) and not left, f"{len(frames)} frame + {len(panels)} panel classes probed; left: {left}")
 
 
 def csv_rows(path: str) -> list[dict]:
@@ -254,6 +411,7 @@ def main() -> int:
             regression(args.port)
         for house, spec in specs.items():
             live_house(house, spec, args.port)
+        cw_defaults_clean(args.port, specs)
         if args.save:
             from tapir_client import TapirClient
             ac = TapirClient(port=args.port, timeout=300)

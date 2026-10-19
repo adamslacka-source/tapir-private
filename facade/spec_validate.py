@@ -16,7 +16,8 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from geom import REFERENCE_PLANE, frame_of, frames_of, item_plane, outside_of, rect_overlap_area, rects_touch, zone_w  # noqa: E402
+from geom import (REFERENCE_PLANE, balcony_outline, cw_grid, frame_of, frames_of, item_plane, outside_of,  # noqa: E402
+                  rect_overlap_area, rects_touch, zone_w)
 import gdl_expect  # noqa: E402
 
 SCHEMA_PATH = HERE / "spec" / "facade-spec-1.schema.json"
@@ -69,8 +70,10 @@ def low_values(spec: dict, levels=G1_CONF):
 
 
 def fs_system(s: dict) -> bool:
-    """The system gets an 'FS ' favourite made by systems.py (from a base favourite, a library part or a linear sample)."""
-    return bool(s.get("base_favorite") or s.get("base_libpart") or (s.get("type") == "linear" and s.get("favorite")))
+    """The system gets an 'FS ' favourite made by systems.py (from a base favourite, a library part, a linear / slab sample
+    or the curtain wall defaults)."""
+    return bool(s.get("base_favorite") or s.get("base_libpart") or
+                (s.get("type") in ("linear", "curtain_wall", "slab") and s.get("favorite")))
 
 
 def polygon_area(pts) -> float:
@@ -215,8 +218,12 @@ def validate(spec: dict) -> tuple[list[str], list[str]]:
                                     "probably one unit in reality; keep as two until a combined system exists (I2)")
 
     errors += _check_i2(spec, zones, openings, check_src)
-    errors += _check_linear(spec, openings, frames, item_ids, check_src, zones)
-    errors += _check_objects(spec, openings, frames, item_ids, check_src, zones)
+    i6_errors, i6_warnings = _check_i6(spec, zones, openings, frames, item_ids, check_src)
+    errors += i6_errors
+    warnings += i6_warnings
+    rect_items = openings + cw_as_openings(spec)                 # a glazed field (CW) is an opening of its wall too
+    errors += _check_linear(spec, rect_items, frames, item_ids, check_src, zones)
+    errors += _check_objects(spec, rect_items, frames, item_ids, check_src, zones)
 
     axes = spec.get("axes")
     if axes and axes.get("s"):
@@ -531,6 +538,260 @@ def _check_objects(spec: dict, openings: list, frames: dict, item_ids: set, chec
             if abs(p["depth"] - z["thickness"]["v"]) > 0.001:
                 errors.append(f"objects[{bid}]: depth {p['depth']} != thickness of zone {z['id']} {z['thickness']['v']}")
     return errors
+
+
+CW_DOOR_PARTS = ("CW Door 27", "CW Double Door 27")          # door panels of the Archicad 29 library (placed in a CW cell, spike 2026-10-19)
+MIN_CELL = 0.15                                                 # m - smallest column / row of a curtain wall field
+
+
+def cw_as_openings(spec: dict) -> list[dict]:
+    """The glazed fields as pseudo-openings (id, zone, rect, kind 'cw') for the rules that look at the holes of a wall."""
+    return [{"id": cw["id"], "zone": cw["zone"], "rect": cw["rect"], "kind": "cw", "system": cw["system"]} for cw in spec.get("cw_fields", [])]
+
+
+def point_in_poly(pt, ring, tol: float = 1e-6) -> bool:
+    """Point in a closed polygon [(x, y), ...]; a point on an edge (within tol) counts as inside."""
+    x, y = pt
+    n = len(ring)
+    for i in range(n):
+        (x0, y0), (x1, y1) = ring[i], ring[(i + 1) % n]
+        dx, dy = x1 - x0, y1 - y0
+        L2 = dx * dx + dy * dy
+        t = 0.0 if L2 == 0 else max(0.0, min(1.0, ((x - x0) * dx + (y - y0) * dy) / L2))
+        if (x - x0 - t * dx) ** 2 + (y - y0 - t * dy) ** 2 <= tol * tol:
+            return True
+    inside = False
+    for i in range(n):
+        (x0, y0), (x1, y1) = ring[i], ring[(i + 1) % n]
+        if (y0 > y) != (y1 > y) and x < x0 + (y - y0) * (x1 - x0) / (y1 - y0):
+            inside = not inside
+    return inside
+
+
+def balcony_ring(spec: dict, b: dict, n_arc: int = 48) -> list[tuple[float, float]]:
+    """Closed outline of a balcony in (s, w) with the arc sampled (point-in-slab tests, drawing)."""
+    o = balcony_outline(spec, b)
+    pts = list(o["pts"][:-2])
+    c, r = o["arc"][2], o["arc"][3]
+    s0, s1 = b["s"]["v"]
+    ws = b["w_side"]["v"]
+    a1, a0 = float(np.arctan2(ws - c[1], s1 - c[0])), float(np.arctan2(ws - c[1], s0 - c[0]))
+    pts.append((s1, ws))
+    pts += [(float(c[0] + r * np.cos(a1 + (a0 - a1) * k / n_arc)), float(c[1] + r * np.sin(a1 + (a0 - a1) * k / n_arc))) for k in range(1, n_arc)]
+    pts.append((s0, ws))
+    return pts
+
+
+def _check_i6(spec: dict, zones: dict, openings: list, frames: dict, item_ids: set, check_src) -> tuple[list[str], list[str]]:
+    """I5/I6 rules (pilot A): curtain wall systems and glazed fields (CW in a rectangular hole of its zone wall, raster
+    inside the field, cells with known panel kinds, a door panel stands on the foot of the field, the CW fits the wall
+    thickness, no overlap with openings / other fields), balcony slabs (on the wall faces, front in front of the sides,
+    below the door of their host, not through a linear element) and railings (on their balcony, inside its outline)."""
+    errors: list[str] = []
+    warnings: list[str] = []
+    systems = spec["systems"]
+    for sid, s in systems.items():
+        t = s["type"]
+        if t not in ("curtain_wall", "slab", "railing"):
+            continue
+        if not (s.get("favorite") or "").startswith("FS "):
+            errors.append(f"systems[{sid}]: a {t} system needs an 'FS ' favourite (got {s.get('favorite')!r})")
+        if t == "curtain_wall":
+            for key in ("frame", "boundary"):
+                fr = s.get(key)
+                if not fr:
+                    errors.append(f"systems[{sid}]: curtain wall without {key}")
+                    continue
+                for k in ("width", "depth", "offset"):
+                    check_src(f"systems[{sid}].{key}.{k}", fr[k]["src"], fr[k]["conf"])
+                if not (fr["width"]["v"] > 0 and fr["depth"]["v"] > 0 and 0 <= fr["offset"]["v"] <= fr["depth"]["v"]):
+                    errors.append(f"systems[{sid}].{key}: width/depth > 0 and 0 <= offset <= depth")
+            if s.get("frame") and s.get("boundary") and (abs(s["frame"]["depth"]["v"] - s["boundary"]["depth"]["v"]) > EPS
+                                                         or abs(s["frame"]["offset"]["v"] - s["boundary"]["offset"]["v"]) > EPS):
+                errors.append(f"systems[{sid}]: frame and boundary must have the same depth and offset (one panel plane)")
+            panels = s.get("panels") or {}
+            if "glass" not in panels:
+                errors.append(f"systems[{sid}]: curtain wall without a 'glass' panel kind")
+            for kind, pn in panels.items():
+                if pn.get("libpart"):
+                    if pn["libpart"] not in CW_DOOR_PARTS:
+                        errors.append(f"systems[{sid}].panels.{kind}: door panel {pn['libpart']!r} not in {CW_DOOR_PARTS}")
+                elif "thickness" not in pn:
+                    errors.append(f"systems[{sid}].panels.{kind}: a panel needs thickness (or a door libpart)")
+                else:
+                    check_src(f"systems[{sid}].panels.{kind}.thickness", pn["thickness"]["src"], pn["thickness"]["conf"])
+        elif t == "slab":
+            if "thickness" not in s or s["thickness"]["v"] <= 0:
+                errors.append(f"systems[{sid}]: slab needs thickness > 0")
+            else:
+                check_src(f"systems[{sid}].thickness", s["thickness"]["src"], s["thickness"]["conf"])
+        elif t == "railing":
+            if not s.get("base_favorite"):
+                errors.append(f"systems[{sid}]: a railing system starts from a base favourite (R1: infill and posts come from it)")
+            for k in ("height", "post_spacing"):
+                if k not in s or s[k]["v"] <= 0:
+                    errors.append(f"systems[{sid}]: railing needs {k} > 0")
+                else:
+                    check_src(f"systems[{sid}].{k}", s[k]["src"], s[k]["conf"])
+
+    # ---- glazed fields (curtain walls)
+    rects = [(o["id"], o["rect"]["v"], item_plane(o, zones)) for o in openings]
+    cws = spec.get("cw_fields", [])
+    for cw in cws:
+        cid = cw["id"]
+        if cid in item_ids:
+            errors.append(f"cw_fields[{cid}]: duplicate id")
+        item_ids.add(cid)
+        check_src(f"cw_fields[{cid}].rect", cw["rect"]["src"], cw["rect"]["conf"])
+        check_src(f"cw_fields[{cid}].reveal", cw["reveal"]["src"], cw["reveal"]["conf"])
+        for k in ("u_axes", "v_axes"):
+            if k in cw:
+                check_src(f"cw_fields[{cid}].{k}", cw[k]["src"], cw[k]["conf"])
+        s0, s1, v0, v1 = cw["rect"]["v"]
+        sysdef = systems.get(cw["system"])
+        if sysdef is None or sysdef["type"] != "curtain_wall":
+            errors.append(f"cw_fields[{cid}]: system '{cw['system']}' is not a curtain wall system")
+            continue
+        z = zones.get(cw["zone"])
+        if z is None:
+            errors.append(f"cw_fields[{cid}]: zone '{cw['zone']}' does not exist")
+            continue
+        zs0, zs1, zv0, zv1 = z["rect"]["v"]
+        if not (s1 > s0 and v1 > v0) or s0 < zs0 - EPS or s1 > zs1 + EPS or v0 < zv0 - EPS or v1 > zv1 + EPS:
+            errors.append(f"cw_fields[{cid}]: rect {cw['rect']['v']} empty or not inside wall zone {z['id']} {z['rect']['v']}")
+            continue
+        for key, lo, hi in (("u_axes", s0, s1), ("v_axes", v0, v1)):
+            ax = [lo] + list(cw.get(key, {}).get("v", [])) + [hi]
+            if any(b_ - a_ < MIN_CELL - EPS for a_, b_ in zip(ax[:-1], ax[1:])):
+                errors.append(f"cw_fields[{cid}].{key}: axes {ax[1:-1]} not ascending inside {lo}..{hi} with cells >= {MIN_CELL} m")
+        cols, rows = cw_grid(cw)
+        panels = sysdef.get("panels") or {}
+        doors = []
+        seen_cells = set()
+        for cell in cw.get("cells", []):
+            key = (cell["col"], cell["row"])
+            if key in seen_cells:
+                errors.append(f"cw_fields[{cid}]: cell {key} given twice")
+            seen_cells.add(key)
+            if not (0 <= cell["col"] < len(cols) and 0 <= cell["row"] < len(rows)):
+                errors.append(f"cw_fields[{cid}]: cell {cell['col']}/{cell['row']} outside the raster {len(cols)} x {len(rows)}")
+            elif cell["panel"] not in panels:
+                errors.append(f"cw_fields[{cid}]: cell {cell['col']}/{cell['row']} panel '{cell['panel']}' is not a panel kind of {cw['system']}")
+            elif panels[cell["panel"]].get("libpart"):
+                doors.append(cell)
+        for cell in doors:                                          # a door stands on the foot of the field
+            if cell["row"] != 0:
+                errors.append(f"cw_fields[{cid}]: door panel in row {cell['row']} - a door must be in the bottom row (on the foot of the field)")
+        if cw["rect"]["conf"] in LOW_CONF and v0 <= EPS and not doors:
+            errors.append(f"cw_fields[{cid}]: glazed field with conf {cw['rect']['conf']} has sill 0 (rule 13)")
+        depth = max(sysdef["frame"]["depth"]["v"], sysdef["boundary"]["depth"]["v"]) if sysdef.get("frame") and sysdef.get("boundary") else 0.0
+        if cw["reveal"]["v"] < -EPS or cw["reveal"]["v"] + depth > z["thickness"]["v"] + EPS:
+            errors.append(f"cw_fields[{cid}]: reveal {cw['reveal']['v']} + frame depth {depth} does not fit the wall {z['id']} ({z['thickness']['v']} m)")
+        plane = z.get("plane", REFERENCE_PLANE)
+        for oid, r, opl in rects:
+            if opl == plane and rect_overlap_area(cw["rect"]["v"], r) > EPS:
+                errors.append(f"cw_fields[{cid}]: overlaps opening {oid}")
+            elif opl == plane and rects_touch(cw["rect"]["v"], r):
+                warnings.append(f"cw_fields[{cid}] and opening {oid} touch - one hole of the wall")
+        for oid in cw.get("replaces", []):
+            if oid != cid and any(o["id"] == oid for o in openings):
+                errors.append(f"cw_fields[{cid}]: replaces opening {oid}, which is still in openings")
+        for c2 in cws:
+            if c2["id"] == cid or zones.get(c2["zone"], {}).get("plane", REFERENCE_PLANE) != plane:
+                continue
+            if rect_overlap_area(cw["rect"]["v"], c2["rect"]["v"]) > EPS:
+                errors.append(f"cw_fields[{cid}]: overlaps glazed field {c2['id']}")
+            elif rects_touch(cw["rect"]["v"], c2["rect"]["v"]) and cid < c2["id"]:
+                warnings.append(f"cw_fields {cid} and {c2['id']} touch - one hole of the wall, two curtain walls (two boundary frames at the shared jamb)")
+
+    # ---- balconies
+    lin_boxes = []
+    for it in spec.get("linear", []):
+        sd = systems.get(it["system"], {})
+        prof = systems.get(sd.get("profile", ""), {})
+        if prof.get("polygon_wv") and sd.get("tool") in ("beam", "column"):
+            lin_boxes.append((it["id"], it.get("plane", REFERENCE_PLANE), linear_box(it, prof)))
+    by_open = {o["id"]: o for o in openings}
+    bals = {}
+    for b in spec.get("balconies", []):
+        bid = b["id"]
+        if bid in item_ids:
+            errors.append(f"balconies[{bid}]: duplicate id")
+        item_ids.add(bid)
+        bals[bid] = b
+        for k in ("s", "w_side", "w_crown", "v_top"):
+            check_src(f"balconies[{bid}].{k}", b[k]["src"], b[k]["conf"])
+        sysdef = systems.get(b["system"])
+        if sysdef is None or sysdef["type"] != "slab":
+            errors.append(f"balconies[{bid}]: system '{b['system']}' is not a slab system")
+            continue
+        plane = b.get("plane", REFERENCE_PLANE)
+        if plane not in frames:
+            errors.append(f"balconies[{bid}]: plane '{plane}' does not exist")
+            continue
+        s0, s1 = b["s"]["v"]
+        if not s1 > s0 or s0 < -EPS or s1 > frames[plane].length + 0.01:
+            errors.append(f"balconies[{bid}]: s {s0}..{s1} empty or outside 0..L of plane {plane}")
+            continue
+        try:
+            o = balcony_outline(spec, b)
+        except ValueError as exc:
+            errors.append(f"balconies[{bid}]: {exc}")
+            continue
+        back_w = max(w for _, w in o["pts"][:-2])
+        if not (b["w_crown"]["v"] > b["w_side"]["v"] > back_w + 0.05):
+            errors.append(f"balconies[{bid}]: needs w_crown > w_side > wall face + 0.05 (got {b['w_crown']['v']}, {b['w_side']['v']}, face {back_w})")
+        th = sysdef.get("thickness", {}).get("v", 0.0)
+        vb, vt = b["v_top"]["v"] - th, b["v_top"]["v"]
+        if vb < -EPS:
+            errors.append(f"balconies[{bid}]: slab below the facade foot")
+        host = by_open.get(b.get("host", "")) if b.get("host") else None
+        if b.get("host") and host is None:
+            errors.append(f"balconies[{bid}]: host opening '{b['host']}' does not exist")
+        elif host is not None:
+            hs0, hs1, hv0, _ = host["rect"]["v"]
+            if hs0 < s0 - EPS or hs1 > s1 + EPS:
+                errors.append(f"balconies[{bid}]: host {host['id']} ({hs0}..{hs1}) is not in front of the balcony {s0}..{s1}")
+            if vt > hv0 + 0.001:
+                errors.append(f"balconies[{bid}]: top {vt} above the sill of its door {host['id']} ({hv0})")
+            elif hv0 - vt > 0.25:
+                warnings.append(f"balconies[{bid}]: step {hv0 - vt:.2f} m from the slab top {vt} to the sill of its door {host['id']} ({hv0})")
+        for lid, lpl, box in lin_boxes:                       # nothing passes through the slab
+            if lpl == plane and rect_overlap_area([s0, s1, vb, vt], box) > 1e-4:
+                errors.append(f"balconies[{bid}]: slab passes through linear element {lid}")
+
+    # ---- railings
+    for r in spec.get("railings", []):
+        rid = r["id"]
+        if rid in item_ids:
+            errors.append(f"railings[{rid}]: duplicate id")
+        item_ids.add(rid)
+        check_src(f"railings[{rid}].path_sw", r["path_sw"]["src"], r["path_sw"]["conf"])
+        check_src(f"railings[{rid}].v", r["v"]["src"], r["v"]["conf"])
+        sysdef = systems.get(r["system"])
+        if sysdef is None or sysdef["type"] != "railing":
+            errors.append(f"railings[{rid}]: system '{r['system']}' is not a railing system")
+        pts = r["path_sw"]["v"]
+        if any(np.hypot(q[0] - p[0], q[1] - p[1]) < 0.05 for p, q in zip(pts[:-1], pts[1:])):
+            errors.append(f"railings[{rid}]: path has a segment shorter than 5 cm")
+        b = bals.get(r.get("on", "")) if r.get("on") else None
+        if r.get("on") and b is None:
+            errors.append(f"railings[{rid}]: balcony '{r['on']}' does not exist")
+        elif b is not None:                                   # the railing stands on its slab (modeller: nothing hangs)
+            if abs(r["v"]["v"] - b["v_top"]["v"]) > 0.001:
+                errors.append(f"railings[{rid}]: base v {r['v']['v']} != top of balcony {b['id']} ({b['v_top']['v']})")
+            if r.get("plane", REFERENCE_PLANE) != b.get("plane", REFERENCE_PLANE):
+                errors.append(f"railings[{rid}]: not on the plane of balcony {b['id']}")
+            try:
+                ring = balcony_ring(spec, b)
+                out = [p for p in pts if not point_in_poly(p, ring, 0.002)]
+                if out:
+                    errors.append(f"railings[{rid}]: path points {out[:3]} outside the slab of balcony {b['id']}")
+            except ValueError:
+                pass
+        else:
+            warnings.append(f"railings[{rid}]: stands on no balcony of the spec (base v {r['v']['v']})")
+    return errors, warnings
 
 
 def element_id(spec: dict, item: dict, *conf_values: str) -> str:

@@ -14,6 +14,9 @@
                profile area, edges projected with the camera of the photo vs the photo
 (f) objects  - pilot A: GDL objects (FS_Surround, FS_ArchGable): library part, origin, angle, GDL parameters read back =
                sent, 3D bbox = expected from the template (gdl_expect) +-1 cm, arch radii, photo edges
+(h) I5/I6    - curtain walls (raster, profiles, panels per cell, door panels, 3D, bars of the raster on the photo), balcony
+               slabs (level, thickness, outline, arc) and railings (height, base on the slab, posts, balusters, spacing):
+               cw_verify.py; the hole of a glazed field is an Empty Window of the zone wall, checked like an opening
 (g) photo    - edges of openings and objects named in the spec (photo_edges) vs the photo, +-tol (3 cm); and an automatic
                check of every edge of every 'meranie' / 'kota' opening of the reference plane (strongest brightness step
                of either sign within +-5 cm; reported, not a failure - the explicit edges are the contract)
@@ -40,9 +43,10 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import gdl_expect  # noqa: E402
 import systems as fs_systems  # noqa: E402
-from build import DEFAULT_OUT, DEFAULT_PROJECT, gdl_params, opening_units, plan, state_path  # noqa: E402
+from build import DEFAULT_OUT, DEFAULT_PROJECT, EMPTY_OPENING, gdl_params, opening_units, plan, state_path  # noqa: E402
 from geom import REFERENCE_PLANE, frames_of, outside_of, zone_w  # noqa: E402
 from linear_verify import camera_of, geometry_of, photo_edge_any, to_photo, verify_linear  # noqa: E402
+from cw_verify import verify_balconies, verify_cw, verify_railings  # noqa: E402
 from spec_validate import TYPE_KEYS, fs_system, load_gdl_map, object_bbox, object_values, validate  # noqa: E402
 from tapir_client import TapirClient, TapirError  # noqa: E402
 
@@ -51,6 +55,7 @@ PROTRUSION = 0.10         # m - allowed overhang of sills / boards / handles bey
 AUTO_SEARCH = 0.05        # m - automatic photo check of opening edges
 AUTO_CONTRAST = 12.0      # minimum brightness step (0..255) of a readable edge
 COLORS = {"wall": (230, 30, 30), "hole": (230, 30, 30), "window": (0, 200, 255), "door": (255, 0, 200), "linear": (60, 255, 60),
+          "opening": (255, 255, 255), "cw": (0, 255, 255), "slab": (180, 255, 120), "railing": (255, 120, 255),
           "object": (255, 160, 40), "spec": (255, 230, 0), "text": (255, 255, 255), "shadow": (0, 0, 0), "exc": (255, 140, 0)}
 HOLE_AREA = "hole area on outside face [m2]"
 
@@ -182,6 +187,11 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
     for i in guids:
         if i not in details:
             problems.append(f"{i}: element {guids[i]} from the state is missing in the project")
+    for oid, u in units.items():                          # the hole of a glazed field is the state item '<id>.otvor'
+        if u["o"]["kind"] == "opening" and f"{oid}.otvor" in guids:
+            guids[oid] = guids[f"{oid}.otvor"]
+            if f"{oid}.otvor" in details:
+                details[oid] = details[f"{oid}.otvor"]
     wall_guids = {w: guids.get(w) for w in walls}
 
     # independent count: every window/door in the project hosted by one of our zone walls (one element per unit)
@@ -194,16 +204,19 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
             for e, d in zip(els, dd):
                 owner = d.get("details", {}).get("ownerElementId", {}).get("guid")
                 if owner in wall_guids.values():
-                    hosted[typ.lower()] += 1
+                    cat = "opening" if d.get("details", {}).get("libPart", {}).get("name") == EMPTY_OPENING else typ.lower()
+                    hosted[cat] = hosted.get(cat, 0) + 1
                     hosted_by[e["elementId"]["guid"]] = owner
     n_spec = {"window": sum(u["o"]["kind"] == "window" for u in units.values()), "door": sum(u["o"]["kind"] == "door" for u in units.values())}
+    if any(u["o"]["kind"] == "opening" for u in units.values()) or "opening" in hosted:
+        n_spec["opening"] = sum(u["o"]["kind"] == "opening" for u in units.values())
     count_ok = hosted == n_spec
     if not count_ok:
         problems.append(f"opening count in the zone walls {hosted} != spec {n_spec} (merged openings count once)")
 
     # ---- (a) parameters read back
     layer_index = state.get("layer", {}).get("index")
-    all_items = want["walls"] + want["openings"] + want["linear"] + want["objects"]
+    all_items = want["walls"] + want["openings"] + want["linear"] + want["objects"] + want["cw"] + want["slabs"] + want["railings"]
     for item in all_items:
         d = details.get(item["item"])
         if not d:
@@ -367,7 +380,7 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
                 row(label, "hole step (sidelight parapet corner)", 0.0, dist, "3D")
     w_ranges = {}
     for oid, u in units.items():
-        if oid not in proj:
+        if oid not in proj or u["o"]["kind"] == "opening":     # the Empty Window of a glazed field has no 3D body
             continue
         bb = _bbox(proj[oid])
         if bb is None:
@@ -465,12 +478,22 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
                 auto_edges.append({"item": oid, "edge": edge, "model": round(at, 4), "photo": round(pos, 4), "delta_cm": round(d * 100, 1),
                                    "contrast": round(contrast, 1), "status": ("OK" if abs(d) <= 0.03 else "MIMO") if readable else "nečitateľné"})
 
-    # independent counts on the facade layer: beams / columns (linear) and objects
+    # ---- (h) I5/I6: curtain walls, balconies, railings
+    cwr = verify_cw(ac, spec, want["cw"], guids, details, frames, sysinfo, lum, rect, cam, row, trow, problems) if want["cw"] else {"proj": {}, "photo": []}
+    balr = verify_balconies(ac, spec, want["slabs"], guids, details, frames, stories, row, trow, problems) if want["slabs"] else {"proj": {}}
+    railr = verify_railings(ac, spec, want["railings"], guids, frames, row, trow, problems) if want["railings"] else {"proj": {}}
+    edges += cwr["photo"]
+
+    # independent counts on the facade layer: beams / columns (linear), objects, curtain walls, slabs, railings
     n_lin_spec = {"beam": sum(it["kind"] == "beam" for it in want["linear"]), "column": sum(it["kind"] == "column" for it in want["linear"]),
                   "object": len(want["objects"])}
     n_lin_model = count_on_layer(ac, layer_index) if (want["linear"] or want["objects"]) else {"beam": 0, "column": 0, "object": 0}
     if n_lin_model != n_lin_spec:
         problems.append(f"linear elements / objects on the facade layer {n_lin_model} != spec {n_lin_spec}")
+    n_i6_spec = {"curtainwall": len(want["cw"]), "slab": len(want["slabs"]), "railing": len(want["railings"])}
+    n_i6_model = count_on_layer(ac, layer_index, ("CurtainWall", "Slab", "Railing"))
+    if n_i6_model != n_i6_spec:
+        problems.append(f"curtain walls / slabs / railings on the facade layer {n_i6_model} != spec {n_i6_spec}")
 
     # ---- (c) types, build-up, favourites, properties (I2)
     if sysinfo:
@@ -478,7 +501,7 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
         exc_keys = {(e.get("item"), e["field"]) for e in exceptions} | {(e["system"], e["field"]) for e in exceptions if "item" not in e}
         for oid, u in units.items():
             g = guids.get(oid)
-            if g not in gdl:
+            if g not in gdl or u["o"]["kind"] == "opening":
                 continue
             p, od = gdl[g], details[oid]["details"]
             o = u["o"]
@@ -523,7 +546,7 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
         # FS favourites exist
         kind_of = lambda s: {"linear": s.get("tool", "")}.get(s["type"], s["type"])
         for kind, names in [(fs_systems.FAV_TYPES[k], [s["favorite"] for s in spec["systems"].values() if fs_system(s) and kind_of(s) == k])
-                            for k in ("wall", "window", "door", "beam", "column")]:
+                            for k in ("wall", "window", "door", "beam", "column", "curtain_wall", "slab", "railing")]:
             if names:
                 have = set(ac.tapir("GetFavoritesByType", {"elementType": kind}).get("favorites", []))
                 for n in names:
@@ -556,7 +579,11 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
             wr.writeheader()
             wr.writerows(trows)
     ref_walls = {w: f for w, f in wall_faces.items() if walls[w]["geom"]["plane"] == REFERENCE_PLANE}
-    overlay_png, model_png = draw(spec, src, root / rect["image"], proj, ref_walls, rows, trows, units, out_dir, lin["proj"], obj_proj, want)
+    # slabs / railings stand out of the plane: through the camera when it is complete (s known), else in the photo plane
+    # (M016: camera without s, its vertical parallax contradicts the photo - the balconies are ODHAD, the overlay is informative)
+    via_cam = bool(cam and cam.get("s") is not None)
+    extra = [("cw", {k: v for k, v in cwr["proj"].items()}, False), ("slab", balr["proj"], via_cam), ("railing", railr["proj"], via_cam)]
+    overlay_png, model_png = draw(spec, src, root / rect["image"], proj, ref_walls, rows, trows, units, out_dir, lin["proj"], obj_proj, want, extra)
     photo_edges = lin["photo"] + edges
     edges_png = draw_edges(spec, src, root / rect["image"], lin, obj_proj, edges, out_dir) if photo_edges else None
 
@@ -571,11 +598,13 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
     result = {
         "spec": spec["id"], "at": time.strftime("%Y-%m-%dT%H:%M:%S"), "seconds": round(time.monotonic() - t0, 2),
         "count": {"spec": n_spec, "model_in_wall": hosted, "ok": count_ok, "linear_spec": n_lin_spec, "linear_model": n_lin_model,
+                  "i6_spec": n_i6_spec, "i6_model": n_i6_model,
                   "walls": len(walls)},
         "linear": {"items": len(want["linear"]), "photo_edges": lin["photo"],
                    "max_delta_cm": {m: max([abs(r["delta_cm"]) for r in rows if r["method"] == m and r["item"] in lin_ids
                                             and r["delta_cm"] is not None] or [0.0]) for m in ("params", "3D", "photo")},
                    "overlay_png": str(edges_png) if edges_png else None},
+        "i6": {"cw": len(want["cw"]), "slabs": len(want["slabs"]), "railings": len(want["railings"]), "cw_photo": cwr["photo"]},
         "objects": {"items": len(want["objects"]), "max_delta_cm": max([abs(r["delta_cm"]) for r in rows if r["item"] in {o["item"] for o in want["objects"]}
                                                                         and r["method"] in ("params", "3D") and r["delta_cm"] is not None] or [0.0])},
         "photo_edges": photo_edges, "auto_edges": auto_edges,
@@ -615,9 +644,9 @@ def _edge_row(item: str, e: dict, bodies, cam, lum, rect, row, edges: list) -> N
                   "tol_cm": t * 100, "contrast": round(contrast, 1)})
 
 
-def count_on_layer(ac: TapirClient, layer_index: int) -> dict:
+def count_on_layer(ac: TapirClient, layer_index: int, types=("Beam", "Column", "Object")) -> dict:
     out = {}
-    for typ in ("Beam", "Column", "Object"):
+    for typ in types:
         els = ac.tapir("GetElementsByType", {"elementType": typ})["elements"]
         n = 0
         if els:
@@ -654,7 +683,7 @@ def _font(size: int):
         return ImageFont.load_default()
 
 
-def draw(spec, src, image_path: Path, proj, wall_faces, rows, trows, units, out_dir: Path, lin_proj=None, obj_proj=None, want=None):
+def draw(spec, src, image_path: Path, proj, wall_faces, rows, trows, units, out_dir: Path, lin_proj=None, obj_proj=None, want=None, extra=None):
     r = src["rect"]
     S, u0, v1 = r["S"], r["u0"], r["v1"]
     px = lambda s, v: ((s - u0) * S, (v1 - v) * S)
@@ -690,6 +719,17 @@ def draw(spec, src, image_path: Path, proj, wall_faces, rows, trows, units, out_
                     for p in polys:
                         pts = [px(s_, v_) for s_, v_ in pp[p["vertexIds"]]]
                         dr.line(pts + [pts[0]], fill=col + (200,), width=1)
+        planes_of = {it["item"]: it.get("plane", it.get("layout", {}).get("plane", REFERENCE_PLANE))
+                     for it in (want or {}).get("cw", []) + (want or {}).get("slabs", []) + (want or {}).get("railings", [])}
+        for kind, bodies_by, via_cam in extra or []:              # I5/I6: CW frames in the photo plane, slabs / railings through the camera
+            for k, bodies in bodies_by.items():
+                if planes_of.get(k, REFERENCE_PLANE) != REFERENCE_PLANE:
+                    continue
+                for svw, polys in bodies:
+                    pp = to_photo(svw, cam) if via_cam else svw[:, :2]
+                    for p in polys:
+                        pts = [px(s_, v_) for s_, v_ in pp[p["vertexIds"]]]
+                        dr.line(pts + [pts[0]], fill=COLORS[kind] + (150,), width=1)
         for faces in wall_faces.values():
             for outline, holes in faces:
                 pts = [px(s, v) for s, v in outline]
@@ -723,6 +763,7 @@ def draw(spec, src, image_path: Path, proj, wall_faces, rows, trows, units, out_
                  ("červená: líce stien zón + otvory v stene (3D)", COLORS["wall"]),
                  ("modrá: okná · fialová: dvere (3D) · zelená: rímsy, pásy (3D cez kameru fotky)", COLORS["window"]),
                  ("oranžová: GDL objekty (šambrány, oblúkový štít) cez kameru fotky", COLORS["object"]),
+                 ("azúrová: Curtain Wall výkladov (rámy, v rovine fotky) · bledozelená: balkónové dosky · ružová: zábradlia (cez kameru)", COLORS["cw"]),
                  ("žltá prerušovaná: spec (z fotky); žltý text: typ čítaný späť", COLORS["spec"])]
         if other:
             lines.append((f"roviny bez fotky (nie sú v obraze): {', '.join(other)}", COLORS["exc"]))
@@ -836,6 +877,8 @@ def report_md(spec, result, rows, trows) -> str:
              f"| typy, skladby, favority, šablóny, vlastnosti (riadky) | {t['rows']} | OK {t['ok']} / FAIL {t['fail']} / výnimka {t['exc']} | {'áno' if not t['fail'] else 'NIE'} |",
              f"| lineárne prvky / objekty na vrstve fasády | {result['count'].get('linear_spec')} | {result['count'].get('linear_model')} | "
              f"{'áno' if result['count'].get('linear_spec') == result['count'].get('linear_model') else 'NIE'} |",
+             f"| CW / balkónové dosky / zábradlia na vrstve fasády (I5/I6) | {result['count'].get('i6_spec')} | {result['count'].get('i6_model')} | "
+             f"{'áno' if result['count'].get('i6_spec') == result['count'].get('i6_model') else 'NIE'} |",
              f"| hrany × fotka (pomenované v spec) | {len(pe)} | v tolerancii {sum(abs(e['delta_cm']) <= e['tol_cm'] for e in pe)} | "
              f"{'áno' if all(abs(e['delta_cm']) <= e['tol_cm'] for e in pe) else 'NIE'} |",
              f"| hrany otvorov × fotka automaticky (meranie, informatívne) | {len(ae)} | OK {sum(e['status'] == 'OK' for e in ae)} / mimo "

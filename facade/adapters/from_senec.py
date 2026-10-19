@@ -298,12 +298,18 @@ def _ref_value(v, length: float):
     return v
 
 
-def build_spec(house: str, root: Path = DEFAULT_ROOT) -> dict:
+def build_spec(house: str, root: Path = DEFAULT_ROOT, i6: bool = False) -> dict:
+    """facade-spec/1 of a pilot house. i6=True adds the I5/I6 layer of the types file (section 'i6'): shop windows and
+    glazed entrances as curtain wall fields instead of fixed windows / doors, balcony slabs and railings."""
     h = _read_house(root, house)
     otv = _read_otvory(root)
     fac = _read_fasady(root)
     types_file = TYPES_DIR / f"{house}.json"
     types = json.loads(types_file.read_text(encoding="utf-8")) if types_file.exists() else {}
+    if i6 and not types.get("i6"):
+        raise AdapterError(f"{types_file.name}: no 'i6' section (curtain walls, balconies, railings)")
+    if i6 and types["i6"].get("pilot_mapping"):
+        types["pilot_mapping"] = dict(types.get("pilot_mapping", {}), **types["i6"]["pilot_mapping"])
 
     # the reference facade = the path whose ends are a facade of fasady.py
     fid, ref_path = None, None
@@ -444,6 +450,9 @@ def build_spec(house: str, root: Path = DEFAULT_ROOT) -> dict:
         spec["generated"]["pilot_odhady"] = h["odhady"]
     if types:
         apply_types(spec, types, root, h, length_of)
+    if i6:
+        apply_i6(spec, types["i6"])
+        spec["generated"]["layer"] = "i6"
         spec["generated"]["types"] = str(types_file)
     spec.setdefault("simplifications", [])
     spec["simplifications"] += [{"ref": s["ref"], "text": s["text"], "proposal": "mimo rozsah pilota A (vykázané)"} for s in skipped]
@@ -512,6 +521,67 @@ def apply_types(spec: dict, types: dict, root: Path | None = None, h: dict | Non
     _assign_zones(spec)
     apply_linear(spec, types, length_of)
     _map_pilot_calls(spec, types, h)
+
+
+def apply_i6(spec: dict, i6: dict) -> None:
+    """I5/I6 layer: systems (curtain wall, slab, railing), glazed fields replacing openings (their reveal is kept unless
+    given), balconies, railings (reference line derived from the balcony outline: inset, arc as chords), simplifications
+    and G1 proposals that change with it."""
+    import geom
+    spec["systems"].update(json.loads(json.dumps(i6.get("systems", {}))))
+    by_id = {o["id"]: o for o in spec["openings"]}
+    removed = set()
+    cws = []
+    for cw in json.loads(json.dumps(i6.get("cw_fields", []))):
+        for oid in cw.get("replaces", []):
+            if oid not in by_id:
+                raise AdapterError(f"i6: cw field {cw['id']} replaces {oid}, which is not an opening")
+            removed.add(oid)
+        first = by_id[cw["replaces"][0]] if cw.get("replaces") else None
+        if "reveal" not in cw and first is not None and "reveal" in first:
+            cw["reveal"] = dict(first["reveal"], note=f"wall inset of the frames = reveal of {first['id']} ({first['reveal'].get('note', '')})")
+        if "zone" not in cw and first is not None:
+            cw["zone"] = first["zone"]
+        if "photo_edges" not in cw and first is not None and first.get("photo_edges") and cw["rect"]["v"] == first["rect"]["v"]:
+            cw["photo_edges"] = first["photo_edges"]          # explicit edges of the hole stay the contract of the field
+        cws.append(cw)
+    spec["openings"] = [o for o in spec["openings"] if o["id"] not in removed]
+    for o in spec["openings"]:
+        if o.get("merged_into") in removed:
+            raise AdapterError(f"i6: opening {o['id']} is merged into the replaced opening {o['merged_into']}")
+    for key in ("linear", "objects"):
+        for it in spec.get(key, []):
+            if it.get("host") in removed:
+                raise AdapterError(f"i6: {key}[{it['id']}] belongs to the replaced opening {it['host']}")
+    if cws:
+        spec["cw_fields"] = cws
+    bals = json.loads(json.dumps(i6.get("balconies", [])))
+    if bals:
+        spec["balconies"] = bals
+    bal_by = {b["id"]: b for b in bals}
+    rails = []
+    for r in i6.get("railings", []):
+        b = bal_by.get(r["on"])
+        if b is None:
+            raise AdapterError(f"i6: railing {r['id']} on unknown balcony {r['on']}")
+        path = geom.railing_path(spec, b, r["inset"], r["chords"])
+        o = geom.balcony_outline(spec, b)
+        err = geom.chord_error(o["arc"][3] - r["inset"], o["arc"][4], r["chords"])
+        confs = [b[k]["conf"] for k in ("s", "w_side", "w_crown")]
+        conf = max(confs, key=("kota", "meranie", "pravidlo", "odhad", "default").index)
+        rails.append({"id": r["id"], "on": b["id"], "system": r["system"], "plane": b.get("plane", "F"),
+                      "path_sw": {"v": [[round(x, 4), round(y, 4)] for x, y in path], "src": b["s"]["src"], "conf": conf,
+                                  "note": f"free edges of {b['id']} {r['inset']} m inside the slab edge; front arc as {r['chords']} chords "
+                                          f"(max {err * 100:.1f} cm from the arc; CreateRailings has straight segments only)"},
+                      "v": dict(b["v_top"], note=f"on top of balcony {b['id']}"), "inset": r["inset"], "chords": r["chords"],
+                      "approx_error": round(err, 4), **({"note": r["note"]} if r.get("note") else {})})
+    if rails:
+        spec["railings"] = rails
+    drop = set(i6.get("drop_simplifications", []))
+    spec["simplifications"] = [x for x in spec.get("simplifications", []) if x["ref"] not in drop] + list(i6.get("simplifications", []))
+    if i6.get("g1_proposals"):
+        spec.setdefault("g1_proposals", {}).update(i6["g1_proposals"])
+    spec["title"] += " + I5/I6 (CW, balkóny, zábradlia)"
 
 
 def _split_zone(spec: dict, sp: dict) -> None:
@@ -674,8 +744,9 @@ def main(argv=None) -> int:
     ap.add_argument("house")
     ap.add_argument("--root", type=Path, default=DEFAULT_ROOT)
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    ap.add_argument("--i6", action="store_true", help="add the I5/I6 layer (curtain walls, balconies, railings)")
     args = ap.parse_args(argv)
-    spec = build_spec(args.house, args.root)
+    spec = build_spec(args.house, args.root, i6=args.i6)
     errors, warnings = validate(spec)
     for w in warnings:
         print("WARNING:", w)
