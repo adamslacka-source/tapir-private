@@ -141,3 +141,6 @@ grasshopper-plugin/src/test.py
 .vscode
 .lck
 /.vs
+
+# Local build logs (private fork)
+logs_local/

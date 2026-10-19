@@ -154,6 +154,12 @@ GS::ObjectState	CreateElementsCommandBase::Execute (const GS::ObjectState& param
                 continue;
             }
 
+            os = ChangeAfterCreation (element, stories, data);
+            if (os.HasValue ()) {
+                elements (*os);
+                continue;
+            }
+
             notification = {};
             notification.notifID = APINotifyElement_New;
             notification.elemHead = element.header;
@@ -3345,6 +3351,46 @@ GS::Optional<GS::ObjectState> CreateRailingsCommand::SetTypeSpecificParameters (
     memo.polyZCoords = reinterpret_cast<double**> (BMAllocateHandle ((nCoords + 1) * sizeof (double), ALLOCATE_CLEAR, 0));
     element.railing.nVertices = nCoords;
 
+    return {};
+}
+
+GS::Optional<GS::ObjectState> CreateRailingsCommand::ChangeAfterCreation (API_Element& element, const Stories& stories, const GS::ObjectState& parameters) const
+{
+    // Confirmed live in AC29: ACAPI_Element_Create puts a railing on the active story with the
+    // base offset of the defaults, whatever header.floorInd and railing.bottomOffset say. An
+    // ACAPI_Element_Change afterwards does move it, so the home story and the offset are set here.
+    double zCoordinate = 0.0;
+    short floorIndex = 0;
+    const bool hasZCoordinate = parameters.Get ("zCoordinate", zCoordinate);
+    const bool hasFloorIndex = parameters.Get ("floorIndex", floorIndex);
+    if (!hasZCoordinate && !hasFloorIndex) {
+        return {};
+    }
+
+    API_Element changed = {};
+    changed.header.guid = element.header.guid;
+    GSErrCode err = ACAPI_Element_Get (&changed);
+    if (err != NoError) {
+        return CreateErrorResponse (err, "The Railing was created, but reading it back to set its story failed.");
+    }
+
+    API_Element mask = {};
+    ACAPI_ELEMENT_MASK_CLEAR (mask);
+    if (hasZCoordinate) {
+        const auto floorIndexAndOffset = ResolveFloorIndexAndOffset (parameters, "floorIndex", zCoordinate, stories);
+        changed.header.floorInd = floorIndexAndOffset.first;
+        changed.railing.bottomOffset = floorIndexAndOffset.second;
+        ACAPI_ELEMENT_MASK_SET (mask, API_RailingType, bottomOffset);
+    } else {
+        changed.header.floorInd = floorIndex;
+    }
+    ACAPI_ELEMENT_MASK_SET (mask, API_Elem_Head, floorInd);
+
+    err = ACAPI_Element_Change (&changed, &mask, nullptr, 0, true);
+    if (err != NoError) {
+        return CreateErrorResponse (err, "The Railing was created, but setting its story and base offset failed.");
+    }
+    element.header = changed.header;
     return {};
 }
 

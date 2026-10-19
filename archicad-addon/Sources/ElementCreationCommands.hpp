@@ -36,6 +36,8 @@ public:
     virtual GS::ObjectState Execute (const GS::ObjectState& parameters, GS::ProcessControl& processControl) const override;
 protected:
     virtual GS::Optional<GS::ObjectState> SetTypeSpecificParameters (API_Element& element, API_ElementMemo& memo, const Stories& stories, const GS::ObjectState& parameters) const = 0;
+    // Called after ACAPI_Element_Create succeeded, for settings the element type ignores at creation.
+    virtual GS::Optional<GS::ObjectState> ChangeAfterCreation (API_Element& /*element*/, const Stories& /*stories*/, const GS::ObjectState& /*parameters*/) const { return {}; }
 protected:
     GS::String     commandName;
     API_ElemTypeID elemTypeID;
@@ -161,6 +163,7 @@ public:
     CreateRailingsCommand ();
     virtual GS::Optional<GS::UniString> GetInputParametersSchema () const override;
     virtual GS::Optional<GS::ObjectState> SetTypeSpecificParameters (API_Element& element, API_ElementMemo& memo, const Stories& stories, const GS::ObjectState& parameters) const override;
+    virtual GS::Optional<GS::ObjectState> ChangeAfterCreation (API_Element& element, const Stories& stories, const GS::ObjectState& parameters) const override;
 };
 
 class CreateLabelsCommand : public CreateElementsCommandBase
