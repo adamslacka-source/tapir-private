@@ -1,37 +1,98 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "facade-spec/1#I1",
-  "title": "facade-spec/1 - subset for increment I1 (reference, stories, zones[wall], openings)",
+  "$id": "facade-spec/1#I2",
+  "title": "facade-spec/1 - subset for increments I1-I2 (reference, stories, zones[wall], openings, systems catalog)",
   "description": "Machine specification of one facade (ADR-001, ch. 4). Local facade coordinates: s = m along the reference line a->b (left to right seen from outside), v = m above reference.z0, w = m out of the facade plane. Every number that drives the model carries a source (src) and a certainty (conf).",
   "type": "object",
-  "required": ["schema", "id", "reference", "sources", "stories", "zones", "openings", "systems", "tolerances"],
+  "required": [
+    "schema",
+    "id",
+    "reference",
+    "sources",
+    "stories",
+    "zones",
+    "openings",
+    "systems",
+    "tolerances"
+  ],
   "additionalProperties": false,
   "properties": {
-    "schema": {"const": "facade-spec/1"},
-    "id": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+$"},
-    "title": {"type": "string"},
-    "generated": {"type": "object", "description": "Provenance of the spec file (adapter, time, source files)."},
+    "schema": {
+      "const": "facade-spec/1"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+$"
+    },
+    "title": {
+      "type": "string"
+    },
+    "generated": {
+      "type": "object",
+      "description": "Provenance of the spec file (adapter, time, source files)."
+    },
     "reference": {
       "type": "object",
-      "required": ["a", "b", "z0", "outside", "layer", "src", "conf"],
+      "required": [
+        "a",
+        "b",
+        "z0",
+        "outside",
+        "layer",
+        "src",
+        "conf"
+      ],
       "additionalProperties": false,
       "properties": {
-        "a": {"$ref": "#/$defs/xy", "description": "left end of the facade seen from outside, model coordinates (m)"},
-        "b": {"$ref": "#/$defs/xy", "description": "right end of the facade seen from outside, model coordinates (m)"},
-        "src": {"$ref": "#/$defs/src"},
-        "conf": {"$ref": "#/$defs/conf"},
-        "z0": {"$ref": "#/$defs/value", "description": "absolute model z of v = 0 (foot of the facade)"},
-        "outside": {"enum": ["right_of_ab", "left_of_ab"]},
-        "layer": {"type": "string", "minLength": 1},
+        "a": {
+          "$ref": "#/$defs/xy",
+          "description": "left end of the facade seen from outside, model coordinates (m)"
+        },
+        "b": {
+          "$ref": "#/$defs/xy",
+          "description": "right end of the facade seen from outside, model coordinates (m)"
+        },
+        "src": {
+          "$ref": "#/$defs/src"
+        },
+        "conf": {
+          "$ref": "#/$defs/conf"
+        },
+        "z0": {
+          "$ref": "#/$defs/value",
+          "description": "absolute model z of v = 0 (foot of the facade)"
+        },
+        "outside": {
+          "enum": [
+            "right_of_ab",
+            "left_of_ab"
+          ]
+        },
+        "layer": {
+          "type": "string",
+          "minLength": 1
+        },
         "home_story": {
           "type": "object",
-          "required": ["floorIndex", "src", "conf"],
+          "required": [
+            "floorIndex",
+            "src",
+            "conf"
+          ],
           "additionalProperties": false,
           "properties": {
-            "floorIndex": {"type": "integer"},
-            "src": {"$ref": "#/$defs/src"},
-            "conf": {"$ref": "#/$defs/conf"},
-            "note": {"type": "string"}
+            "floorIndex": {
+              "type": "integer"
+            },
+            "src": {
+              "$ref": "#/$defs/src"
+            },
+            "conf": {
+              "$ref": "#/$defs/conf"
+            },
+            "note": {
+              "type": "string"
+            }
           }
         }
       }
@@ -41,22 +102,62 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["id", "type", "file"],
+        "required": [
+          "id",
+          "type",
+          "file"
+        ],
         "additionalProperties": true,
         "properties": {
-          "id": {"type": "string"},
-          "type": {"enum": ["photo", "script", "survey", "drawing", "sketch", "archicad", "rule"]},
-          "file": {"type": "string"},
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "photo",
+              "script",
+              "survey",
+              "drawing",
+              "sketch",
+              "archicad",
+              "rule"
+            ]
+          },
+          "file": {
+            "type": "string"
+          },
           "rect": {
             "type": "object",
             "description": "metric rectified image: pixel x = (s - u0) * S, y = (v1 - v) * S",
-            "required": ["image", "S", "u0", "v1", "size"],
+            "required": [
+              "image",
+              "S",
+              "u0",
+              "v1",
+              "size"
+            ],
             "properties": {
-              "image": {"type": "string"},
-              "S": {"type": "number", "exclusiveMinimum": 0},
-              "u0": {"type": "number"},
-              "v1": {"type": "number"},
-              "size": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2}
+              "image": {
+                "type": "string"
+              },
+              "S": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "u0": {
+                "type": "number"
+              },
+              "v1": {
+                "type": "number"
+              },
+              "size": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              }
             }
           }
         }
@@ -67,30 +168,72 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["id", "level"],
+        "required": [
+          "id",
+          "level"
+        ],
         "additionalProperties": false,
-        "properties": {"id": {"type": "string"}, "level": {"$ref": "#/$defs/value"}, "note": {"type": "string"}}
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "level": {
+            "$ref": "#/$defs/value"
+          },
+          "note": {
+            "type": "string"
+          }
+        }
       }
     },
     "axes": {
       "type": "object",
       "additionalProperties": false,
-      "properties": {"s": {"type": "array", "items": {"type": "number"}}, "snap_tol": {"type": "number", "minimum": 0}}
+      "properties": {
+        "s": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "snap_tol": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
     },
     "zones": {
       "type": "array",
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["id", "kind", "rect", "thickness", "system"],
+        "required": [
+          "id",
+          "kind",
+          "rect",
+          "thickness",
+          "system"
+        ],
         "additionalProperties": false,
         "properties": {
-          "id": {"$ref": "#/$defs/itemId"},
-          "kind": {"const": "wall"},
-          "rect": {"$ref": "#/$defs/rect"},
-          "thickness": {"$ref": "#/$defs/value"},
-          "system": {"type": "string"},
-          "note": {"type": "string"}
+          "id": {
+            "$ref": "#/$defs/itemId"
+          },
+          "kind": {
+            "const": "wall"
+          },
+          "rect": {
+            "$ref": "#/$defs/rect"
+          },
+          "thickness": {
+            "$ref": "#/$defs/value"
+          },
+          "system": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          }
         }
       }
     },
@@ -98,20 +241,79 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "kind", "rect", "system"],
+        "required": [
+          "id",
+          "kind",
+          "rect",
+          "system"
+        ],
         "additionalProperties": false,
         "properties": {
-          "id": {"$ref": "#/$defs/itemId"},
-          "kind": {"enum": ["window", "door", "opening"]},
-          "zone": {"type": "string"},
-          "story": {"type": "string"},
-          "rect": {"$ref": "#/$defs/rect"},
-          "kind_src": {"$ref": "#/$defs/src"},
-          "kind_conf": {"$ref": "#/$defs/conf"},
-          "system": {"type": "string"},
-          "reveal": {"$ref": "#/$defs/value"},
-          "glazing": {"type": "string"},
-          "note": {"type": "string"}
+          "id": {
+            "$ref": "#/$defs/itemId"
+          },
+          "kind": {
+            "enum": [
+              "window",
+              "door",
+              "opening"
+            ]
+          },
+          "zone": {
+            "type": "string"
+          },
+          "story": {
+            "type": "string"
+          },
+          "rect": {
+            "$ref": "#/$defs/rect"
+          },
+          "kind_src": {
+            "$ref": "#/$defs/src"
+          },
+          "kind_conf": {
+            "$ref": "#/$defs/conf"
+          },
+          "system": {
+            "type": "string"
+          },
+          "reveal": {
+            "$ref": "#/$defs/value"
+          },
+          "glazing": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "transom_h": {
+            "$ref": "#/$defs/value",
+            "description": "height of the transom zone from the top of the wall hole (m)"
+          },
+          "sidelight_w": {
+            "$ref": "#/$defs/value",
+            "description": "visible width of a sidelight inside this opening (m)"
+          },
+          "sidelight_sill": {
+            "$ref": "#/$defs/value",
+            "description": "height of the wall parapet under the sidelight, from the bottom of the opening (m)"
+          },
+          "transom_bars": {
+            "$ref": "#/$defs/value",
+            "description": "number of horizontal bars inside the transom above the leaf (0/1)"
+          },
+          "transom_bar_h": {
+            "$ref": "#/$defs/value",
+            "description": "height of the division inside the transom above the leaf (library parameter, m)"
+          },
+          "bar_h": {
+            "$ref": "#/$defs/value",
+            "description": "height of the centre of the horizontal glazing bar above the bottom of the wall hole (m)"
+          },
+          "merged_into": {
+            "type": "string",
+            "description": "id of the opening this one is built with as ONE element (e.g. a shop window that is the sidelight of a door, one frame on the photo). Its rect stays the photo reading; the build derives sidelight width / parapet of the host from it."
+          }
         }
       }
     },
@@ -119,17 +321,137 @@
       "type": "object",
       "additionalProperties": {
         "type": "object",
-        "required": ["type", "conf"],
+        "required": [
+          "type",
+          "conf"
+        ],
         "additionalProperties": false,
         "properties": {
-          "type": {"enum": ["wall", "window", "door"]},
-          "favorite": {"type": ["string", "null"], "description": "existing Archicad Favorite; null = tool defaults"},
-          "structure": {"enum": ["Basic", "Composite", "Profile"]},
-          "reference_line": {"enum": ["Outside", "Center", "Inside", "CoreOutside", "CoreCenter", "CoreInside"]},
-          "nominal": {"enum": ["wallhole"], "description": "what width/height of the library part mean; wallhole = the masonry opening seen on the facade"},
-          "conf": {"$ref": "#/$defs/conf"},
-          "src": {"$ref": "#/$defs/src"},
-          "note": {"type": "string"}
+          "type": {
+            "enum": [
+              "wall",
+              "window",
+              "door"
+            ]
+          },
+          "favorite": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Archicad Favorite the elements are placed from. With base_favorite it is the FS favourite created by systems.py (name must start with 'FS '); without it an existing favourite (I1)."
+          },
+          "structure": {
+            "enum": [
+              "Basic",
+              "Composite",
+              "Profile"
+            ]
+          },
+          "reference_line": {
+            "enum": [
+              "Outside",
+              "Center",
+              "Inside",
+              "CoreOutside",
+              "CoreCenter",
+              "CoreInside"
+            ]
+          },
+          "nominal": {
+            "enum": [
+              "wallhole"
+            ],
+            "description": "what width/height of the library part mean; wallhole = the masonry opening seen on the facade"
+          },
+          "conf": {
+            "$ref": "#/$defs/conf"
+          },
+          "src": {
+            "$ref": "#/$defs/src"
+          },
+          "note": {
+            "type": "string"
+          },
+          "base_favorite": {
+            "type": "string",
+            "description": "existing Favorite the FS favourite starts from (sample element, ADR D4)"
+          },
+          "libpart": {
+            "type": "string",
+            "description": "library part the base favourite places; must be listed in gdl_param_map.json"
+          },
+          "leaves": {
+            "$ref": "#/$defs/anyValue",
+            "description": "number of leaves / sashes"
+          },
+          "transom": {
+            "$ref": "#/$defs/anyValue",
+            "description": "has a transom (fanlight)"
+          },
+          "sidelight": {
+            "$ref": "#/$defs/anyValue",
+            "description": "'none' | 'right' | 'left' seen from outside"
+          },
+          "sash_bars": {
+            "$ref": "#/$defs/anyValue",
+            "description": "horizontal glazing bars per sash (0/1)"
+          },
+          "frame_surface": {
+            "$ref": "#/$defs/anyValue",
+            "description": "Archicad surface name of the outside of frame and leaves"
+          },
+          "composite": {
+            "type": "object",
+            "required": [
+              "name",
+              "skins"
+            ],
+            "additionalProperties": false,
+            "description": "Composite attribute of a wall system; skins listed from the OUTSIDE (reference line 'Outside') to the inside; the sum must equal the zone thickness.",
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^FS "
+              },
+              "skins": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "type",
+                    "material",
+                    "thickness"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "Core",
+                        "Finish",
+                        "Other"
+                      ]
+                    },
+                    "material": {
+                      "type": "string",
+                      "description": "Archicad building material name"
+                    },
+                    "thickness": {
+                      "$ref": "#/$defs/value"
+                    },
+                    "note": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "leaf_panel": {
+            "$ref": "#/$defs/anyValue",
+            "description": "leaf panel style of the library part (e.g. iDoorPanelType)"
+          }
         }
       }
     },
@@ -137,51 +459,211 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["ref", "value", "why", "status"],
+        "required": [
+          "ref",
+          "value",
+          "why",
+          "status"
+        ],
         "additionalProperties": false,
         "properties": {
-          "ref": {"type": "string"},
+          "ref": {
+            "type": "string"
+          },
           "value": {},
-          "conf": {"$ref": "#/$defs/conf"},
-          "why": {"type": "string"},
-          "status": {"enum": ["pending", "approved", "changed"]}
+          "conf": {
+            "$ref": "#/$defs/conf"
+          },
+          "why": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "approved",
+              "changed"
+            ]
+          }
         }
       }
     },
     "tolerances": {
       "type": "object",
-      "required": ["build"],
+      "required": [
+        "build"
+      ],
       "additionalProperties": false,
       "properties": {
-        "build": {"type": "number", "exclusiveMinimum": 0, "description": "model vs spec, read back from Archicad (m)"},
-        "kota": {"type": ["number", "null"]},
-        "meranie": {"type": ["number", "null"]},
-        "pravidlo": {"type": ["number", "null"]},
-        "odhad": {"type": ["number", "null"]}
+        "build": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "model vs spec, read back from Archicad (m)"
+        },
+        "kota": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "meranie": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "pravidlo": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "odhad": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
+    },
+    "g1_proposals": {
+      "type": "object",
+      "description": "gate G1: proposed value per assumption ref (text for the architect)",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "simplifications": {
+      "type": "array",
+      "description": "what the model deliberately does differently from the source (listed in G1)",
+      "items": {
+        "type": "object",
+        "required": [
+          "ref",
+          "text",
+          "proposal"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "ref": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "proposal": {
+            "type": "string"
+          }
+        }
       }
     }
   },
   "$defs": {
-    "xy": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
-    "itemId": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*$"},
-    "src": {"type": ["string", "null"], "description": "id of an entry in sources, or null when there is no source (conf odhad/default)"},
-    "conf": {"enum": ["kota", "meranie", "pravidlo", "odhad", "default"]},
+    "xy": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "itemId": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+    },
+    "src": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "id of an entry in sources, or null when there is no source (conf odhad/default)"
+    },
+    "conf": {
+      "enum": [
+        "kota",
+        "meranie",
+        "pravidlo",
+        "odhad",
+        "default"
+      ]
+    },
     "value": {
       "type": "object",
-      "required": ["v", "src", "conf"],
+      "required": [
+        "v",
+        "src",
+        "conf"
+      ],
       "additionalProperties": false,
-      "properties": {"v": {"type": "number"}, "src": {"$ref": "#/$defs/src"}, "conf": {"$ref": "#/$defs/conf"}, "note": {"type": "string"}}
+      "properties": {
+        "v": {
+          "type": "number"
+        },
+        "src": {
+          "$ref": "#/$defs/src"
+        },
+        "conf": {
+          "$ref": "#/$defs/conf"
+        },
+        "note": {
+          "type": "string"
+        }
+      }
     },
     "rect": {
       "type": "object",
-      "required": ["v", "src", "conf"],
+      "required": [
+        "v",
+        "src",
+        "conf"
+      ],
       "additionalProperties": false,
       "description": "v = [s0, s1, v0, v1] in metres",
       "properties": {
-        "v": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
-        "src": {"$ref": "#/$defs/src"},
-        "conf": {"$ref": "#/$defs/conf"},
-        "note": {"type": "string"}
+        "v": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "src": {
+          "$ref": "#/$defs/src"
+        },
+        "conf": {
+          "$ref": "#/$defs/conf"
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "anyValue": {
+      "type": "object",
+      "required": [
+        "v",
+        "src",
+        "conf"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "v": {
+          "type": [
+            "number",
+            "integer",
+            "boolean",
+            "string"
+          ]
+        },
+        "src": {
+          "$ref": "#/$defs/src"
+        },
+        "conf": {
+          "$ref": "#/$defs/conf"
+        },
+        "note": {
+          "type": "string"
+        }
       }
     }
   }

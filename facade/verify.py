@@ -2,10 +2,15 @@
 
 (a) numbers  - element parameters read back (GetDetailsOfElements, GDL wall-hole size) -> s/v rects
 (b) geometry - 3D bodies (Get3DGeometryOfElements) projected orthogonally on the facade plane:
-               bbox of every opening element, outline and holes of the wall's outside face
-(c) image    - the projection drawn over the rectified photo of the source (overlay PNG)
+               bbox of every opening element, outline and holes of the wall's outside face (incl. the
+               L-shaped hole of a door whose sidelight stands on a wall parapet)
+(c) types    - I2: fill types read back through gdl_param_map.json (leaves, transom, sidelight, glazing
+               bars, frame surface, instance values, wall inset), the wall build-up (Composite), the FS
+               favourites and the FS_* properties of every element. A field the library part cannot carry is
+               an EXCEPTION (listed, never passed silently).
+(d) image    - the projection drawn over the rectified photo of the source (overlay PNG)
 
-Outputs to <out>/<spec.id>/: deviations.csv, overlay_<id>.png, model_<id>.png, report.json, report.md.
+Outputs to <out>/<spec.id>/: deviations.csv, types.csv, overlay_<id>.png, model_<id>.png, report.json, report.md.
 Read-only in Archicad (still refuses to run on another project than --project).
 
     python verify.py <spec.json> [--project ...] [--port 19723] [--out C:/FacadePilot/out]
@@ -24,15 +29,17 @@ from PIL import Image, ImageDraw, ImageFont
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from build import DEFAULT_OUT, DEFAULT_PROJECT, plan, state_path  # noqa: E402
+import systems as fs_systems  # noqa: E402
+from build import DEFAULT_OUT, DEFAULT_PROJECT, gdl_params, opening_units, plan, state_path  # noqa: E402
 from geom import frame_of  # noqa: E402
-from spec_validate import validate  # noqa: E402
+from spec_validate import TYPE_KEYS, load_gdl_map, validate  # noqa: E402
 from tapir_client import TapirClient, TapirError  # noqa: E402
 
 FACE_TOL = 0.005          # m - a face lies in the outside plane
 PROTRUSION = 0.10         # m - allowed overhang of sills / boards / handles beyond a wall face
 COLORS = {"wall": (230, 30, 30), "hole": (230, 30, 30), "window": (0, 200, 255), "door": (255, 0, 200),
-          "spec": (255, 230, 0), "text": (255, 255, 255), "shadow": (0, 0, 0)}
+          "spec": (255, 230, 0), "text": (255, 255, 255), "shadow": (0, 0, 0), "exc": (255, 140, 0)}
+HOLE_AREA = "hole area on outside face [m2]"
 
 
 def _bodies_svw(geometry: dict, fr) -> list[tuple[np.ndarray, list]]:
@@ -69,6 +76,10 @@ def _poly_area(ring: np.ndarray) -> float:
     return 0.5 * abs(float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))))
 
 
+def _fmt(v):
+    return round(v, 4) if isinstance(v, float) else v
+
+
 def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_root: Path = DEFAULT_OUT,
            source_root: Path | None = None, verbose: bool = True) -> dict:
     t0 = time.monotonic()
@@ -78,18 +89,25 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
     out_dir = out_root / spec["id"]
     state = json.loads(state_path(spec, out_root).read_text(encoding="utf-8"))
     ac = TapirClient(port=port, timeout=90)
-    ac.guard_project(project)
+    path = ac.guard_project(project)
     fr = frame_of(spec)
     tol = spec["tolerances"]["build"]
     zone = spec["zones"][0]
     zs0, zs1, zv0, zv1 = zone["rect"]["v"]
     stories = {s["index"]: s["level"] for s in ac.tapir("GetStories")["stories"]}
-    want = plan(spec, stories)
+    i2 = any(s.get("base_favorite") for s in spec["systems"].values())
+    sysinfo = fs_systems.resolve(ac, spec, path, out_root) if i2 else None
+    want = plan(spec, stories, sysinfo)
+    units = {u["o"]["id"]: u for u in opening_units(spec)}
+    gmap = load_gdl_map()
     reverse = spec["reference"]["outside"] == "right_of_ab"
     beg_s = zs1 if reverse else zs0
     known = state["elements"]
     problems: list[str] = []
     rows: list[dict] = []
+    trows: list[dict] = []
+    exceptions: list[dict] = list(sysinfo["exceptions"]) if sysinfo else []
+    exceptions += want.get("exceptions", [])
 
     def row(item, quantity, spec_v, model_v, method, tolerance=tol):
         d = None if model_v is None else model_v - spec_v
@@ -100,6 +118,13 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
                      "method": method, "ok": ok})
         if not ok:
             problems.append(f"{item} {quantity} ({method}): spec {spec_v:.3f}, model {model_v}")
+
+    def trow(item, what, spec_v, model_v, status=None, note=""):
+        if status is None:
+            status = "OK" if fs_systems.same(spec_v, model_v, tol) else "FAIL"
+        trows.append({"item": item, "what": what, "spec": _fmt(spec_v), "model": _fmt(model_v), "status": status, "note": note})
+        if status == "FAIL":
+            problems.append(f"{item} {what}: spec {spec_v!r}, model {model_v!r}")
 
     # ---- elements present?
     guids = {i: e["guid"] for i, e in known.items()}
@@ -112,17 +137,17 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
     wall_item = want["wall"]["item"]
     wall_guid = guids.get(wall_item)
 
-    # independent count: every window/door in the project hosted by our wall
+    # independent count: every window/door in the project hosted by our wall (one element per unit)
     hosted = {"window": 0, "door": 0}
     for typ in ("Window", "Door"):
         els = ac.tapir("GetElementsByType", {"elementType": typ})["elements"]
         if els:
             dd = ac.tapir("GetDetailsOfElements", {"elements": els, "fields": ["details"]})["detailsOfElements"]
             hosted[typ.lower()] = sum(1 for d in dd if d.get("details", {}).get("ownerElementId", {}).get("guid") == wall_guid)
-    n_spec = {"window": sum(o["kind"] == "window" for o in spec["openings"]), "door": sum(o["kind"] == "door" for o in spec["openings"])}
+    n_spec = {"window": sum(u["o"]["kind"] == "window" for u in units.values()), "door": sum(u["o"]["kind"] == "door" for u in units.values())}
     count_ok = hosted == n_spec
     if not count_ok:
-        problems.append(f"opening count in the wall {hosted} != spec {n_spec}")
+        problems.append(f"opening count in the wall {hosted} != spec {n_spec} (merged openings count once)")
 
     # ---- (a) parameters read back
     layer_index = state.get("layer", {}).get("index")
@@ -149,32 +174,36 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
         row(wall_item, "thickness", zone["thickness"]["v"], wd["begThickness"], "params")
         if floor != spec["reference"]["home_story"]["floorIndex"]:
             problems.append(f"wall home story {floor} != spec {spec['reference']['home_story']['floorIndex']}")
-    opening_guids = [guids[o["id"]] for o in spec["openings"] if o["id"] in details]
-    gdl = {}
-    if opening_guids:
-        res = ac.tapir("GetGDLParametersOfElements", {"elements": [{"elementId": {"guid": g}} for g in opening_guids]})
-        for g, ps in zip(opening_guids, res["gdlParametersOfElements"]):
-            gdl[g] = {p["name"]: p.get("value") for p in ps.get("parameters", [])}
-    for o in spec["openings"]:
-        d = details.get(o["id"])
+    unit_guids = [guids[i] for i in units if i in details]
+    gdl = gdl_params(ac, unit_guids)
+    for oid, u in units.items():
+        d = details.get(oid)
         if not d or not wd:
             continue
         od = d["details"]
         if od.get("ownerElementId", {}).get("guid") != wall_guid:
-            problems.append(f"{o['id']}: owner is not the wall {wall_guid}")
-        s0, s1, v0, v1 = o["rect"]["v"]
+            problems.append(f"{oid}: owner is not the wall {wall_guid}")
+        s0, s1, v0, v1 = u["rect"]
         sc = (beg_s - od["centerOffset"]) if reverse else (beg_s + od["centerOffset"])
-        p = gdl.get(guids[o["id"]], {})
+        p = gdl.get(guids[oid], {})
         hole_w = p.get("ac_wallhole_width", od["width"])
         hole_h = p.get("ac_wallhole_height", od["height"])
         bottom = foot_v + od["sillHeight"] - (p.get("ac_lower_oversize") or 0.0)
-        row(o["id"], "s0", s0, sc - hole_w / 2, "params")
-        row(o["id"], "s1", s1, sc + hole_w / 2, "params")
-        row(o["id"], "v0", v0, bottom, "params")
-        row(o["id"], "v1", v1, bottom + hole_h, "params")
+        row(oid, "s0", s0, sc - hole_w / 2, "params")
+        row(oid, "s1", s1, sc + hole_w / 2, "params")
+        row(oid, "v0", v0, bottom, "params")
+        row(oid, "v1", v1, bottom + hole_h, "params")
+        sl = u["values"].get("sidelight_w")
+        if sl and "gs_sidelight_width_right" in p:                 # sidelight edge / parapet from the parameters
+            edge_model = sc + hole_w / 2 - (p["gs_sidelight_width_right"] - p.get("gs_frame_width", 0.0))
+            label = u["members"][0]["id"] if u["members"] else oid
+            row(label, "s0 (sidelight edge)", s1 - sl["v"], edge_model, "params")
+            sill = u["values"].get("sidelight_sill")
+            if sill:
+                row(label, "v0 (sidelight parapet)", v0 + sill["v"], bottom + p.get("gs_sidelight_parapet_hgt_right", 0.0), "params")
 
     # ---- (b) 3D geometry projected on the facade plane
-    order = [wall_item] + [o["id"] for o in spec["openings"]]
+    order = [wall_item] + list(units)
     present = [i for i in order if i in details]
     geos = ac.tapir("Get3DGeometryOfElements", {"elements": [{"elementId": {"guid": guids[i]}} for i in present]}, timeout=120)["geometries3D"]
     proj = {i: _bodies_svw(g, fr) for i, g in zip(present, geos)}
@@ -190,26 +219,117 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
         wall_faces = _outside_faces(proj[wall_item], 0.0)
         if not wall_faces:
             problems.append("wall: no face in the outside plane w = 0 (wall on the wrong side?)")
-        hole_area = sum(_poly_area(h) for _, holes in wall_faces for h in holes)
-        spec_area = sum((o["rect"]["v"][1] - o["rect"]["v"][0]) * (o["rect"]["v"][3] - o["rect"]["v"][2]) for o in spec["openings"])
-        row(wall_item, "hole area on outside face [m2]", spec_area, hole_area, "3D", tolerance=0.05)
+        holes = [h for _, hs in wall_faces for h in hs]
+        hole_area = sum(_poly_area(h) for h in holes)
+        spec_area = 0.0
+        for u in units.values():
+            s0, s1, v0, v1 = u["rect"]
+            area = (s1 - s0) * (v1 - v0)
+            if "sidelight_w" in u["values"] and "sidelight_sill" in u["values"]:
+                area -= u["values"]["sidelight_w"]["v"] * u["values"]["sidelight_sill"]["v"]      # wall parapet under the sidelight
+            spec_area += area
+        row(wall_item, HOLE_AREA, spec_area, hole_area, "3D", tolerance=0.05)
+        # every unit has its own hole: bbox = unit rect; an L-hole has its step at the sidelight edge / parapet
+        for oid, u in units.items():
+            s0, s1, v0, v1 = u["rect"]
+            mine = [h for h in holes if h[:, 0].min() < s1 and h[:, 0].max() > s0 and h[:, 1].min() < v1 and h[:, 1].max() > v0]
+            if len(mine) != 1:
+                problems.append(f"{oid}: {len(mine)} holes in the wall face over the opening (expected 1)")
+                continue
+            h = mine[0]
+            row(oid, "hole s0", s0, float(h[:, 0].min()), "3D")
+            row(oid, "hole s1", s1, float(h[:, 0].max()), "3D")
+            row(oid, "hole v0", v0, float(h[:, 1].min()), "3D")
+            row(oid, "hole v1", v1, float(h[:, 1].max()), "3D")
+            if "sidelight_w" in u["values"] and u["values"].get("sidelight_sill", {}).get("v", 0) > 0:
+                step = np.array([s1 - u["values"]["sidelight_w"]["v"], v0 + u["values"]["sidelight_sill"]["v"]])
+                dist = float(np.min(np.linalg.norm(h - step, axis=1)))
+                label = u["members"][0]["id"] if u["members"] else oid
+                row(label, "hole step (sidelight parapet corner)", 0.0, dist, "3D")
     w_ranges = {}
-    for o in spec["openings"]:
-        if o["id"] not in proj:
+    for oid, u in units.items():
+        if oid not in proj:
             continue
-        bb = _bbox(proj[o["id"]])
+        bb = _bbox(proj[oid])
         if bb is None:
-            problems.append(f"{o['id']}: no 3D body")
+            problems.append(f"{oid}: no 3D body")
             continue
-        s0, s1, v0, v1 = o["rect"]["v"]
-        row(o["id"], "s0", s0, bb[0], "3D")
-        row(o["id"], "s1", s1, bb[1], "3D")
-        row(o["id"], "v0", v0, bb[2], "3D")
-        row(o["id"], "v1", v1, bb[3], "3D")
-        w_ranges[o["id"]] = [round(bb[4], 3), round(bb[5], 3)]
+        s0, s1, v0, v1 = u["rect"]
+        row(oid, "s0", s0, bb[0], "3D")
+        row(oid, "s1", s1, bb[1], "3D")
+        row(oid, "v0", v0, bb[2], "3D")
+        row(oid, "v1", v1, bb[3], "3D")
+        w_ranges[oid] = [round(bb[4], 3), round(bb[5], 3)]
         # sills, boards and handles may stand a little out of the wall faces; a whole unit outside is an error
         if bb[5] > PROTRUSION or bb[4] < -zone["thickness"]["v"] - PROTRUSION:
-            problems.append(f"{o['id']}: 3D body sticks out of the wall by more than {PROTRUSION} m (w {bb[4]:.3f}..{bb[5]:.3f})")
+            problems.append(f"{oid}: 3D body sticks out of the wall by more than {PROTRUSION} m (w {bb[4]:.3f}..{bb[5]:.3f})")
+
+    # ---- (c) types, build-up, favourites, properties (I2)
+    if sysinfo:
+        attrs = sysinfo["attrs"]
+        exc_keys = {(e.get("item"), e["field"]) for e in exceptions} | {(e["system"], e["field"]) for e in exceptions if "item" not in e}
+        for oid, u in units.items():
+            g = guids.get(oid)
+            if g not in gdl:
+                continue
+            p, od = gdl[g], details[oid]["details"]
+            o = u["o"]
+            osys = spec["systems"][o["system"]]
+            lp = gmap["libparts"].get(osys.get("libpart", ""), None)
+            if lp is None:
+                continue
+            trow(oid, "library part", osys["libpart"], od["libPart"]["name"])
+            for f in TYPE_KEYS:
+                if f not in osys:
+                    continue
+                got = fs_systems.read_field(lp["fields"][f]["read"], p, attrs)
+                exc = (o["system"], f) in exc_keys and not fs_systems.same(got, osys[f]["v"])
+                trow(oid, f, osys[f]["v"], got, "EXC" if exc else None, lp["fields"][f].get("unsupported", "")[:90] if exc else "")
+            for k, val in u["values"].items():
+                rule = lp["instance"].get(k, {})
+                if "unsupported" in rule:
+                    trow(oid, k, val["v"], None, "EXC", rule["unsupported"][:90])
+                    continue
+                trow(oid, k, val["v"], fs_systems.read_field(rule["read"], p, attrs))
+            if "reveal" in o:
+                trow(oid, "wall inset (reveal, AC_wido_sill)", o["reveal"]["v"], p.get("AC_wido_sill"))
+                trow(oid, "wall inset from the outside (refSide)", True, od.get("refSide"))
+            if osys.get("favorite"):
+                trow(oid, "placed from favourite (hash in state)", sysinfo["favorites"][o["system"]]["hash"],
+                     next(it["fav_hash"] for it in want["openings"] if it["item"] == oid))
+        # wall build-up
+        wsys = spec["systems"][zone["system"]]
+        if "composite" in wsys and wd:
+            trow(wall_item, "structure", "Composite", wd.get("structureType"))
+            trow(wall_item, "composite", wsys["composite"]["name"],
+                 next((n for n, a in attrs.composite.items() if a["attributeId"]["guid"] == (wd.get("compositeId") or {}).get("guid")), None))
+            diffs = fs_systems.composite_differences(ac, wsys["composite"], attrs)
+            trow(wall_item, "composite skins (material, thickness, order outside -> inside)",
+                 " | ".join(f"{sk['material']} {sk['thickness']['v']}" for sk in wsys["composite"]["skins"]),
+                 "as spec" if not diffs else "; ".join(diffs), "OK" if not diffs else "FAIL")
+            trow(wall_item, "surfaces from the skins (no override)", False,
+                 bool(wd.get("referenceMaterial", {}).get("overridden") or wd.get("oppositeMaterial", {}).get("overridden")))
+        # FS favourites exist
+        for kind, names in (("Wall", [s["favorite"] for s in spec["systems"].values() if s.get("base_favorite") and s["type"] == "wall"]),
+                            ("Window", [s["favorite"] for s in spec["systems"].values() if s.get("base_favorite") and s["type"] == "window"]),
+                            ("Door", [s["favorite"] for s in spec["systems"].values() if s.get("base_favorite") and s["type"] == "door"])):
+            if names:
+                have = set(ac.tapir("GetFavoritesByType", {"elementType": kind}).get("favorites", []))
+                for n in names:
+                    trow("favorites", f"{kind} favourite '{n}' exists", True, n in have)
+        # properties FS_* on every element
+        props = sysinfo["props"]
+        names = list(fs_systems.FS_PROPS)
+        if len(props) != len(names):
+            problems.append(f"FS properties missing: {sorted(set(names) - set(props))}")
+        else:
+            items = [want["wall"]] + want["openings"]
+            pv = ac.tapir("GetPropertyValuesOfElements", {"elements": [{"elementId": {"guid": guids[it["item"]]}} for it in items],
+                                                          "properties": [{"propertyId": {"guid": props[n]}} for n in names]})["propertyValuesForElements"]
+            for it, vals in zip(items, pv):
+                for n, v in zip(names, vals.get("propertyValues", [])):
+                    got = v.get("propertyValue", {}).get("value")
+                    trow(it["item"], n, it["props"][n], got)
 
     # ---- outputs
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -217,36 +337,64 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
         wr = csv.DictWriter(fh, fieldnames=list(rows[0].keys()) if rows else ["item"])
         wr.writeheader()
         wr.writerows(rows)
+    if trows:
+        with (out_dir / "types.csv").open("w", newline="", encoding="utf-8") as fh:
+            wr = csv.DictWriter(fh, fieldnames=list(trows[0].keys()))
+            wr.writeheader()
+            wr.writerows(trows)
     src = next(s for s in spec["sources"] if s.get("rect"))
     root = Path(source_root or spec.get("generated", {}).get("root", "."))
-    overlay_png, model_png = draw(spec, src, root / src["rect"]["image"], proj, wall_faces, rows, out_dir)
+    overlay_png, model_png = draw(spec, src, root / src["rect"]["image"], proj, wall_faces, rows, trows, units, out_dir)
 
-    max_delta = {m: max([abs(r["delta_cm"]) for r in rows if r["method"] == m and r["delta_cm"] is not None
-                         and r["quantity"] != "hole area on outside face [m2]"] or [0.0]) for m in ("params", "3D")}
+    geo_rows = [r for r in rows if r["delta_cm"] is not None and r["quantity"] != HOLE_AREA]
+    max_delta = {m: max([abs(r["delta_cm"]) for r in geo_rows if r["method"] == m] or [0.0]) for m in ("params", "3D")}
     result = {
         "spec": spec["id"], "at": time.strftime("%Y-%m-%dT%H:%M:%S"), "seconds": round(time.monotonic() - t0, 2),
         "count": {"spec": n_spec, "model_in_wall": hosted, "ok": count_ok},
         "max_delta_cm": max_delta, "tolerance_cm": tol * 100,
         "rows_failed": sum(not r["ok"] for r in rows), "rows": len(rows),
-        "problems": problems, "spec_warnings": warnings,
+        "types": {"rows": len(trows), "ok": sum(r["status"] == "OK" for r in trows),
+                  "fail": sum(r["status"] == "FAIL" for r in trows), "exc": sum(r["status"] == "EXC" for r in trows)},
+        "problems": problems, "exceptions": exceptions, "spec_warnings": warnings,
         "opening_w_range_m": w_ranges,
         "overlay_png": str(overlay_png), "model_png": str(model_png), "deviations_csv": str(out_dir / "deviations.csv"),
+        "types_csv": str(out_dir / "types.csv") if trows else None,
         "pass": count_ok and not problems,
     }
     (out_dir / "report.json").write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
-    (out_dir / "report.md").write_text(report_md(spec, result, rows), encoding="utf-8")
+    (out_dir / "report.md").write_text(report_md(spec, result, rows, trows), encoding="utf-8")
     if verbose:
         print(f"verify {spec['id']}: openings model {hosted} / spec {n_spec}; max delta params {max_delta['params']:.2f} cm, "
               f"3D {max_delta['3D']:.2f} cm (tol {tol * 100:.1f} cm); {result['rows_failed']}/{len(rows)} rows out of tolerance; "
-              f"{'PASS' if result['pass'] else 'FAIL'} ({result['seconds']} s)")
+              f"types {result['types']}; {'PASS' if result['pass'] else 'FAIL'} ({result['seconds']} s)")
         for p in problems:
             print("  PROBLEM:", p)
+        for e in exceptions:
+            print(f"  EXCEPTION: {e.get('item', e['system'])}.{e['field']}: spec {e['spec']!r} - not realisable ({e['reason'][:80]})")
         print("  overlay:", overlay_png)
     return result
 
 
 # ---- drawing ----------------------------------------------------------------------------------
-def draw(spec, src, image_path: Path, proj, wall_faces, rows, out_dir: Path):
+def _type_label(oid: str, trows: list[dict]) -> str:
+    t = {r["what"]: r for r in trows if r["item"] == oid}
+    if not t:
+        return ""
+    parts = []
+    if "leaves" in t:
+        parts.append(f"{t['leaves']['model']}kr")
+    if "transom" in t:
+        parts.append("NS" if t["transom"]["model"] else ("NS chýba!" if t["transom"]["status"] == "EXC" else "bez NS"))
+    if t.get("sidelight", {}).get("model") not in (None, "none"):
+        parts.append("BS")
+    if t.get("sash_bars", {}).get("model"):
+        parts.append("priečka")
+    if "wall inset (reveal, AC_wido_sill)" in t:
+        parts.append(f"osadenie {t['wall inset (reveal, AC_wido_sill)']['model']:.2f}")
+    return " ".join(parts)
+
+
+def draw(spec, src, image_path: Path, proj, wall_faces, rows, trows, units, out_dir: Path):
     r = src["rect"]
     S, u0, v1 = r["S"], r["u0"], r["v1"]
     px = lambda s, v: ((s - u0) * S, (v1 - v) * S)
@@ -258,16 +406,14 @@ def draw(spec, src, image_path: Path, proj, wall_faces, rows, out_dir: Path):
     except OSError:
         font = small = ImageFont.load_default()
 
-    kinds = {o["id"]: o["kind"] for o in spec["openings"]}
+    kinds = {oid: u["o"]["kind"] for oid, u in units.items()}
     worst = {}
     for rr in rows:
-        if rr["method"] == "3D" and rr["delta_cm"] is not None and rr["item"] in kinds:
+        if rr["method"] == "3D" and rr["delta_cm"] is not None and rr["quantity"] != HOLE_AREA:
             worst[rr["item"]] = max(worst.get(rr["item"], 0.0), abs(rr["delta_cm"]))
 
-    def paint(canvas: Image.Image, dim_photo: bool) -> Image.Image:
+    def paint(canvas: Image.Image) -> Image.Image:
         img = canvas.copy()
-        if dim_photo:
-            img = Image.blend(img, Image.new("RGB", size, (255, 255, 255)), 0.35)
         layer = Image.new("RGBA", size, (0, 0, 0, 0))
         dr = ImageDraw.Draw(layer)
         # opening bodies: every face edge, orthographic (depth ignored), thin
@@ -294,24 +440,33 @@ def draw(spec, src, image_path: Path, proj, wall_faces, rows, out_dir: Path):
                     t0, t1 = k / n, min(1.0, (k + 1) / n)
                     dr.line([(xa + (xb - xa) * t0, ya + (yb - ya) * t0), (xa + (xb - xa) * t1, ya + (yb - ya) * t1)],
                             fill=COLORS["spec"] + (255,), width=2)
-            x, y = px(s0, v1_)
-            label = f"{o['id']} {o['kind'][0].upper()} Δ{worst.get(o['id'], float('nan')):.1f} cm"
-            dr.text((x + 3, y - 19), label, fill=COLORS["shadow"] + (255,), font=small, stroke_width=3, stroke_fill=(0, 0, 0, 255))
-            dr.text((x + 3, y - 19), label, fill=COLORS["text"] + (255,), font=small)
+        for oid, u in units.items():
+            s0, _, _, vv1 = u["rect"]
+            x, y = px(s0, vv1)
+            ids = "+".join([oid] + [m["id"] for m in u["members"]])
+            wv = max([worst.get(i, float("nan")) for i in [oid] + [m["id"] for m in u["members"]]] or [float("nan")])
+            label = f"{ids} {u['o']['kind'][0].upper()} Δ{wv:.1f} cm"
+            typ = _type_label(oid, trows)
+            exc = "chýba" in typ
+            for text, dy, col in ((label, -36 if typ else -19, COLORS["text"]), (typ, -19, COLORS["exc"] if exc else COLORS["spec"])):
+                if text:
+                    dr.text((x + 3, y + dy), text, fill=(0, 0, 0, 255), font=small, stroke_width=3, stroke_fill=(0, 0, 0, 255))
+                    dr.text((x + 3, y + dy), text, fill=col + (255,), font=small)
         # legend
         lines = [(f"{spec['id']}: model (3D projekcia) × rektifikovaná fotka", COLORS["text"]),
                  ("červená: líce steny + otvory v stene (3D)", COLORS["wall"]),
                  ("modrá: okná (3D) · fialová: dvere (3D)", COLORS["window"]),
-                 ("žltá prerušovaná: spec (z fotky)", COLORS["spec"])]
+                 ("žltá prerušovaná: spec (z fotky); žltý text: typ čítaný späť", COLORS["spec"]),
+                 ("kr krídla · NS nadsvetlík · BS bočný svetlík · osadenie m", COLORS["text"])]
         y = size[1] - 22 * len(lines) - 8
-        dr.rectangle([0, y - 6, 470, size[1]], fill=(0, 0, 0, 170))
+        dr.rectangle([0, y - 6, 560, size[1]], fill=(0, 0, 0, 170))
         for text, col in lines:
             dr.text((8, y), text, fill=col + (255,), font=font)
             y += 22
         return Image.alpha_composite(img.convert("RGBA"), layer).convert("RGB")
 
-    overlay = paint(base, dim_photo=False)
-    model = paint(Image.new("RGB", size, (70, 70, 70)), dim_photo=False)
+    overlay = paint(base)
+    model = paint(Image.new("RGB", size, (70, 70, 70)))
     o_path = out_dir / f"overlay_{spec['id']}.png"
     m_path = out_dir / f"model_{spec['id']}.png"
     overlay.save(o_path)
@@ -319,20 +474,32 @@ def draw(spec, src, image_path: Path, proj, wall_faces, rows, out_dir: Path):
     return o_path, m_path
 
 
-def report_md(spec, result, rows) -> str:
+def report_md(spec, result, rows, trows) -> str:
+    t = result["types"]
     lines = [f"# Kontrola fasády {spec['id']} (verify, {result['at']})", "",
-             f"Výsledok: **{'PASS' if result['pass'] else 'FAIL'}** – tolerancia build {result['tolerance_cm']:.1f} cm", "",
+             f"Výsledok: **{'PASS' if result['pass'] else 'FAIL'}** – tolerancia build {result['tolerance_cm']:.1f} cm"
+             + (f"; **{len(result['exceptions'])} výnimky** (API/knižnica nedovolí, pozri nižšie)" if result["exceptions"] else ""), "",
              "| Kontrola | Spec | Model | OK |", "|---|---|---|---|",
-             f"| počet otvorov v stene | {result['count']['spec']} | {result['count']['model_in_wall']} | {'áno' if result['count']['ok'] else 'NIE'} |",
+             f"| počet výplní v stene (zlúčené otvory = 1 prvok) | {result['count']['spec']} | {result['count']['model_in_wall']} | {'áno' if result['count']['ok'] else 'NIE'} |",
              f"| max. Δ parametre (čítané späť) | – | {result['max_delta_cm']['params']:.2f} cm | {'áno' if result['max_delta_cm']['params'] <= result['tolerance_cm'] else 'NIE'} |",
-             f"| max. Δ 3D projekcia | – | {result['max_delta_cm']['3D']:.2f} cm | {'áno' if result['max_delta_cm']['3D'] <= result['tolerance_cm'] else 'NIE'} |",
+             f"| max. Δ 3D projekcia (prvky + otvory v stene) | – | {result['max_delta_cm']['3D']:.2f} cm | {'áno' if result['max_delta_cm']['3D'] <= result['tolerance_cm'] else 'NIE'} |",
+             f"| typy, skladba, favority, vlastnosti (riadky) | {t['rows']} | OK {t['ok']} / FAIL {t['fail']} / výnimka {t['exc']} | {'áno' if not t['fail'] else 'NIE'} |",
              "", f"Overlay: `{result['overlay_png']}`  ", f"Model bez fotky: `{result['model_png']}`  ",
-             f"Odchýlky po prvkoch: `{result['deviations_csv']}`", ""]
+             f"Odchýlky po prvkoch: `{result['deviations_csv']}`" + (f"  \nTypy: `{result['types_csv']}`" if result.get("types_csv") else ""), ""]
     if result["problems"]:
         lines += ["## Problémy", ""] + [f"- {p}" for p in result["problems"]] + [""]
+    if result["exceptions"]:
+        lines += ["## Výnimky (spec chce, model nevie – vykázané, nie zamlčané)", ""]
+        lines += [f"- `{e.get('item', e['system'])}.{e['field']}` = {json.dumps(e['spec'], ensure_ascii=False)}: {e['reason']}" for e in result["exceptions"]] + [""]
     if result["spec_warnings"]:
         lines += ["## Upozornenia zo spec", ""] + [f"- {w}" for w in result["spec_warnings"]] + [""]
-    lines += ["## Predpoklady (pod úrovňou `meranie`, na bránu G1)", "", "| Hodnota | Stav | Istota | Prečo |", "|---|---|---|---|"]
+    if trows:
+        lines += ["## Typy výplní, skladba, favority, vlastnosti (čítané späť)", "", "| Prvok | Čo | Spec | Model | Stav | Pozn. |", "|---|---|---|---|---|---|"]
+        for r in trows:
+            lines.append(f"| {r['item']} | {r['what']} | {r['spec']} | {r['model']} | {r['status']} | {r['note']} |")
+        lines.append("")
+    lines += ["## Predpoklady (pod úrovňou `meranie`, na bránu G1)", "", f"Tabuľka s návrhmi: `G1_predpoklady.md`", "",
+              "| Hodnota | Stav | Istota | Prečo |", "|---|---|---|---|"]
     for a in spec.get("assumptions", []):
         lines.append(f"| `{a['ref']}` = {json.dumps(a['value'], ensure_ascii=False)} | {a['status']} | {a.get('conf', '')} | {a['why']} |")
     lines += ["", "## Odchýlky", "", "| Prvok | Veličina | Spec m | Model m | Δ cm | Metóda | OK |", "|---|---|---|---|---|---|---|"]

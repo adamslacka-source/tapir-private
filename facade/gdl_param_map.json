@@ -1,0 +1,97 @@
+{
+ "schema": "gdl-param-map/1",
+ "description": "facade-spec/1 fields -> GDL parameters of concrete Archicad library parts (ADR-001 I2). Every entry was found with GetGDLParametersOfElements on a placed sample and checked live (write -> read back, 3D geometry). Nothing here is guessed; parts not listed are refused by systems.py.",
+ "verified": {"date": "2026-10-19", "archicad": "29", "addon": "Tapir 1.7.2 private", "project": "C:/FacadePilot/Fasada_pilot_A.pln",
+              "library": "AC29 CZE template library, Door 27 / Window 27 family"},
+ "dsl": {
+  "write": "param -> '$v' (spec value), '$surface' (surface attribute index of the spec value, a surface name), '$v+param:<p>' (value plus the current value of GDL parameter p), or an object mapping str(spec value) -> param value",
+  "read": "{'param': p} | {'param': p, 'map': {str(param value): spec value}} | {'param': p, 'minus_param': q} | {'param': p, 'gt': x} (true when > x) | {'count_nonempty': [p, ...]} | {'param': p, 'surface': true} (index -> surface name)",
+  "fixed": "value the library part has by itself (no write); the read rule still checks it",
+  "unsupported": "the part cannot carry this field; a spec value different from 'default' is reported as an exception, never silently passed"
+ },
+ "common": {
+  "door": {
+   "system_params": {"gs_nominal_size": 1, "gs_reveal_type_int": 2, "gs_bAutoTurnIn": false},
+   "system_params_note": "gs_nominal_size 1 = width/height are the wall hole (the masonry opening seen on the facade); gs_reveal_type_int 2 = 'No Reveal' (the favourites default 'No Reveal - Edge' laps the wall 4-6 cm over the frame, so the hole on the facade would be smaller than the photo); gs_bAutoTurnIn false = the outside plaster skin of a composite wall is not turned into the reveal (otherwise the hole on the facade is 2 cm smaller on three sides, measured 2026-10-19) - simplification: the photo edge is taken as the masonry opening",
+   "reveal": {"element_fields": {"refSide": true}, "depth_field": "revealDepthOffset", "read": {"param": "AC_wido_sill"},
+              "core_relative": true,
+              "note": "refSide true = wall inset measured from the reference (outside) side of the wall: frame outer face at w = -reveal (calibrated 0 / 0.10 / 0.25 m on a basic wall, 2026-10-19). refSide false measures from the inside face - the I1 doors sat at the inside face. On a COMPOSITE wall the favourites measure from the core (revealDepthLocation = Core, not settable through Tapir): the sent offset is reduced by the skins outside the core; AC_wido_sill reads the inset from the wall face."}
+  },
+  "window": {
+   "system_params": {"gs_reveal_type_int": 2, "gs_bAutoTurnIn": false},
+   "system_params_note": "as for doors: no reveal edge, and the outside plaster skin of a composite wall is NOT turned into the reveal (gs_bAutoTurnIn false) - with it the hole on the facade is 2 cm smaller than the masonry opening on three sides (measured 2026-10-19)",
+   "reveal": {"element_fields": {"refSide": true}, "depth_field": "revealDepthOffset", "read": {"param": "AC_wido_sill"}, "core_relative": true}
+  }
+ },
+ "libparts": {
+  "Double Window 27": {
+   "kind": "window",
+   "base_favorites": ["Plastové okno - dvoukřídlé 01", "Dřevěné okno - dvoukřídlé 01", "Hliníkové okno - dvoukřídlé 01"],
+   "fields": {
+    "leaves": {"fixed": 2, "read": {"count_nonempty": ["gs_optype_05", "gs_optype_01"]}},
+    "transom": {"write": {"gs_UTrans": "$v"}, "read": {"param": "gs_UTrans"}},
+    "sidelight": {"fixed": "none", "read": {"const": "none"}},
+    "sash_bars": {"write": {"iMullionStyle_05": {"0": 1, "1": 6}, "iMullionStyle_01": {"0": 1, "1": 6}},
+                  "read": {"param": "iMullionStyle_05", "map": {"1": 0, "6": 1}},
+                  "note": "horizontal glazing bars per sash: 0 = 'No Grid' (1), 1 = 'Divided' (6) with one bar"},
+    "frame_surface": {"write": {"gs_frame_mat": "$surface", "gs_sash_mat": "$surface"}, "read": {"param": "gs_frame_mat", "surface": true}}
+   },
+   "instance": {
+    "bar_h": {"write": {"gs_horiz_div_height_05": "$v", "gs_horiz_div_height_01": "$v"}, "read": {"param": "gs_horiz_div_height_05"},
+              "note": "centre of the bar = wall-hole bottom + value (calibrated 0.30 -> bar 5.10..5.18 over hole bottom 4.84)"}
+   }
+  },
+  "Door with Sidelight on Side 1 and Transom 27": {
+   "kind": "door",
+   "base_favorites": ["Hliníkové dveře - vchodové 03", "Dřevěné dveře - vchodové 03", "Plastové dveře - vchodové 03"],
+   "fields": {
+    "leaves": {"fixed": 1, "read": {"param": "ifc_optypestr", "map": {"Swing Fixed": 1, "Single Door Single Swing": 1, "Double Door Single Swing": 2}}},
+    "transom": {"fixed": true, "read": {"param": "ifc_TransomThickness", "gt": 0}},
+    "sidelight": {"fixed": "right", "read": {"param": "gs_sidelight_width_right", "gt": 0, "map": {"true": "right", "false": "none"}},
+                  "note": "Side 1 = the *_right parameters = right of the door seen from outside (wall b->a with reference line Outside, refSide true; checked on the L-shaped wall hole)"},
+    "frame_surface": {"write": {"gs_frame_mat": "$surface", "gs_leaf_mat": "$surface", "gs_transom_mat": "$surface", "gs_sidelight1_mat": "$surface"},
+                      "read": {"param": "gs_frame_mat", "surface": true}}
+   },
+   "instance": {
+    "transom_h": {"write": {"gs_transom_height": "$v"}, "read": {"param": "gs_transom_height"},
+                  "note": "transom zone height from the top of the wall hole (ifc_TransomOffset = hole height - value)"},
+    "sidelight_w": {"write": {"gs_sidelight_width_right": "$v+param:gs_frame_width"}, "read": {"param": "gs_sidelight_width_right", "minus_param": "gs_frame_width"},
+                    "note": "visible sidelight = parameter - gs_frame_width (calibrated: 0.84 -> step at 6.43, 0.94 -> step at 6.33 for s1 = 7.17)"},
+    "sidelight_sill": {"write": {"gs_sidelight_parapet_hgt_right": "$v"}, "read": {"param": "gs_sidelight_parapet_hgt_right"},
+                       "note": "the wall stays below the sidelight: the hole becomes L-shaped"},
+    "transom_bars": {"write": {"iMullionStyle_02": {"0": 1, "1": 14}}, "read": {"param": "iMullionStyle_02", "map": {"1": 0, "14": 1}},
+                     "note": "horizontal division of the main transom: 0 = 'No Grid' (1), 1 = 'Divided Frame' (14); the transom accepts 1, 2, 3, 14, 15, 16, 4 - 'Divided' (6) is reset by the parameter script"},
+    "transom_bar_h": {"write": {"gs_horiz_div_height_02": "$v"}, "read": {"param": "gs_horiz_div_height_02"},
+                      "note": "height of the division inside the transom above the leaf; position NEOVERENÉ by geometry, checked on the overlay only"}
+   }
+  },
+  "Door 27": {
+   "kind": "door",
+   "base_favorites": ["Hliníkové dveře - vchodové 01", "Dřevěné dveře - vchodové 01", "Plastové dveře - vchodové 01"],
+   "fields": {
+    "leaves": {"fixed": 1, "read": {"param": "ifc_optypestr", "map": {"Single Door Single Swing": 1}}},
+    "transom": {"fixed": false, "read": {"param": "ifc_TransomThickness", "gt": 0},
+                "note": "gs_door_transom exists but the parameter script of the single-leaf part ignores it"},
+    "sidelight": {"fixed": "none", "read": {"const": "none"}},
+    "frame_surface": {"write": {"gs_frame_mat": "$surface", "gs_leaf_mat": "$surface"}, "read": {"param": "gs_frame_mat", "surface": true}}
+   },
+   "instance": {}
+  },
+  "Garage Double Door 27": {
+   "kind": "door",
+   "base_favorites": ["Dvoukřídlá garážová vrata"],
+   "fields": {
+    "leaves": {"fixed": 2, "read": {"param": "ifc_optypestr", "map": {"Double Door Single Swing": 2, "Double Door Double Swing": 2}}},
+    "transom": {"unsupported": "the parameter script resets gs_transom_height to 0 (tested 2026-10-19); 'Double Door with Transom 27' would carry it, but it exists only through CreateDoors.libraryPartName, whose elements cannot be read or written by Get/SetGDLParametersOfElements (APIERR_GENERAL from ACAPI_LibraryPart_OpenParameters) - Tapir gap T7",
+                "read": {"param": "ifc_TransomThickness", "gt": 0}},
+    "sidelight": {"fixed": "none", "read": {"const": "none"}},
+    "leaf_panel": {"write": {"iDoorPanelType": "$v"}, "read": {"param": "iDoorPanelType"},
+                   "note": "panel style of the leaves; allowed 1, 2, 3, 4, 5, 10, 11, 12, 14, 31, 0 (rendered 2026-10-19: 1 horizontal slats, 10-14 raised panels, 14 = big top panel + two narrow middle panels + bottom panel)"},
+    "frame_surface": {"write": {"gs_leaf_mat": "$surface"}, "read": {"param": "gs_leaf_mat", "surface": true}}
+   },
+   "instance": {
+    "transom_h": {"unsupported": "no transom on this part (see fields.transom)"}
+   }
+  }
+ }
+}

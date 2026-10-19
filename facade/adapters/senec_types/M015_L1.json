@@ -1,0 +1,316 @@
+{
+ "about": "Fill types and wall build-up of M015_L1, read by hand from the rectified photo (ADR-001 I2). Values carry source and certainty like the spec. Read from 3x crops of kontrola/fasada_M015_J_rektif.jpg with a 0.1 m grid (120 px/m), 2026-10-19; a clearly visible edge is 'meranie' (+-5 cm), anything hidden or inferred is 'odhad'.",
+ "source": {
+  "id": "S6",
+  "type": "photo",
+  "file": "kontrola/fasada_M015_J_rektif.jpg",
+  "note": "fill types read by hand from the rectified photo S1 (crops 3x with metric grid), 2026-10-19; edges +-5 cm"
+ },
+ "zones": {
+  "Z1": {
+   "system": "wall.omietka_tehla_450"
+  }
+ },
+ "systems": {
+  "wall.omietka_tehla_450": {
+   "type": "wall",
+   "structure": "Composite",
+   "reference_line": "Outside",
+   "base_favorite": "Cihla plná - nosná, 300",
+   "favorite": "FS wall.omietka_tehla_450",
+   "composite": {
+    "name": "FS wall.omietka_tehla_450",
+    "skins": [
+     {
+      "type": "Finish",
+      "material": "Omítka - venkovní",
+      "thickness": {
+       "v": 0.02,
+       "src": "S1",
+       "conf": "odhad",
+       "note": "render visible on the upper floor (green); thickness typological"
+      }
+     },
+     {
+      "type": "Core",
+      "material": "Cihly plné - nosné",
+      "thickness": {
+       "v": 0.41,
+       "src": null,
+       "conf": "odhad",
+       "note": "historic solid brick front wall; not visible, total 0.45 m is ODHAD"
+      }
+     },
+     {
+      "type": "Finish",
+      "material": "Omítka - vnitřní",
+      "thickness": {
+       "v": 0.02,
+       "src": null,
+       "conf": "default",
+       "note": "inside plaster, typological"
+      }
+     }
+    ]
+   },
+   "conf": "odhad",
+   "src": "S1",
+   "note": "render + solid brick; the ground floor has a stone cladding (photo) that is NOT modelled - one wall zone per facade in I1/I2"
+  },
+  "win.2kr": {
+   "type": "window",
+   "libpart": "Double Window 27",
+   "base_favorite": "Plastové okno - dvoukřídlé 01",
+   "favorite": "FS win.2kr",
+   "leaves": {
+    "v": 2,
+    "src": "S6",
+    "conf": "meranie",
+    "note": "two side-hung sashes, central mullion"
+   },
+   "transom": {
+    "v": false,
+    "src": "S6",
+    "conf": "odhad",
+    "note": "upper third hidden by an outside roller shutter (not modelled)"
+   },
+   "sidelight": {
+    "v": "none",
+    "src": "S6",
+    "conf": "meranie"
+   },
+   "sash_bars": {
+    "v": 1,
+    "src": "S6",
+    "conf": "meranie",
+    "note": "one horizontal glazing bar in each sash"
+   },
+   "frame_surface": {
+    "v": "Barva 02 - titanově bílá",
+    "src": "S6",
+    "conf": "meranie",
+    "note": "white frames"
+   },
+   "conf": "odhad",
+   "src": "S6",
+   "note": "white frames + roller shutters -> PVC window favourite; material NEOVERENÉ"
+  },
+  "door.shop_sl": {
+   "type": "door",
+   "libpart": "Door with Sidelight on Side 1 and Transom 27",
+   "base_favorite": "Hliníkové dveře - vchodové 03",
+   "favorite": "FS door.shop_sl",
+   "nominal": "wallhole",
+   "leaves": {
+    "v": 1,
+    "src": "S6",
+    "conf": "meranie"
+   },
+   "transom": {
+    "v": true,
+    "src": "S6",
+    "conf": "meranie",
+    "note": "glazed transom over door and shop window"
+   },
+   "sidelight": {
+    "v": "right",
+    "src": "S6",
+    "conf": "meranie",
+    "note": "shop window right of the door, same frame"
+   },
+   "frame_surface": {
+    "v": "Barva 17 - kobaltová modrá",
+    "src": "S6",
+    "conf": "odhad",
+    "note": "O1 deep blue, O3/O4 turquoise - nearest surface of the template; a turquoise surface does not exist (G1)"
+   },
+   "conf": "odhad",
+   "src": "S6",
+   "note": "shop front: one leaf + fixed shop window + transom in one painted frame; aluminium NEOVERENÉ"
+  },
+  "door.gate": {
+   "type": "door",
+   "libpart": "Garage Double Door 27",
+   "base_favorite": "Dvoukřídlá garážová vrata",
+   "favorite": "FS door.gate",
+   "nominal": "wallhole",
+   "leaves": {
+    "v": 2,
+    "src": "S6",
+    "conf": "meranie",
+    "note": "two equal leaves with panels and glazed grilles"
+   },
+   "transom": {
+    "v": true,
+    "src": "S6",
+    "conf": "meranie",
+    "note": "ornamental oval fanlight; a rectangular transom with one bar would do (simplification) - NOT realisable now, see gdl_param_map"
+   },
+   "sidelight": {
+    "v": "none",
+    "src": "S6",
+    "conf": "meranie"
+   },
+   "leaf_panel": {
+    "v": 14,
+    "src": "S6",
+    "conf": "odhad",
+    "note": "panel style 14: big top panel (stands in for the fanlight visually), two narrow middle panels (glazed grilles), bottom panel - closest of the 10 styles of the part"
+   },
+   "frame_surface": {
+    "v": "Barva 02 - titanově bílá",
+    "src": "S6",
+    "conf": "meranie",
+    "note": "white painted"
+   },
+   "conf": "pravidlo",
+   "src": "S6",
+   "note": "the only two-leaf swing door favourite of the template is the garage double door; a gate with transom needs Tapir gap T7"
+  }
+ },
+ "openings": {
+  "O1": {
+   "system": "door.shop_sl",
+   "transom_h": {
+    "v": 0.55,
+    "src": "S6",
+    "conf": "meranie",
+    "note": "transom bar at v = 2.21"
+   },
+   "sidelight_w": {
+    "v": 0.6,
+    "src": "S6",
+    "conf": "meranie",
+    "note": "mullion at s = 1.87"
+   },
+   "sidelight_sill": {
+    "v": 0.63,
+    "src": "S6",
+    "conf": "odhad",
+    "note": "display bottom at v = 0.78; the parapet is partly hidden by flowers"
+   },
+   "transom_bars": {
+    "v": 0,
+    "src": "S6",
+    "conf": "meranie"
+   }
+  },
+  "O2": {
+   "system": "door.gate",
+   "transom_h": {
+    "v": 0.89,
+    "src": "S6",
+    "conf": "meranie",
+    "note": "transom bar at v = 2.24"
+   }
+  },
+  "O3": {
+   "system": "door.shop_sl",
+   "transom_h": {
+    "v": 0.94,
+    "src": "S6",
+    "conf": "meranie",
+    "note": "transom bar at v = 2.19, the same over door and shop window"
+   },
+   "transom_bars": {
+    "v": 1,
+    "src": "S6",
+    "conf": "meranie",
+    "note": "the transom over the door has two panes (bar at v = 2.66)"
+   },
+   "transom_bar_h": {
+    "v": 0.47,
+    "src": "S6",
+    "conf": "odhad",
+    "note": "2.66 - 2.19; meaning of the library parameter NEOVERENÉ"
+   }
+  },
+  "O4": {
+   "merged_into": "O3",
+   "system": "door.shop_sl"
+  },
+  "O5": {
+   "system": "win.2kr",
+   "bar_h": {
+    "v": 0.47,
+    "src": "S6",
+    "conf": "meranie",
+    "note": "bar at v = 5.31"
+   }
+  },
+  "O6": {
+   "system": "win.2kr",
+   "bar_h": {
+    "v": 0.47,
+    "src": "S6",
+    "conf": "meranie",
+    "note": "as O5 (same window type, bar aligned)"
+   }
+  },
+  "O7": {
+   "system": "win.2kr",
+   "bar_h": {
+    "v": 0.47,
+    "src": "S6",
+    "conf": "meranie",
+    "note": "as O5"
+   }
+  }
+ },
+ "g1_proposals": {
+  "reference.home_story": "prijať 1.NP (floorIndex 0), rovnako ako hmota domu",
+  "stories[1NP].level": "prijať 0,00 = päta fasády; po zameraní podlahy 1.NP nahradiť kótou",
+  "zones[Z1].thickness": "prijať 0,45 m (historická tehlová uličná stena); ak existuje pôdorys/rez, nahradiť kótou",
+  "openings[O1].reveal": "prijať 0,30 m (zo šikmých záberov); overiť jedným meraním hĺbky ostenia",
+  "openings[O2].reveal": "prijať 0,30 m",
+  "openings[O3].reveal": "prijať 0,25 m (O3 a O4 sú jeden rám, rovnaká hĺbka)",
+  "openings[O4].reveal": "prijať 0,25 m (stavia sa spolu s O3, hodnota O3 platí)",
+  "openings[O5].reveal": "prijať 0,12 m (okná 2.NP)",
+  "openings[O6].reveal": "prijať 0,12 m",
+  "openings[O7].reveal": "prijať 0,12 m",
+  "openings[O1].sidelight_sill": "prijať 0,63 m (parapet výkladu); ak je výklad až po zem, zmeniť na 0,00",
+  "openings[O3].transom_bar_h": "prijať 0,47 m (priečka v nadsvetlíku nad dverami, v = 2,66)",
+  "systems[wall.omietka_tehla_450].base_favorite": "prijať (len grafika steny; skladba je vlastná FS)",
+  "systems[wall.omietka_tehla_450].composite.skins[Omítka - venkovní].thickness": "prijať 20 mm",
+  "systems[wall.omietka_tehla_450].composite.skins[Cihly plné - nosné].thickness": "prijať 410 mm; pri inej hrúbke steny sa mení len táto vrstva",
+  "systems[wall.omietka_tehla_450].composite.skins[Omítka - vnitřní].thickness": "prijať 20 mm",
+  "systems[win.2kr].base_favorite": "prijať plastové okno (biele rámy, rolety); ak sú drevené, zmeniť na 'Dřevěné okno - dvoukřídlé 01'",
+  "systems[win.2kr].transom": "prijať bez nadsvetlíka (horná časť zakrytá roletou); ak je nadsvetlík, nastaviť true",
+  "systems[door.shop_sl].base_favorite": "prijať hliníkové dvere so svetlíkom a nadsvetlíkom",
+  "systems[door.shop_sl].frame_surface": "vytvoriť povrch 'FS Barva - tyrkysová' (RGB z fotky ≈ 3/103/133) pre O3+O4; O1 ponechať kobaltovú modrú",
+  "systems[door.gate].base_favorite": "dočasne prijať dvojkrídlovú bránu bez nadsvetlíka; cieľ 'Double Door with Transom 27' po oprave Tapiru (T7)",
+  "systems[door.gate].leaf_panel": "prijať štýl 14 (horné pole ako náhrada nadsvetlíka)"
+ },
+ "simplifications": [
+  {
+   "ref": "zones[Z1]",
+   "text": "Kamenný obklad parteru (fotka) nie je v skladbe – stena má jednu skladbu po celej výške (jedna zóna na fasádu v I1/I2).",
+   "proposal": "v I3 rozdeliť zónu na parter s obkladom (cca 30 mm, ODHAD) a poschodie s omietkou"
+  },
+  {
+   "ref": "systems[*].gs_bAutoTurnIn",
+   "text": "Omietka sa do ostenia neotáča, aby otvor v líci = murovaný otvor = hrana na fotke (s otočením by bol otvor v líci o 2 cm menší z troch strán).",
+   "proposal": "prijať"
+  },
+  {
+   "ref": "openings[O2]",
+   "text": "Ozdobný oválny nadsvetlík brány nie je modelovaný ako nadsvetlík; horné pole krídla (štýl panelu 14) ho len vizuálne nahrádza. Knižničná časť s nadsvetlíkom je dostupná len cez CreateDoors.libraryPartName, ktorého prvky Tapir nevie čítať/zapisovať (T7).",
+   "proposal": "prijať dočasne; po T7 prestavať na 'Double Door with Transom 27' + obdĺžnikový nadsvetlík s 1 priečkou"
+  },
+  {
+   "ref": "openings[O3]",
+   "text": "Delenie nadsvetlíka (Divided Frame) prechádza nad dverami aj nad výkladom; na fotke je len nad dverami.",
+   "proposal": "prijať (rozdiel je v jednej priečke nad výkladom)"
+  },
+  {
+   "ref": "openings[O5..O7]",
+   "text": "Vonkajšie rolety okien 2.NP nie sú modelované.",
+   "proposal": "prijať; na požiadanie parameter rolety Window 27 (gs_sunShade_iType)"
+  },
+  {
+   "ref": "systems[door.shop_sl].frame_surface",
+   "text": "Modrý rám O1 aj tyrkysový rám O3+O4 majú jeden povrch (kobaltová modrá) – systém je jeden.",
+   "proposal": "pozri návrh pri frame_surface"
+  }
+ ]
+}

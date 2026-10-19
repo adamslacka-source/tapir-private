@@ -1,4 +1,4 @@
-"""Adapter: pilot Senec (Lichnerova, Fasady_model) -> facade-spec/1 (I1 subset).
+"""Adapter: pilot Senec (Lichnerova, Fasady_model) -> facade-spec/1 (I1 + I2 systems).
 
 Reads the pilot's scripts as TEXT (Python ast) - nothing in the pilot folder is executed, imported
 or written. Sources used:
@@ -7,6 +7,7 @@ or written. Sources used:
   skripty/otvory.py           OPENINGS[<facade>]: kind (window/door), certainty, note
   skripty/fasady.py           FACADES[<facade>]: ends a/b, photo, metric rectification frame
   kontrola/fasada_<facade>_rektif.jpg   rectified photo (size only)
+  senec_types/<house>.json    (in this repo) I2 fill types + wall build-up read from the rectified photo
 
 I1 limits: one wall plane per facade = one literal panel(...) call with a literal opening list;
 anything else (grid(...), several panels) is refused with a clear error.
@@ -25,13 +26,15 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-from spec_validate import validate  # noqa: E402
+from spec_validate import low_values, validate  # noqa: E402
 
 DEFAULT_ROOT = Path(r"C:\Users\adams\OneDrive\AT_Verejny_priestor_Senec\Fasady_model")
 DEFAULT_OUT = Path(r"C:\FacadePilot\out")
+TYPES_DIR = HERE / "senec_types"      # I2: fill types / build-up read from the photo, per house
 
 # I1 system choice: existing Favorites of the pilot project (Czech SK/CZ template), chosen by rule.
-# Every choice is conf 'default' - the photo does not tell the product; types are I2 (G1 table).
+# Every choice is conf 'default' - the photo does not tell the product. I2 replaces this catalogue with
+# senec_types/<house>.json when it exists (fill types and build-up read from the photo).
 SYSTEMS = {
     "wall.basic_450": {"type": "wall", "favorite": "Cihla plná - nosná, 300", "structure": "Basic", "reference_line": "Outside",
                        "conf": "default", "src": None,
@@ -266,34 +269,40 @@ def build_spec(house: str, root: Path = DEFAULT_ROOT) -> dict:
         "systems": SYSTEMS,
         "tolerances": {"build": 0.01, "kota": 0.01, "meranie": 0.05, "pravidlo": 0.10, "odhad": None},
     }
+    types_file = TYPES_DIR / f"{house}.json"
+    if types_file.exists():
+        apply_types(spec, json.loads(types_file.read_text(encoding="utf-8")))
+        spec["generated"]["types"] = str(types_file)
     spec["assumptions"] = assumptions_of(spec)
     return spec
 
 
 def assumptions_of(spec: dict) -> list[dict]:
-    """Every value below 'meranie' -> one row for gate G1 (ADR 3.2)."""
-    rows = []
-    low = ("pravidlo", "odhad", "default")
-    for z in spec["zones"]:
-        if z["thickness"]["conf"] in low:
-            rows.append({"ref": f"zones[{z['id']}].thickness", "value": z["thickness"]["v"], "conf": z["thickness"]["conf"],
-                         "why": z["thickness"].get("note", ""), "status": "pending"})
+    """Every value below 'meranie' -> one row for gate G1 (ADR 3.2); generic walk over the spec."""
+    rows = [{"ref": ref, "value": value, "conf": conf, "why": note, "status": "pending"}
+            for ref, value, conf, _src, note in low_values(spec)]
     hs = spec["reference"]["home_story"]
-    rows.append({"ref": "reference.home_story", "value": hs["floorIndex"], "conf": hs["conf"], "why": hs["note"], "status": "pending"})
-    for st in spec["stories"]:
-        if st["level"]["conf"] in low:
-            rows.append({"ref": f"stories[{st['id']}].level", "value": st["level"]["v"], "conf": st["level"]["conf"],
-                         "why": st["level"].get("note", ""), "status": "pending"})
-    for o in spec["openings"]:
-        if o["rect"]["conf"] in low:
-            rows.append({"ref": f"openings[{o['id']}].rect", "value": o["rect"]["v"], "conf": o["rect"]["conf"], "why": o.get("note", ""), "status": "pending"})
-        if "reveal" in o and o["reveal"]["conf"] in low:
-            rows.append({"ref": f"openings[{o['id']}].reveal", "value": o["reveal"]["v"], "conf": o["reveal"]["conf"],
-                         "why": o["reveal"].get("note", ""), "status": "pending"})
-    for sid, s in spec["systems"].items():
-        if s["conf"] in low:
-            rows.append({"ref": f"systems[{sid}].favorite", "value": s.get("favorite"), "conf": s["conf"], "why": s.get("note", ""), "status": "pending"})
+    rows.insert(0, {"ref": "reference.home_story", "value": hs["floorIndex"], "conf": hs["conf"], "why": hs["note"], "status": "pending"})
     return rows
+
+
+def apply_types(spec: dict, types: dict) -> None:
+    """I2: fill types and wall build-up read from the photo (senec_types/<house>.json) -> systems + openings."""
+    spec["sources"].append(dict(types["source"]))
+    spec["systems"] = dict(types["systems"])
+    for z in spec["zones"]:
+        if z["id"] in types.get("zones", {}):
+            z.update(types["zones"][z["id"]])
+    for key in ("g1_proposals", "simplifications"):
+        if key in types:
+            spec[key] = types[key]
+    by_id = {o["id"]: o for o in spec["openings"]}
+    for oid, extra in types.get("openings", {}).items():
+        if oid not in by_id:
+            raise AdapterError(f"types file: opening {oid} is not in the facade")
+        by_id[oid].update(extra)
+        if "reveal" in by_id[oid]:
+            by_id[oid]["reveal"]["note"] = "depth from oblique views (ODHAD); I2: wall inset of the frame from the outside face"
 
 
 def main(argv=None) -> int:
