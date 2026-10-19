@@ -7,7 +7,8 @@
   "addon": "Tapir 1.7.2 private",
   "project": "C:/FacadePilot/Fasada_pilot_A.pln",
   "library": "AC29 CZE template library, Door 27 / Window 27 family",
-  "I3": "2026-10-19: Double Door with Transom 27 (libraryPartName), reveal location Side"
+  "I3": "2026-10-19: Double Door with Transom 27 (libraryPartName), reveal location Side",
+  "pilot_A": "2026-10-19: Arch Double Door 27 (libraryPartName, gs_shoulder_h)"
  },
  "dsl": {
   "write": "param -> '$v' (spec value), '$surface' (surface attribute index of the spec value, a surface name), '$v+param:<p>' (value plus the current value of GDL parameter p), or an object mapping str(spec value) -> param value",
@@ -358,9 +359,9 @@
       "gs_door_transom": "$v"
      },
      "read": {
-      "param": "ifc_TransomThickness",
-      "gt": 0
-     }
+      "param": "gs_door_transom"
+     },
+     "note": "read from gs_door_transom: after SetGDLParameters gs_door_transom = false the IFC parameter ifc_TransomThickness stays 0.04 (not recalculated by the API, measured 2026-10-19, pilot A) - the switch itself is the truth"
     },
     "sidelight": {
      "fixed": "none",
@@ -396,6 +397,64 @@
     "gs_trim_inside": false
    },
    "system_params_note": "the part has outside and inside casings (gs_trim_*: 2.5 cm wide + 1.2 cm offset over the wall hole on both faces, measured: 3D bbox 3.7 cm wider than the hole on each side and on top); a recessed historic gate has none on the facade -> off; the inside casing is off too so that the 3D check of the hole stays exact (simplification, inside not modelled anyway)"
+  },
+  "Arch Double Door 27": {
+   "kind": "door",
+   "base_favorites": [],
+   "base_libpart": true,
+   "note": "no favourite in the CZE template; placed by CreateDoors.libraryPartName (T7). Read on a sample 2026-10-19 (pilot A, M016 gable): width / height = wall hole incl. the arch (ac_wallhole_*), gs_shoulder_h = springing of the arch above the bottom of the hole (default 1.9: a 2.4 x 2.1 door had a 0.2 m segmental arch); with gs_shoulder_h = height - width/2 the head is a semicircle. 3D without casings = the hole exactly (bbox 2.40 x 2.10). gs_door_transom is true by default but ifc_TransomThickness stays 0 - no separate fanlight is drawn; ifc_optypestr 'Double Door Single Swing'. A door taller than its wall is accepted: the wall is cut up to its top, the arched head stands above it (measured: wall 1.0 m, door 0.1..2.2 m).",
+   "fields": {
+    "leaves": {
+     "fixed": 2,
+     "read": {
+      "param": "ifc_optypestr",
+      "map": {
+       "Double Door Single Swing": 2,
+       "Double Door Double Swing": 2
+      }
+     }
+    },
+    "transom": {
+     "fixed": false,
+     "read": {
+      "param": "ifc_TransomThickness",
+      "gt": 0
+     },
+     "note": "no separate transom is drawn by this part (arched leaves)"
+    },
+    "sidelight": {
+     "fixed": "none",
+     "read": {
+      "const": "none"
+     }
+    },
+    "frame_surface": {
+     "write": {
+      "gs_frame_mat": "$surface",
+      "gs_leaf_mat": "$surface"
+     },
+     "read": {
+      "param": "gs_frame_mat",
+      "surface": true
+     }
+    }
+   },
+   "instance": {
+    "shoulder_h": {
+     "write": {
+      "gs_shoulder_h": "$v"
+     },
+     "read": {
+      "param": "gs_shoulder_h"
+     },
+     "note": "springing of the arch above the bottom of the wall hole (m)"
+    }
+   },
+   "system_params": {
+    "gs_trim_outside": false,
+    "gs_trim_inside": false
+   },
+   "system_params_note": "casings off as on Double Door with Transom 27 (3D bbox 3.7 cm larger than the hole with them, measured on the sample)"
   }
  }
 }

@@ -17,7 +17,8 @@ import math
 
 import numpy as np
 
-from spec_validate import polygon_area
+from geom import outside_of
+from spec_validate import _joined, polygon_area
 from tapir_client import TapirClient
 
 EDGE_SEARCH = 0.06        # m - photo edge searched within +-6 cm of the projected model edge
@@ -54,7 +55,8 @@ def to_photo(svw: np.ndarray, cam: dict | None) -> np.ndarray:
     if not cam:
         return svw[:, :2].copy()
     t = cam["D"] / (cam["D"] - svw[:, 2])
-    return np.column_stack([cam["s"] + (svw[:, 0] - cam["s"]) * t, cam["v"] + (svw[:, 1] - cam["v"]) * t])
+    s = svw[:, 0] if cam.get("s") is None else cam["s"] + (svw[:, 0] - cam["s"]) * t    # camera s unknown: s kept (ODHAD)
+    return np.column_stack([s, cam["v"] + (svw[:, 1] - cam["v"]) * t])
 
 
 def corner_v(bodies_svw, corner: str, s_win, cam) -> float | None:
@@ -88,7 +90,34 @@ def photo_edge(lum: np.ndarray, rect: dict, s_win, v_pred: float, brighter: str,
     return float(v1 - y_edge / S), float(steps[i])
 
 
-def verify_linear(ac: TapirClient, spec: dict, want_linear: list[dict], guids: dict, details: dict, fr, stories: dict,
+def photo_edge_any(lum: np.ndarray, rect: dict, edge: str, at: float, rng, brighter: str | None, search: float) -> tuple[float, float]:
+    """Edge of an opening / object in the photo near the model edge `at`: left / right edges are vertical (s searched,
+    mean over the v range), top / bottom horizontal (v searched, mean over the s range). brighter = side that is brighter
+    (left / right / above / below); None = strongest step of either sign. Returns (position m, contrast)."""
+    S, u0, v1 = rect["S"], rect["u0"], rect["v1"]
+    if edge in ("top", "bottom"):
+        return photo_edge(lum, rect, rng, at, brighter or "above", search) if brighter else _either(lum, rect, rng, at, search, "v")
+    x0, x1 = int(round((at - search - u0) * S)), int(round((at + search - u0) * S))
+    y0, y1 = int(round((v1 - rng[1]) * S)), int(round((v1 - rng[0]) * S))
+    x0, x1 = max(1, x0), min(lum.shape[1] - 2, x1)
+    prof = lum[y0:y1, x0 - 1:x1 + 2].mean(axis=0)             # columns left -> right
+    steps = prof[:-1] - prof[1:]                               # left minus right: > 0 when the left side is brighter
+    if brighter is None:
+        steps = np.abs(steps)
+    elif brighter == "right":
+        steps = -steps
+    i = int(np.argmax(steps))
+    x_edge = x0 - 1 + i + 1.0
+    return float(x_edge / S + u0), float(steps[i])
+
+
+def _either(lum, rect, rng, at, search, axis) -> tuple[float, float]:
+    a = photo_edge(lum, rect, rng, at, "above", search)
+    b = photo_edge(lum, rect, rng, at, "below", search)
+    return a if a[1] >= b[1] else b
+
+
+def verify_linear(ac: TapirClient, spec: dict, want_linear: list[dict], guids: dict, details: dict, frames: dict, stories: dict,
                   sysinfo: dict | None, lum: np.ndarray | None, row, trow, problems: list) -> dict:
     """Rows for every linear element; returns {'proj': item -> [(svw, polygons)], 'photo': [...], 'count': {...}}."""
     rect = next((s for s in spec["sources"] if s.get("rect")), {}).get("rect")
@@ -101,6 +130,9 @@ def verify_linear(ac: TapirClient, spec: dict, want_linear: list[dict], guids: d
     proj, photo = {}, []
     for it, geo in zip(present, geos):
         lid, sp = it["item"], it["spec_item"]
+        plane = it.get("plane", "F")
+        fr = frames[plane]
+        w0 = it.get("w0", 0.0)
         prof = spec["systems"][spec["systems"][sp["system"]]["profile"]]
         d = details[lid]
         det = d["details"]
@@ -109,6 +141,7 @@ def verify_linear(ac: TapirClient, spec: dict, want_linear: list[dict], guids: d
             problems.append(f"{lid}: home story {floor} != spec")
         s0, s1 = sp["s"]["v"]
         pw = max(p[0] for p in prof["polygon_wv"])
+        pw_back = min(p[0] for p in prof["polygon_wv"])
         ph = max(p[1] for p in prof["polygon_wv"])
         if sp["axis"] == "h":
             v0, v1 = sp["v"]["v"], sp["v"]["v"] + ph
@@ -123,7 +156,7 @@ def verify_linear(ac: TapirClient, spec: dict, want_linear: list[dict], guids: d
             row(lid, "v0 (beam level)", v0, stories[floor] + det["level"] - fr.z0, "params")
         else:
             o = fr.to_svw(np.array([[det["origin"]["x"], det["origin"]["y"], 0.0]]))[0]
-            right = spec["reference"]["outside"] == "right_of_ab"
+            right = outside_of(spec, plane) == "right_of_ab"
             row(lid, "s origin", s0 if right else s1, float(o[0]), "params")
             row(lid, "v0 (column bottom)", v0, stories[floor] + det["bottomOffset"] - fr.z0, "params")
             row(lid, "v1 (column top)", v1, stories[floor] + det["bottomOffset"] + det["height"] - fr.z0, "params")
@@ -141,14 +174,19 @@ def verify_linear(ac: TapirClient, spec: dict, want_linear: list[dict], guids: d
             problems.append(f"{lid}: no 3D body (beam/column segments)")
             continue
         allp = np.vstack([b for b, _ in bodies])
-        row(lid, "s0", s0, float(allp[:, 0].min()), "3D")
-        row(lid, "s1", s1, float(allp[:, 0].max()), "3D")
+        # at a corner where two planes join, Archicad connects the beams of both facades (and trims / extends them up to
+        # the profile depth); tolerance there = the profile reach
+        reach = max(abs(p[0]) for p in prof["polygon_wv"])
+        ja = _joined(spec, plane, "a") and s0 <= 1e-6 or sp.get("wrap") == "a"
+        jb = _joined(spec, plane, "b") and s1 >= fr.length - 1e-3 or sp.get("wrap") == "b"
+        row(lid, "s0" + (" (joined corner)" if ja else ""), s0, float(allp[:, 0].min()), "3D", tolerance=reach if ja else None)
+        row(lid, "s1" + (" (joined corner)" if jb else ""), s1, float(allp[:, 0].max()), "3D", tolerance=reach if jb else None)
         row(lid, "v0", v0, float(allp[:, 1].min()), "3D")
         row(lid, "v1", v1, float(allp[:, 1].max()), "3D")
-        row(lid, "w back (on the wall face)", 0.0, float(allp[:, 2].min()), "3D")
-        row(lid, "w front (projection)", pw, float(allp[:, 2].max()), "3D")
+        row(lid, "w back (on the wall face)", w0 + pw_back, float(allp[:, 2].min()), "3D")
+        row(lid, "w front (projection)", w0 + pw, float(allp[:, 2].max()), "3D")
         # (d) photo edges
-        for e in sp.get("photo_edges", []):
+        for e in sp.get("photo_edges", []) if plane == "F" else []:          # the photo shows the reference plane only
             v_model = corner_v(bodies, e["corner"], e["s"], cam)
             if lum is None or rect is None or v_model is None:
                 continue

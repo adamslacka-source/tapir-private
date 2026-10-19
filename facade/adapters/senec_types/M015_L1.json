@@ -1,5 +1,5 @@
 {
- "about": "Fill types and wall build-up of M015_L1, read by hand from the rectified photo (ADR-001 I2). Values carry source and certainty like the spec. Read from 3x crops of kontrola/fasada_M015_J_rektif.jpg with a 0.1 m grid (120 px/m), 2026-10-19; a clearly visible edge is 'meranie' (+-5 cm), anything hidden or inferred is 'odhad'. I3 (2026-10-19): camera, profiles, linear elements (cornice, string course, surrounds and sill ledges of the 2nd floor), gate with transom.",
+ "about": "Fill types and wall build-up of M015_L1, read by hand from the rectified photo (ADR-001 I2). Values carry source and certainty like the spec. Read from 3x crops of kontrola/fasada_M015_J_rektif.jpg with a 0.1 m grid (120 px/m), 2026-10-19; a clearly visible edge is 'meranie' (+-5 cm), anything hidden or inferred is 'odhad'. I3 (2026-10-19): camera, profiles, linear elements (cornice, string course, surrounds and sill ledges of the 2nd floor), gate with transom. Pilot A (2026-10-19): ground floor stone cladding as wall zone Z2, 2nd floor openings re-read on the masonry edges, surrounds as GDL FS_Surround.",
  "source": {
   "id": "S6",
   "type": "photo",
@@ -8,7 +8,8 @@
  },
  "zones": {
   "Z1": {
-   "system": "wall.omietka_tehla_450"
+   "system": "wall.omietka_tehla_450",
+   "role": "main"
   }
  },
  "systems": {
@@ -55,7 +56,7 @@
    },
    "conf": "odhad",
    "src": "S1",
-   "note": "render + solid brick; the ground floor has a stone cladding (photo) that is NOT modelled - one wall zone per facade in I1/I2"
+   "note": "render + solid brick (upper floor); the ground floor is the separate zone Z2 with the stone cladding (wall.obklad_tehla_480, pilot A zones)"
   },
   "win.2kr": {
    "type": "window",
@@ -278,45 +279,6 @@
    "src": "S7",
    "note": "window sill ledge of the 2nd floor windows, painted like the surround"
   },
-  "prof.sambrana": {
-   "type": "profile",
-   "name": "FS prof.sambrana",
-   "polygon_wv": [
-    [
-     0,
-     0
-    ],
-    [
-     0.03,
-     0
-    ],
-    [
-     0.03,
-     0.12
-    ],
-    [
-     0,
-     0.12
-    ]
-   ],
-   "material": "Omítka - venkovní",
-   "edge_surface": "Barva 20 - celadonová zelená",
-   "w": {
-    "v": 0.03,
-    "src": null,
-    "conf": "odhad",
-    "note": "flat plaster surround, projection not visible"
-   },
-   "h": {
-    "v": 0.12,
-    "src": "S7",
-    "conf": "meranie",
-    "note": "band width: right jamb s 2.21 .. 2.33, head v 6.37 .. 6.475 (O5)"
-   },
-   "conf": "odhad",
-   "src": "S7",
-   "note": "flat window surround of the 2nd floor windows, green, lighter than the wall; one profile for the head (beam: x = out, y = up) and the jambs (column: x = out, y = along the facade)"
-  },
   "lin.rimsa_okap": {
    "type": "linear",
    "tool": "beam",
@@ -342,23 +304,68 @@
    "conf": "odhad",
    "src": "S7"
   },
-  "lin.sambrana_h": {
-   "type": "linear",
-   "tool": "beam",
-   "profile": "prof.sambrana",
-   "favorite": "FS lin.sambrana_h",
+  "wall.obklad_tehla_480": {
+   "type": "wall",
+   "structure": "Composite",
+   "reference_line": "Outside",
+   "base_favorite": "Cihla plná - nosná, 300",
+   "favorite": "FS wall.obklad_tehla_480",
+   "composite": {
+    "name": "FS wall.obklad_tehla_480",
+    "skins": [
+     {
+      "type": "Finish",
+      "material": "Kamenný obklad",
+      "thickness": {
+       "v": 0.03,
+       "src": "S7",
+       "conf": "odhad",
+       "note": "stone (marble) slabs of the ground floor; thickness typological, the face stands ~3 cm in front of the render (kordón note)"
+      }
+     },
+     {
+      "type": "Other",
+      "material": "Fasádní lepicí tmel",
+      "thickness": {
+       "v": 0.02,
+       "src": null,
+       "conf": "odhad",
+       "note": "bedding mortar in place of the 20 mm render of the upper floor"
+      }
+     },
+     {
+      "type": "Core",
+      "material": "Cihly plné - nosné",
+      "thickness": {
+       "v": 0.41,
+       "src": null,
+       "conf": "odhad",
+       "note": "same masonry as Z1"
+      }
+     },
+     {
+      "type": "Finish",
+      "material": "Omítka - vnitřní",
+      "thickness": {
+       "v": 0.02,
+       "src": null,
+       "conf": "default",
+       "note": "inside plaster, typological"
+      }
+     }
+    ]
+   },
    "conf": "odhad",
    "src": "S7",
-   "note": "head of the surround"
+   "note": "ground floor (parter) up to the string course: marble cladding on the brick wall (photo: light marble slabs with joints); inside face aligned with Z1"
   },
-  "lin.sambrana_v": {
-   "type": "linear",
-   "tool": "column",
-   "profile": "prof.sambrana",
-   "favorite": "FS lin.sambrana_v",
+  "gdl.surround": {
+   "type": "gdl",
+   "template": "FS_Surround",
    "conf": "odhad",
-   "src": "S7",
-   "note": "jambs of the surround: Column with the profile, rotated so that profile x = out of the facade, y = along it"
+   "src": "S8",
+   "note": "window surround of the 2nd floor as ONE object (jambs + head) from the GDL template FS_Surround (I4), replacing the I3 head beam + 2 jamb columns",
+   "classification": "Obklad"
   }
  },
  "openings": {
@@ -425,29 +432,167 @@
   "O5": {
    "system": "win.2kr",
    "bar_h": {
-    "v": 0.47,
-    "src": "S6",
+    "v": 0.53,
+    "src": "S8",
     "conf": "meranie",
-    "note": "bar at v = 5.31"
-   }
+    "note": "glazing bar seen at v' 5.304, recessed 0.12 -> 5.33 with the camera; 5.33 - 4.80"
+   },
+   "rect": {
+    "v": [
+     1.21,
+     2.22,
+     4.8,
+     6.345
+    ],
+    "src": "S8",
+    "conf": "meranie",
+    "note": "masonry opening (ostenie), not the frame: profiles left 1.208 / right 2.217 / top 6.367; width 1.01 typed for the three windows; top 6.345 = mean of 6.367 / 6.342 / 6.333 (residual tilt of the rectification +-1.7 cm), bottom 4.80 = bottom of the frame where the outer sill covers the masonry edge (+-2 cm)"
+   },
+   "photo_edges": [
+    {
+     "name": "ľavá hrana murovaného otvoru (pás šambrány -> ostenie)",
+     "edge": "left",
+     "range": [
+      5.0,
+      6.2
+     ],
+     "brighter": "left",
+     "tol": 0.03,
+     "search": 0.05
+    },
+    {
+     "name": "pravá hrana murovaného otvoru (rám/sklo -> pás šambrány)",
+     "edge": "right",
+     "range": [
+      5.0,
+      6.2
+     ],
+     "brighter": "right",
+     "tol": 0.03,
+     "search": 0.05
+    },
+    {
+     "name": "horná hrana murovaného otvoru (nadpražie -> podhľad)",
+     "edge": "top",
+     "range": [
+      1.36,
+      2.07
+     ],
+     "brighter": "above",
+     "tol": 0.03,
+     "search": 0.05
+    }
+   ]
   },
   "O6": {
    "system": "win.2kr",
    "bar_h": {
-    "v": 0.47,
-    "src": "S6",
+    "v": 0.53,
+    "src": "S8",
     "conf": "meranie",
-    "note": "as O5 (same window type, bar aligned)"
-   }
+    "note": "glazing bar seen at v' 5.304, recessed 0.12 -> 5.33 with the camera; 5.33 - 4.80"
+   },
+   "rect": {
+    "v": [
+     3.36,
+     4.37,
+     4.8,
+     6.345
+    ],
+    "src": "S8",
+    "conf": "meranie",
+    "note": "masonry opening (ostenie), not the frame: profiles left 3.358 / right 4.371 / top 6.342; width 1.01 typed for the three windows; top 6.345 = mean of 6.367 / 6.342 / 6.333 (residual tilt of the rectification +-1.7 cm), bottom 4.80 = bottom of the frame where the outer sill covers the masonry edge (+-2 cm)"
+   },
+   "photo_edges": [
+    {
+     "name": "ľavá hrana murovaného otvoru (pás šambrány -> ostenie)",
+     "edge": "left",
+     "range": [
+      5.0,
+      6.2
+     ],
+     "brighter": "left",
+     "tol": 0.03,
+     "search": 0.05
+    },
+    {
+     "name": "pravá hrana murovaného otvoru (rám/sklo -> pás šambrány)",
+     "edge": "right",
+     "range": [
+      5.0,
+      6.2
+     ],
+     "brighter": "right",
+     "tol": 0.03,
+     "search": 0.05
+    },
+    {
+     "name": "horná hrana murovaného otvoru (nadpražie -> podhľad)",
+     "edge": "top",
+     "range": [
+      3.51,
+      4.22
+     ],
+     "brighter": "above",
+     "tol": 0.03,
+     "search": 0.05
+    }
+   ]
   },
   "O7": {
    "system": "win.2kr",
    "bar_h": {
-    "v": 0.47,
-    "src": "S6",
+    "v": 0.53,
+    "src": "S8",
     "conf": "meranie",
-    "note": "as O5"
-   }
+    "note": "glazing bar seen at v' 5.304, recessed 0.12 -> 5.33 with the camera; 5.33 - 4.80"
+   },
+   "rect": {
+    "v": [
+     5.51,
+     6.52,
+     4.8,
+     6.345
+    ],
+    "src": "S8",
+    "conf": "meranie",
+    "note": "masonry opening (ostenie), not the frame: profiles left 5.508 / right 6.513 / top 6.333; width 1.01 typed for the three windows; top 6.345 = mean of 6.367 / 6.342 / 6.333 (residual tilt of the rectification +-1.7 cm), bottom 4.80 = bottom of the frame where the outer sill covers the masonry edge (+-2 cm)"
+   },
+   "photo_edges": [
+    {
+     "name": "ľavá hrana murovaného otvoru (pás šambrány -> ostenie)",
+     "edge": "left",
+     "range": [
+      5.0,
+      6.2
+     ],
+     "brighter": "left",
+     "tol": 0.03,
+     "search": 0.05
+    },
+    {
+     "name": "pravá hrana murovaného otvoru (rám/sklo -> pás šambrány)",
+     "edge": "right",
+     "range": [
+      5.0,
+      6.2
+     ],
+     "brighter": "right",
+     "tol": 0.03,
+     "search": 0.05
+    },
+    {
+     "name": "horná hrana murovaného otvoru (nadpražie -> podhľad)",
+     "edge": "top",
+     "range": [
+      5.66,
+      6.37
+     ],
+     "brighter": "above",
+     "tol": 0.03,
+     "search": 0.05
+    }
+   ]
   }
  },
  "g1_proposals": {
@@ -475,14 +620,18 @@
   "systems[prof.rimsa_okap].w": "prijať 0,35 m (vyloženie odkvapu); overiť šikmým záberom",
   "systems[prof.kordon].w": "prijať 0,08 m (obklad + rímska)",
   "systems[prof.parapet_rimsa].w": "prijať 0,06 m",
-  "systems[prof.sambrana].w": "prijať 0,03 m (plochá šambrána)",
-  "camera.v": "prijať (výška kamery z rektifikácie; na výšky ríms má vplyv < 1 cm)"
+  "camera.v": "prijať (výška kamery z rektifikácie; na výšky ríms má vplyv < 1 cm)",
+  "zones[Z2].w": "prijať 0,03 m (líce obkladu pred omietkou); overiť šikmým záberom pri kordóne",
+  "zones[Z2].thickness": "prijať 0,48 m (0,45 + obklad), vnútorné líce zarovnané so Z1",
+  "systems[wall.obklad_tehla_480].composite.skins[Kamenný obklad].thickness": "prijať 30 mm",
+  "systems[wall.obklad_tehla_480].composite.skins[Fasádní lepicí tmel].thickness": "prijať 20 mm (lôžko obkladu namiesto omietky)",
+  "objects[O5_sur].params.bandD": "prijať 0,03 m (plochá šambrána)"
  },
  "simplifications": [
   {
-   "ref": "zones[Z1]",
-   "text": "Kamenný obklad parteru (fotka) nie je v skladbe – stena má jednu skladbu po celej výške (jedna zóna na fasádu v I1/I2).",
-   "proposal": "v I3 rozdeliť zónu na parter s obkladom (cca 30 mm, ODHAD) a poschodie s omietkou"
+   "ref": "zones[Z2]",
+   "text": "Kamenný obklad parteru je samostatná zóna steny Z2 (stena pod kordónom so skladbou obklad 30 + lepidlo 20 + tehla 410 + omietka 20 mm, líce 3 cm pred omietkou); hrúbka obkladu a predsadenie sú ODHAD (z čelnej fotky sa nedajú odčítať).",
+   "proposal": "prijať; pri zameraní hrúbky obkladu zmeniť len skladbu a w zóny Z2"
   },
   {
    "ref": "systems[*].gs_bAutoTurnIn",
@@ -515,14 +664,24 @@
    "proposal": "prijať; pri inom vyložení (šikmý záber, Street View) sa výška prepočíta"
   },
   {
-   "ref": "linear[O5_jl..O7_jr]",
-   "text": "Šambrány a podokenné rímsy sú osadené okolo otvorov zo spec (aby rámovali okno). Na fotke je ľavé ostenie šambrány o ~0,11 m vľavo: murovaný otvor O5 je 1,22–2,21 m, spec má 1,32–2,22 (I1 odčítal rám okna za ostením – paralaxa, kamera je vpravo pod uhlom 51°).",
-   "proposal": "v I7 opraviť otvory 2.NP o paralaxu rámu (ľavá hrana ~1,22 / 3,38 / 5,50, šírka ~0,99 m); dovtedy prijať"
+   "ref": "objects[O5_sur..O7_sur]",
+   "text": "Šambrány okien 2.NP sú jeden GDL objekt FS_Surround na okno (ostenia + nadpražie) namiesto 3 prvkov (nosník + 2 stĺpy, I3); ostenia stoja na podokennej rímse (opH od vrchu rímsy po nadpražie). Pás nadpražia na fotke 0,108–0,112 m, ostení 0,112–0,120 m – jedna šírka 0,115 (priemer).",
+   "proposal": "prijať"
+  },
+  {
+   "ref": "openings[O5..O7]",
+   "text": "Otvory 2.NP sú opravené na murovaný otvor (ostenie) podľa profilov jasu (I1 čítal rám za ostením, posunutý o 0,10–0,11 m pre paralaxu šikmého záberu). Výšky sú jednotné pre tri okná (4,80–6,345); zvyškový sklon rektifikácie ±1,7 cm.",
+   "proposal": "prijať"
   },
   {
    "ref": "linear",
-   "text": "Sokel ako samostatný prvok na M015 nie je: celý parter je kamenný obklad až po kordón (zóna steny, nie lineárny prvok); pri päte sú len schodíky pred vstupmi O2 a O3 (dosky, nie fasáda).",
-   "proposal": "obklad parteru riešiť rozdelením zóny steny (parter s obkladom / poschodie s omietkou) – mimo I3"
+   "text": "Sokel ako samostatný prvok na M015 nie je: celý parter je kamenný obklad až po kordón (zóna Z2); pri päte sú len schodíky pred vstupmi O2 a O3 (dosky, nie fasáda).",
+   "proposal": "prijať"
+  },
+  {
+   "ref": "openings[O1, O2, O3, O5, O6, O7] (hrany × fotka automaticky)",
+   "text": "Automatická kontrola hrán (informatívna): horné hrany parteru O1–O3 sú na fotke o 3,8–5,1 cm vyššie (pilot čítal rám pod podhľadom ostenia - rovnaká paralaxa ako pri 2.NP) a pravá hrana brány O2 o 3,8 cm vľavo; spodné hrany okien 2.NP zakrýva parapetný plech. Vykázané, neopravené - mimo nálezu I3 č. 1.",
+   "proposal": "prečítať parter na murovaný otvor rovnako ako 2.NP (zmení nadsvetlíky O1, O3 a bránu O2)"
   }
  ],
  "camera": {
@@ -630,7 +789,7 @@
      "tol": 0.03
     }
    ],
-   "note": "kordónová rímsa medzi parterom a 2.NP (top of the marble cladding)"
+   "note": "kordónová rímsa medzi parterom a 2.NP: lies on top of the stone cladding zone Z2"
   }
  ],
  "surrounds": {
@@ -639,20 +798,18 @@
    "O6",
    "O7"
   ],
-  "head_system": "lin.sambrana_h",
-  "jamb_system": "lin.sambrana_v",
   "ledge_system": "lin.parapet_rimsa",
   "band": {
-   "v": 0.12,
-   "src": "S7",
+   "v": 0.115,
+   "src": "S8",
    "conf": "meranie",
-   "note": "= profile prof.sambrana height"
+   "note": "mean of the bands read on the photo: jambs 0.112-0.120 (O5 1.092..1.212 / 2.217..2.337, O6 3.242..3.360 / 4.371..4.483, O7 5.392..5.508 / 6.513..6.625), heads 0.108-0.112 - one band width for the object"
   },
   "ledge_top_below_sill": {
-   "v": 0.105,
-   "src": "S7",
+   "v": 0.065,
+   "src": "S8",
    "conf": "meranie",
-   "note": "ledge top v' 4.745 (real 4.735) under the window bottom 4.84"
+   "note": "ledge top (shadow line) v' 4.750 / 4.733 / 4.717 (O5 / O6 / O7) -> 4.735 under the masonry bottom 4.80"
   },
   "ledge_overhang": {
    "v": 0.02,
@@ -660,6 +817,59 @@
    "conf": "meranie",
    "note": "ledge ends 0.01-0.03 beyond the surround (O5 right: surround 2.33, ledge 2.36)"
   },
-  "position_note": "surround and ledge hug the spec opening (rule, conf pravidlo) so that they frame the window in the model; the photo shows the left jamb ~0.11 m further left (O5 masonry edge 1.22 vs spec 1.32) - see simplifications"
+  "position_note": "surround and ledge frame the masonry opening read in pilot A (I7 finding 1 fixed)",
+  "system": "gdl.surround",
+  "band_depth": {
+   "v": 0.03,
+   "src": null,
+   "conf": "odhad",
+   "note": "flat plaster surround, projection not visible on the frontal photo"
+  },
+  "surface": {
+   "v": "Barva 20 - celadonová zelená",
+   "src": "S7",
+   "conf": "meranie",
+   "note": "green surround, lighter than the wall"
+  }
+ },
+ "zone_split": [
+  {
+   "zone": "Z1",
+   "at_v": {
+    "v": 3.83,
+    "src": "S7",
+    "conf": "meranie",
+    "note": "top of the stone cladding = bottom of the string course L2 (photo: the cladding runs up to the kordón)"
+   },
+   "below": {
+    "id": "Z2",
+    "role": "parter",
+    "system": "wall.obklad_tehla_480",
+    "w": {
+     "v": 0.03,
+     "src": "S7",
+     "conf": "odhad",
+     "note": "the cladding stands ~3 cm in front of the render (kordón: cladding ~0.03 + ledge ~0.05); not measurable on the frontal photo"
+    },
+    "thickness": {
+     "v": 0.48,
+     "src": null,
+     "conf": "odhad",
+     "note": "0.45 + 0.03 offset: inside face aligned with Z1"
+    },
+    "note": "parter s kamenným obkladom po kordónovú rímsu (samostatná stena so skladbou obkladu)"
+   }
+  }
+ ],
+ "sources": [
+  {
+   "id": "S8",
+   "type": "photo",
+   "file": "kontrola/fasada_M015_J_rektif.jpg",
+   "note": "pilot A (I7 finding 1) 2026-10-19: masonry openings of the 2nd floor read from column / row luminance profiles of the rectified photo (S = 120 px/m) - left edge = surround band (bright) -> reveal (dark), right edge = glass/frame (dark) -> surround band, top = head band -> soffit; with the camera of the rectification (s 13.31, v 1.08, D 21.82 m) the left reveal of a recessed frame is visible and the right one hidden, so the edges in the wall plane are the masonry, not the frame (I1 had read the frame, 0.10-0.11 m too far right)"
+  }
+ ],
+ "pilot_mapping": {
+  "sbox:eaves": "model: linear L1 (lin.rimsa_okap, profile FS prof.rimsa_okap)"
  }
 }

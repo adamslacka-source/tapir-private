@@ -6,7 +6,7 @@ Acceptance test of increment I4 (ADR-001 D5): parametric GDL facade objects from
     python test_i4_gdl.py --with-i3     # + the I3 test (which runs I2 and I1) as a regression
     python test_i4_gdl.py --save        # ... and SaveProject at the end
 
-Live part writes ONLY into C:/FacadePilot/Fasada_pilot_A.pln (guard_project): the 4 FS_* library parts in the
+Live part writes ONLY into C:/FacadePilot/Fasada_pilot_A.pln (guard_project): the 5 FS_* library parts in the
 embedded library (folder FS_GDL) and temporary test objects at x >= 3000 m, deleted again at the end (also after a
 failure).
 
@@ -19,8 +19,9 @@ Acceptance (ADR-001 I4 + task 2026-10-19):
   K4 per template: CreateObjects at x >= 3000 m, SetGDLParametersOfElements (two parameter sets, the second changes the
      size), GDL read back = sent, 3D bbox (Get3DGeometryOfElements) = expected from the parameters +-5 mm, number of
      blocks (vertices / 8) = expected
-  K5 FS_Surround with the parameters of the M015_L1 surround of O5 has the same extent (s, v, w) as the I3 elements
-     O5_head + O5_jl + O5_jr (+-5 mm) - evidence for the decision whether to replace them
+  K5 FS_Surround of O5 on the M015_L1 facade (pilot A: it replaced the I3 elements O5_head + O5_jl + O5_jr): its 3D
+     extent (s, v, w) = expected from its parameters (+-5 mm), projecting outwards; a test object with the same
+     parameters rotated to the facade has the same extent
   K6 3D preview image of one object written (GetElementPreviewImage)
   K7 (--with-i3) the I3 test (incl. I2, I1) still passes
 """
@@ -109,6 +110,11 @@ def expect_cladding(p):
     return [0, p["A"], p["offs"], p["offs"] + p["thk"], 0, p["ZZYZX"]], nx * ny
 
 
+def expect_arch(p):
+    n = max(int(p["nSeg"]), 2)
+    return [-p["rOut"], p["rOut"], -p["depth"], 0, 0, p["rOut"]], ("vertices", 4 * (n + 1) + (2 * (n + 1) if p["bInfill"] else 0))
+
+
 def expect_surround(p):
     wl = p["bandW"] if p["bLeft"] else 0.0
     wr = p["bandW"] if p["bRight"] else 0.0
@@ -137,6 +143,9 @@ CASES = {
     "FS_Surround": (expect_surround, [
         {"opW": 1.0, "opH": 1.5, "bandW": 0.12, "bandD": 0.03, "bTop": True, "bBottom": False, "bLeft": True, "bRight": True, "headOvh": 0.0},
         {"opW": 1.4, "opH": 2.2, "bandW": 0.15, "bandD": 0.05, "bTop": True, "bBottom": True, "bLeft": True, "bRight": True, "headOvh": 0.05}]),
+    "FS_ArchGable": (expect_arch, [
+        {"rIn": 1.2, "rOut": 1.65, "depth": 0.57, "nSeg": 24, "bInfill": False, "infRecess": 0.15},
+        {"rIn": 0.8, "rOut": 1.1, "depth": 0.45, "nSeg": 16, "bInfill": True, "infRecess": 0.12}]),
 }
 
 
@@ -177,7 +186,8 @@ def offline() -> None:
     check("K2 a broken 3D script is reported as a GDL error", bool(errs), errs[0].split(": error:")[-1].strip() if errs else r.stdout[-200:])
     for name, (fn, cases) in CASES.items():
         for p in cases:
-            assert fn(p)[1] >= 1
+            n = fn(p)[1]
+            assert (n[1] if isinstance(n, tuple) else n) >= 1
 
 
 # -- live ---------------------------------------------------------------------------------------------------------
@@ -217,7 +227,8 @@ def live(port: int, save: bool, with_i3: bool) -> None:
     parts = gdl_build.loaded_parts(ac, gdl_build.TEMPLATE_NAMES)
     ok = [n for n in gdl_build.TEMPLATE_NAMES if n in parts and parts[n].get("typeId") == "Object"
           and parts[n].get("guid", "").upper() == man[n]["guid"]]
-    check("K3 GetAvailableLibraryParts sees 4 parts as Object with the template GUID", len(ok) == 4,
+    check(f"K3 GetAvailableLibraryParts sees {len(gdl_build.TEMPLATE_NAMES)} parts as Object with the template GUID",
+          len(ok) == len(gdl_build.TEMPLATE_NAMES),
           ", ".join(f"{n} #{parts[n]['index']}" for n in ok))
 
     created: list[str] = []
@@ -256,6 +267,12 @@ def live(port: int, save: bool, with_i3: bool) -> None:
                     check(f"K4 {name} set {ci}: 3D bbox = spec +-5 mm", False, f"empty geometry: {json.dumps(geo)[:200]}")
                     continue
                 dmax = max(abs(a - b) for a, b in zip(bb, want))
+                if isinstance(nblocks, tuple):                     # prism template: number of vertices
+                    nv = sum(len(b_["vertices"]) for b_ in geo.get("bodies", []))
+                    check(f"K4 {name} set {ci}: 3D bbox = spec +-5 mm, vertices = {nblocks[1]}", dmax <= TOL and nv == nblocks[1],
+                          f"x {bb[0]:.3f}..{bb[1]:.3f} y {bb[2]:.3f}..{bb[3]:.3f} z {bb[4]:.3f}..{bb[5]:.3f}; "
+                          f"max delta {dmax * 1000:.1f} mm; vertices {nv}")
+                    continue
                 check(f"K4 {name} set {ci}: 3D bbox = spec +-5 mm, blocks = {nblocks}", dmax <= TOL and blocks == nblocks,
                       f"x {bb[0]:.3f}..{bb[1]:.3f} y {bb[2]:.3f}..{bb[3]:.3f} z {bb[4]:.3f}..{bb[5]:.3f}; "
                       f"max delta {dmax * 1000:.1f} mm; blocks {blocks}")
@@ -274,26 +291,22 @@ def live(port: int, save: bool, with_i3: bool) -> None:
                   red["reload"].get("success") is True and bb is not None and max(abs(a - b) for a, b in zip(bb, want)) <= TOL and blocks == nb,
                   f"blocks {blocks}, bbox {[round(v, 3) for v in bb] if bb else None}")
 
-        # K5: FS_Surround equivalent of the I3 surround of O5 (head beam + two jamb columns)
+        # K5: FS_Surround of O5 on the facade (pilot A replaced the I3 head beam + two jamb columns by it)
+        import gdl_expect
         state = json.loads((Path(r"C:\FacadePilot\out\M015_L1") / "state.json").read_text(encoding="utf-8"))["elements"]
         spec = json.loads((Path(r"C:\FacadePilot\out\M015_L1") / "M015_L1.facade-spec.json").read_text(encoding="utf-8"))
         fr = frame_of(spec)
-        lin = {it["id"]: it for it in spec["linear"]}
-        from linear_verify import geometry_of
-        trio = ["O5_head", "O5_jl", "O5_jr"]
-        geos = geometry_of(ac, [state[i]["guid"] for i in trio])
-        pts = np.array([[v["x"], v["y"], v["z"]] for gg in geos for b in gg["bodies"] for v in b["vertices"]], float)
-        svw = fr.to_svw(pts)
-        ext_i3 = svw.max(axis=0) - svw.min(axis=0)
-        jl = lin["O5_jl"]
-        s0 = jl["s"]["v"][1]
-        s1 = lin["O5_jr"]["s"]["v"][0]
-        v_lo, v_hi = jl["v"]["v"]
-        band = jl["s"]["v"][1] - jl["s"]["v"][0]
-        prof = spec["systems"][spec["systems"][jl["system"]]["profile"]]
-        depth = max(q[0] for q in prof["polygon_wv"])
-        sp = {"opW": round(s1 - s0, 4), "opH": round(v_hi - v_lo, 4), "bandW": band, "bandD": depth, "bTop": True,
-              "bBottom": False, "bLeft": True, "bRight": True, "headOvh": 0.0}
+        ob = next(o for o in spec["objects"] if o["id"] == "O5_sur")
+        sp = {k: v["v"] for k, v in ob["params"].items() if k in gdl_expect.TEMPLATES["FS_Surround"]}
+        want_bb = gdl_expect.facade_bbox("FS_Surround", sp, ob["origin"]["v"], spec["reference"]["outside"])
+        geo = ac.tapir("Get3DGeometryOfElements", {"elements": [{"elementId": {"guid": state["O5_sur"]["guid"]}}]})["geometries3D"][0]
+        svw = fr.to_svw(np.array([[v["x"], v["y"], v["z"]] for b in geo["bodies"] for v in b["vertices"]], float))
+        got_bb = [svw[:, 0].min(), svw[:, 0].max(), svw[:, 1].min(), svw[:, 1].max(), svw[:, 2].min(), svw[:, 2].max()]
+        d_fac = max(abs(a - b) for a, b in zip(got_bb, want_bb))
+        check("K5 FS_Surround O5 on the facade: 3D extent s/v/w = expected from its parameters +-5 mm, projects outwards",
+              d_fac <= TOL and got_bb[4] >= -TOL and got_bb[5] > got_bb[4],
+              f"s {got_bb[0]:.3f}..{got_bb[1]:.3f} v {got_bb[2]:.3f}..{got_bb[3]:.3f} w {got_bb[4]:.3f}..{got_bb[5]:.3f}; max delta {d_fac * 1000:.1f} mm")
+        ext_fac = np.array([got_bb[1] - got_bb[0], got_bb[3] - got_bb[2], got_bb[5] - got_bb[4]])
         ang = math.degrees(math.atan2(fr.d[1], fr.d[0])) + (180.0 if spec["reference"]["outside"] == "right_of_ab" else 0.0)
         res = ac.tapir("CreateObjects", {"objectsData": [{"libraryPartName": "FS_Surround", "angle": math.radians(ang),
                                                           "coordinates": {"x": X0 + 100, "y": 0.0, "z": 0.0}}]})
@@ -305,10 +318,10 @@ def live(port: int, save: bool, with_i3: bool) -> None:
         rel = q[:, :2] - q[:, :2].min(axis=0)
         ext_obj = np.array([np.ptp(rel @ fr.d), np.ptp(q[:, 2]), np.ptp(rel @ fr.n)])
         wdir = float(np.mean((q[:, :2] - [X0 + 100, 0.0]) @ fr.n))
-        dd = np.abs(ext_obj - ext_i3)
-        check("K5 FS_Surround (O5 parameters, rotated to the facade) extent s/v/w = I3 head + jambs +-5 mm, projects outwards",
+        dd = np.abs(ext_obj - ext_fac)
+        check("K5 test object with the O5 parameters, rotated to the facade: same extent s/v/w as the facade object +-5 mm, projects outwards",
               float(dd.max()) <= TOL and wdir > 0,
-              f"I3 {ext_i3[0]:.3f} x {ext_i3[1]:.3f} x {ext_i3[2]:.3f}, object {ext_obj[0]:.3f} x {ext_obj[1]:.3f} x {ext_obj[2]:.3f} m, "
+              f"facade {ext_fac[0]:.3f} x {ext_fac[1]:.3f} x {ext_fac[2]:.3f}, object {ext_obj[0]:.3f} x {ext_obj[1]:.3f} x {ext_obj[2]:.3f} m, "
               f"angle {ang:.2f} deg; params {sp}")
 
         # K6: 3D preview images (louvres with the 45 deg set, the others with their last set)

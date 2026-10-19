@@ -64,8 +64,13 @@ def offline() -> dict:
     errors, warnings = validate(spec)
     check("I3 spec from the adapter is valid", not errors, "; ".join(errors))
     kinds = sorted({it["kind"] for it in spec.get("linear", [])})
-    check("spec has cornice, string course, sill ledges and surrounds (14 linear elements)",
-          len(spec.get("linear", [])) == 14 and kinds == ["cordon", "cornice", "sill_ledge", "surround_head", "surround_jamb"], f"{len(spec.get('linear', []))} {kinds}")
+    objs = spec.get("objects", [])
+    # pilot A: the surround (head + 2 jambs, 3 elements per window in I3) is ONE GDL object FS_Surround per window
+    check("spec has cornice, string course, sill ledges (5 linear elements) and 3 surrounds as FS_Surround objects",
+          len(spec.get("linear", [])) == 5 and kinds == ["cordon", "cornice", "sill_ledge"]
+          and sorted(o["host"] for o in objs if o["kind"] == "surround") == ["O5", "O6", "O7"]
+          and all(spec["systems"][o["system"]]["template"] == "FS_Surround" for o in objs),
+          f"{len(spec.get('linear', []))} {kinds}; objects {[o['id'] for o in objs]}")
     l1 = next(it for it in spec["linear"] if it["id"] == "L1")
     check("cornice at v = 7.30 (EAVE of the pilot) over the whole facade", abs(l1["v"]["v"] - 7.30) < 1e-9 and l1["s"]["v"][0] == 0, str(l1["s"]["v"]))
     gate = spec["systems"]["door.gate"]
@@ -74,15 +79,18 @@ def offline() -> dict:
     check("photo source carries the camera of the rectification", bool(cam) and cam["D"] > 0, f"s {cam['s']}, v {cam['v']}, D {cam['D']}" if cam else "")
 
     bad = copy.deepcopy(spec)
-    jl = next(it for it in bad["linear"] if it["id"] == "O5_jl")
-    jl["s"]["v"] = [1.25, 1.37]                                  # jamb pushed in front of the window
+    sl = next(it for it in bad["linear"] if it["id"] == "O5_sill")
+    sl["v"]["v"] = 5.0                                           # sill ledge pushed up in front of the window
     check("validator: linear element in front of an opening is an error", any("in front of opening O5" in e for e in validate(bad)[0]))
+    bad = copy.deepcopy(spec)
+    next(o for o in bad["objects"] if o["id"] == "O6_sur")["origin"]["v"][0] = 3.20   # surround shifted onto O6's left jamb
+    check("validator: surround not at the jamb of its opening is an error", any("origin s at the jamb" in e for e in validate(bad)[0]))
     bad = copy.deepcopy(spec)
     bad["systems"]["prof.kordon"]["polygon_wv"][0] = [-0.05, 0]
     check("validator: profile reaching into the wall (x < 0) is an error", any("x >= 0" in e for e in validate(bad)[0]))
     bad = copy.deepcopy(spec)
-    next(it for it in bad["linear"] if it["id"] == "O6_jr")["s"]["v"] = [4.38, 4.55]
-    check("validator: jamb band width != profile width is an error", any("band width" in e for e in validate(bad)[0]))
+    next(o for o in bad["objects"] if o["id"] == "O6_sur")["params"]["opW"]["v"] = 1.17
+    check("validator: surround width != width of its opening is an error", any("opening width opW" in e for e in validate(bad)[0]))
     bad = copy.deepcopy(spec)
     bad["systems"]["prof.rimsa_okap"]["h"]["v"] = 0.12
     check("validator: profile h != polygon extent is an error", any("polygon extent" in e for e in validate(bad)[0]))
@@ -163,8 +171,8 @@ def live(spec: dict, port: int, save: bool) -> None:
 
     ver = verify(spec, PROJECT, port, OUT, verbose=False)
     check("verify PASS (openings, linear, types, properties)", ver["pass"], "; ".join(ver["problems"]))
-    check("linear elements on the facade layer = spec (8 beams, 6 columns)", ver["count"]["linear_model"] == ver["count"]["linear_spec"] == {"beam": 8, "column": 6},
-          str(ver["count"]["linear_model"]))
+    check("linear elements / objects on the facade layer = spec (5 beams, 0 columns, 3 FS_Surround objects)",
+          ver["count"]["linear_model"] == ver["count"]["linear_spec"] == {"beam": 5, "column": 0, "object": 3}, str(ver["count"]["linear_model"]))
     tol = spec["tolerances"]["build"] * 100
     check("delta of all elements <= 1 cm (parameters and 3D)", max(ver["max_delta_cm"].values()) <= tol + 1e-9, str(ver["max_delta_cm"]))
 
@@ -206,8 +214,9 @@ def live(spec: dict, port: int, save: bool) -> None:
     l1 = [e for e in edges if e["item"] == "L1"]
     check("C3 cornice L1: both edges on the photo within +-3 cm (camera projection)", len(l1) == 2 and all(abs(e["delta_cm"]) <= 3.0 for e in l1),
           "; ".join(f"{e['edge']}: photo {e['v_photo']:.3f}, model {e['v_model_projected']:.3f}, delta {e['delta_cm']:+.1f} cm" for e in l1))
-    others = [e for e in edges if e["item"] != "L1"]
-    check("C3 other edges (string course +-3 cm, sills / surround heads +-5 cm)", all(abs(e["delta_cm"]) <= e["tol_cm"] for e in others),
+    others = [e for e in edges if e["item"] != "L1"] + ver["photo_edges"][len(edges):]
+    check("C3 other edges (string course +-3 cm, sill ledges +-5 cm, surrounds and masonry openings of the 2nd floor +-3 cm)",
+          all(abs(e["delta_cm"]) <= e["tol_cm"] for e in others) and len(others) == 2 + 3 + 3 * 3 + 3 * 3,
           f"max |delta| {max(abs(e['delta_cm']) for e in others):.1f} cm over {len(others)} edges")
     for key in ("overlay_png",):
         pth = Path(ver[key])
@@ -253,10 +262,14 @@ def live(spec: dict, port: int, save: bool) -> None:
     empty = [f"{i}.{n}" for i, vals in zip(lin_ids, pv) for n, v in zip(("FS_zdroj", "FS_istota", "FS_spec"), vals.get("propertyValues", []))
              if not v.get("propertyValue", {}).get("value")]
     check("every linear element has FS_zdroj, FS_istota, FS_spec", not empty, "14 x 3" if not empty else str(empty))
-    favs = {k: set(ac.tapir("GetFavoritesByType", {"elementType": k}).get("favorites", [])) for k in ("Beam", "Column", "Door")}
-    want = {"Beam": ["FS lin.rimsa_okap", "FS lin.kordon", "FS lin.parapet_rimsa", "FS lin.sambrana_h"], "Column": ["FS lin.sambrana_v"], "Door": ["FS door.gate"]}
+    favs = {k: set(ac.tapir("GetFavoritesByType", {"elementType": k}).get("favorites", [])) for k in ("Beam", "Door")}
+    want = {"Beam": ["FS lin.rimsa_okap", "FS lin.kordon", "FS lin.parapet_rimsa"], "Door": ["FS door.gate"]}
     miss = [n for k, ns in want.items() for n in ns if n not in favs[k]]
-    check("FS favourites of the linear systems and FS door.gate exist", not miss, "6/6" if not miss else str(miss))
+    check("FS favourites of the linear systems and FS door.gate exist", not miss, "4/4" if not miss else str(miss))
+    sur_ids = [o["id"] for o in spec["objects"]]
+    sd = existing(ac, [st[i]["guid"] for i in sur_ids])
+    lp_ok = [i for i in sur_ids if sd.get(st[i]["guid"], {}).get("details", {}).get("libPart", {}).get("name") == "FS_Surround"]
+    check("surrounds O5..O7 are FS_Surround objects (one element per window)", lp_ok == sur_ids, str(lp_ok))
     print(f"  live part {time.monotonic() - t0:.1f} s")
     if save:
         ac2 = TapirClient(port=port, timeout=300)

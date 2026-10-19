@@ -61,7 +61,8 @@ def offline() -> dict:
     errors, warnings = validate(spec)
     check("I2 spec from the adapter is valid", not errors, "; ".join(errors))
     fav = {s["favorite"] for s in spec["systems"].values() if fs_system(s) and s["type"] in ("wall", "window", "door")}
-    check("spec has 4 FS systems (wall, window, shop door, gate)", fav == {"FS wall.omietka_tehla_450", "FS win.2kr", "FS door.shop_sl", "FS door.gate"}, str(sorted(fav)))
+    check("spec has 5 FS systems (render wall, cladding wall of the ground floor, window, shop door, gate)",
+          fav == {"FS wall.omietka_tehla_450", "FS wall.obklad_tehla_480", "FS win.2kr", "FS door.shop_sl", "FS door.gate"}, str(sorted(fav)))
     check("O4 is merged into O3 (one frame on the photo)", next(o for o in spec["openings"] if o["id"] == "O4").get("merged_into") == "O3")
 
     bad = copy.deepcopy(spec)
@@ -114,12 +115,12 @@ def live(spec: dict, port: int, save: bool) -> None:
     ac = TapirClient(port=port, timeout=90)
     ac.guard_project(PROJECT)
     # B1: favourites, read independently
-    want = {"Wall": ["FS wall.omietka_tehla_450"], "Window": ["FS win.2kr"], "Door": ["FS door.shop_sl", "FS door.gate"]}
+    want = {"Wall": ["FS wall.omietka_tehla_450", "FS wall.obklad_tehla_480"], "Window": ["FS win.2kr"], "Door": ["FS door.shop_sl", "FS door.gate"]}
     missing = []
     for kind, names in want.items():
         have = set(ac.tapir("GetFavoritesByType", {"elementType": kind}).get("favorites", []))
         missing += [n for n in names if n not in have]
-    check("B1 FS favourites exist for every system of the spec", not missing, f"missing {missing}" if missing else "4/4")
+    check("B1 FS favourites exist for every system of the spec", not missing, f"missing {missing}" if missing else "5/5")
 
     # B2: types from verify + explicit, independent spot checks of the GDL parameters
     trows = list(__import__("csv").DictReader(open(ver["types_csv"], encoding="utf-8")))
@@ -132,9 +133,10 @@ def live(spec: dict, port: int, save: bool) -> None:
     st = json.loads((OUT / HOUSE / "state.json").read_text(encoding="utf-8"))["elements"]
     gp = gdl_params(ac, [st[i]["guid"] for i in ("O1", "O2", "O3", "O5")])
     g = {i: gp[st[i]["guid"]] for i in ("O1", "O2", "O3", "O5")}
+    bar_o5 = next(o for o in spec["openings"] if o["id"] == "O5")["bar_h"]["v"]       # 0.53 since pilot A (masonry bottom 4.80)
     spot = {
         "O5 2 sashes (Double Window 27, both opening types set)": sum(1 for k in ("gs_optype_05", "gs_optype_01") if g["O5"].get(k)) == 2,
-        "O5 glazing bar: 'Divided' at 0.47": g["O5"]["iMullionStyle_05"] == 6 and abs(g["O5"]["gs_horiz_div_height_05"] - 0.47) < 1e-6,
+        f"O5 glazing bar: 'Divided' at {bar_o5} (spec)": g["O5"]["iMullionStyle_05"] == 6 and abs(g["O5"]["gs_horiz_div_height_05"] - bar_o5) < 1e-6,
         "O5 no transom": g["O5"]["gs_UTrans"] is False,
         "O3 one leaf + fixed sidelight + transom": g["O3"]["ifc_optypestr"] == "Swing Fixed" and g["O3"]["ifc_TransomThickness"] > 0,
         "O3 sidelight 0.84 visible (O4 width)": abs(g["O3"]["gs_sidelight_width_right"] - g["O3"]["gs_frame_width"] - 0.84) < 1e-6,
@@ -164,6 +166,15 @@ def live(spec: dict, port: int, save: bool) -> None:
     check("B3 wall is Composite with the spec build-up (outside -> inside)", wd["structureType"] == "Composite" and comp_name == comp["name"] and not diffs,
           f"{wd['structureType']}, {comp_name}, " + (" | ".join(f"{s['material']} {s['thickness']['v']}" for s in comp["skins"]) if not diffs else "; ".join(diffs)))
     check("B3 wall thickness = zone thickness", abs(wd["begThickness"] - spec["zones"][0]["thickness"]["v"]) < 1e-6, f"{wd['begThickness']}")
+    # pilot A: the ground floor is zone Z2 with its own build-up (stone cladding)
+    z2 = next(z for z in spec["zones"] if z["id"] == "Z2")
+    wd2 = existing(ac, [st["Z2"]["guid"]])[st["Z2"]["guid"]]["details"]
+    comp2 = spec["systems"][z2["system"]]["composite"]
+    name2 = next((n for n, a in attrs.composite.items() if a["attributeId"]["guid"] == (wd2.get("compositeId") or {}).get("guid")), None)
+    diffs2 = fs_systems.composite_differences(ac, comp2, attrs) if name2 == comp2["name"] else ["wall uses another composite"]
+    check("B3 zone Z2 (ground floor) is Composite with the cladding build-up, thickness = zone", wd2["structureType"] == "Composite"
+          and name2 == comp2["name"] and not diffs2 and abs(wd2["begThickness"] - z2["thickness"]["v"]) < 1e-6,
+          f"{name2}: " + (" | ".join(f"{s['material']} {s['thickness']['v']}" for s in comp2["skins"]) if not diffs2 else "; ".join(diffs2)))
 
     # B4: properties on every element, read independently
     _, props = fs_systems.property_ids(ac)

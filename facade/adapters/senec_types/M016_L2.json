@@ -1,0 +1,1051 @@
+{
+ "about": "M016_L2 (ČSOB, Lichnerova) - pilot A 2026-10-19: wall zones of the front (left / rizalit / right) and of the east side (corner = nárožie), arched gable, fill types and corrections read by hand from kontrola/fasada_M016_J_rektif.jpg (S = 100 px/m, luminance profiles). The east side has no rectified photo - its values are the pilot's ODHAD.",
+ "source": {
+  "id": "S6",
+  "type": "photo",
+  "file": "kontrola/fasada_M016_J_rektif.jpg",
+  "note": "pilot A 2026-10-19: luminance profiles of the rectified photo IMG_8439 (median over strips); the camera stands right of the facade (yaw -57.9 deg): left reveals are visible - the pilot read the right 2nd floor windows and the right shop window on the frame (0.04-0.24 m too far right); camera height 0.95 m and distance 22.4 m from rektifikacia_parametre.json, camera s unknown (no foot point stored) - out-of-plane edges are corrected in v only"
+ },
+ "camera": {
+  "s": null,
+  "v": 0.95,
+  "D": 22.4,
+  "src": "S6",
+  "conf": "odhad",
+  "note": "kontrola/rektifikacia_parametre.json M016_J: cam_height_check_m 0.95, cam_dist_m 22.4, yaw -57.9; s not known - horizontal edges only"
+ },
+ "planes": [
+  {
+   "id": "S",
+   "path": "S",
+   "outside": "right_of_ab",
+   "joins": {
+    "a": "F"
+   },
+   "conf": "meranie",
+   "note": "east gable side of the corner house; a = the corner with the front (nárožie)"
+  }
+ ],
+ "reference_joins": {
+  "b": "S"
+ },
+ "systems_from": {
+  "M015_L1": [
+   "wall.omietka_tehla_450"
+  ]
+ },
+ "systems": {
+  "wall.omietka_tehla_570": {
+   "type": "wall",
+   "structure": "Composite",
+   "reference_line": "Outside",
+   "base_favorite": "Cihla plná - nosná, 300",
+   "favorite": "FS wall.omietka_tehla_570",
+   "composite": {
+    "name": "FS wall.omietka_tehla_570",
+    "skins": [
+     {
+      "type": "Finish",
+      "material": "Omítka - venkovní",
+      "thickness": {
+       "v": 0.02,
+       "src": "S1",
+       "conf": "odhad",
+       "note": "render visible on the upper floor (green); thickness typological"
+      }
+     },
+     {
+      "type": "Core",
+      "material": "Cihly plné - nosné",
+      "thickness": {
+       "v": 0.53,
+       "src": null,
+       "conf": "odhad",
+       "note": "brick of the rizalit: the wall 0.41 + the projection 0.12 (ODHAD of the pilot RZ)"
+      }
+     },
+     {
+      "type": "Finish",
+      "material": "Omítka - vnitřní",
+      "thickness": {
+       "v": 0.02,
+       "src": null,
+       "conf": "default",
+       "note": "inside plaster, typological"
+      }
+     }
+    ]
+   },
+   "conf": "odhad",
+   "src": "S6",
+   "note": "central rizalit: render + solid brick, 0.12 m in front of the facade, inside face aligned with the neighbouring zones"
+  },
+  "door.2kr_white": {
+   "type": "door",
+   "libpart": "Double Door with Transom 27",
+   "favorite": "FS door.2kr_white",
+   "nominal": "wallhole",
+   "base_libpart": true,
+   "leaves": {
+    "v": 2,
+    "src": "S6",
+    "conf": "odhad",
+    "note": "two leaves (entrance portal / balcony door of the rizalit; the photo shows 4 glazed fields)"
+   },
+   "transom": {
+    "v": false,
+    "src": "S6",
+    "conf": "odhad",
+    "note": "no transom over the leaves visible"
+   },
+   "sidelight": {
+    "v": "none",
+    "src": "S6",
+    "conf": "odhad"
+   },
+   "frame_surface": {
+    "v": "Barva 02 - titanově bílá",
+    "src": "S6",
+    "conf": "meranie",
+    "note": "white frames"
+   },
+   "conf": "odhad",
+   "src": "S6",
+   "note": "glazed entrance portal and balcony door of the rizalit as a two-leaf door (Double Door with Transom 27 without transom); the fixed side fields are not separate - simplification (curtain wall I5)"
+  },
+  "door.arch_2kr": {
+   "type": "door",
+   "libpart": "Arch Double Door 27",
+   "favorite": "FS door.arch_2kr",
+   "nominal": "wallhole",
+   "base_libpart": true,
+   "leaves": {
+    "v": 2,
+    "src": "S6",
+    "conf": "odhad",
+    "note": "two glazed leaves to the attic balcony"
+   },
+   "sidelight": {
+    "v": "none",
+    "src": "S6",
+    "conf": "odhad"
+   },
+   "frame_surface": {
+    "v": "Barva 02 - titanově bílá",
+    "src": "S6",
+    "conf": "meranie",
+    "note": "white frames"
+   },
+   "conf": "odhad",
+   "src": "S6",
+   "note": "balcony door of the arched gable: door + the arched lunette of the pilot as ONE arched door (semicircular head r 1.20 = half width), Arch Double Door 27 placed by library part name (T7)"
+  },
+  "win.fixed": {
+   "type": "window",
+   "favorite": "Hliníkové okno - pevné",
+   "conf": "default",
+   "src": null,
+   "note": "shop windows (4-5 glazed fields with a transom on the photo) - existing favourite, divisions not modelled (curtain wall I5)"
+  },
+  "win.1kr": {
+   "type": "window",
+   "favorite": "Plastové okno - jednokřídlé",
+   "conf": "odhad",
+   "src": "S6",
+   "note": "2nd floor windows: one sash, white frame (photo, right pair); existing favourite (no FS type for a single sash yet)"
+  },
+  "gdl.arch_gable": {
+   "type": "gdl",
+   "template": "FS_ArchGable",
+   "classification": "Zeď",
+   "conf": "odhad",
+   "src": "S2",
+   "note": "arched gable of the rizalit above the springing: semicircular ring rIn..rOut as deep as the rizalit wall (GDL template, ADR D2: GDL before morph - a wall with an arched top is not possible through the API)"
+  },
+  "prof.pas_m016": {
+   "type": "profile",
+   "name": "FS prof.pas_m016",
+   "polygon_wv": [
+    [
+     0,
+     0
+    ],
+    [
+     0.2,
+     0
+    ],
+    [
+     0.2,
+     0.49
+    ],
+    [
+     0,
+     0.49
+    ]
+   ],
+   "material": "Omítka - venkovní",
+   "edge_surface": "Barva 18 - královská modrá",
+   "w": {
+    "v": 0.2,
+    "src": "S2",
+    "conf": "odhad",
+    "note": "band sbox T..T+0.20 in domy.py (projection not visible on the frontal photo)"
+   },
+   "h": {
+    "v": 0.49,
+    "src": "S6",
+    "conf": "meranie",
+    "note": "blue band seen v' 2.29 .. 2.79 (left) / 2.33 .. 2.82 (right) - 0.49 with the camera (residual tilt of the rectification 3-4 cm over the facade); the pilot has 2.30 .. 2.85"
+   },
+   "conf": "odhad",
+   "src": "S6",
+   "note": "blue sign fascia over the ground floor (wraps the corner)"
+  },
+  "prof.pas_riz_m016": {
+   "type": "profile",
+   "name": "FS prof.pas_riz_m016",
+   "polygon_wv": [
+    [
+     0,
+     0
+    ],
+    [
+     0.08,
+     0
+    ],
+    [
+     0.08,
+     0.49
+    ],
+    [
+     0,
+     0.49
+    ]
+   ],
+   "material": "Omítka - venkovní",
+   "edge_surface": "Barva 18 - královská modrá",
+   "w": {
+    "v": 0.08,
+    "src": "S2",
+    "conf": "odhad",
+    "note": "the band front is flush over the rizalit: 0.20 - 0.12"
+   },
+   "h": {
+    "v": 0.49,
+    "src": "S6",
+    "conf": "meranie",
+    "note": "blue band seen v' 2.29 .. 2.79 (left) / 2.33 .. 2.82 (right) - 0.49 with the camera (residual tilt of the rectification 3-4 cm over the facade); the pilot has 2.30 .. 2.85"
+   },
+   "conf": "odhad",
+   "src": "S6",
+   "note": "band on the face of the rizalit"
+  },
+  "prof.sokel_m016": {
+   "type": "profile",
+   "name": "FS prof.sokel_m016",
+   "polygon_wv": [
+    [
+     0,
+     0
+    ],
+    [
+     0.03,
+     0
+    ],
+    [
+     0.03,
+     0.25
+    ],
+    [
+     0,
+     0.25
+    ]
+   ],
+   "material": "Kamenný obklad",
+   "edge_surface": "Kámen - žula šedá",
+   "w": {
+    "v": 0.03,
+    "src": "S2",
+    "conf": "odhad",
+    "note": "plinth sbox T..T+0.03 in domy.py"
+   },
+   "h": {
+    "v": 0.25,
+    "src": "S2",
+    "conf": "meranie",
+    "note": "dark stone plinth, top v 0.28 on the photo (9.1-9.6), pilot 0.25"
+   },
+   "conf": "odhad",
+   "src": "S6",
+   "note": "dark stone plinth between the openings"
+  },
+  "prof.naroznik_m016": {
+   "type": "profile",
+   "name": "FS prof.naroznik_m016",
+   "polygon_wv": [
+    [
+     0,
+     0
+    ],
+    [
+     0.04,
+     0
+    ],
+    [
+     0.04,
+     0.49
+    ],
+    [
+     -0.3,
+     0.49
+    ],
+    [
+     -0.3,
+     0.45
+    ],
+    [
+     0,
+     0.45
+    ]
+   ],
+   "material": "Kamenný obklad",
+   "edge_surface": "Kámen - mramor černý",
+   "corner_profile": true,
+   "h": {
+    "v": 0.49,
+    "src": "S2",
+    "conf": "odhad",
+    "note": "0.45 on the front + 0.04 cladding of the side (domy.py corner_column, Street View)"
+   },
+   "conf": "odhad",
+   "src": "S2",
+   "note": "L-shaped dark corner cladding (nárožný pilaster): 0.45 on the front, 0.30 on the side, 0.04 thick; profile x = out of the front, y = along the front from s = L - 0.45; the side leg reaches x = -0.30 (behind the front plane, in front of the side)"
+  },
+  "prof.sill_m016": {
+   "type": "profile",
+   "name": "FS prof.sill_m016",
+   "polygon_wv": [
+    [
+     0,
+     0
+    ],
+    [
+     0.05,
+     0
+    ],
+    [
+     0.05,
+     0.05
+    ],
+    [
+     0,
+     0.05
+    ]
+   ],
+   "material": "Pozinkovaný plech",
+   "edge_surface": "Barva 02 - titanově bílá",
+   "w": {
+    "v": 0.05,
+    "src": "S2",
+    "conf": "odhad",
+    "note": "sill(...) proj 0.05 in geo.py"
+   },
+   "h": {
+    "v": 0.05,
+    "src": "S2",
+    "conf": "odhad",
+    "note": "sill(...) h 0.05 in geo.py; photo: sill nose shadow at v' 4.075"
+   },
+   "conf": "odhad",
+   "src": "S6",
+   "note": "window sill (white)"
+  },
+  "lin.pas_m016": {
+   "type": "linear",
+   "tool": "beam",
+   "profile": "prof.pas_m016",
+   "favorite": "FS lin.pas_m016",
+   "conf": "odhad",
+   "src": "S6"
+  },
+  "lin.pas_riz_m016": {
+   "type": "linear",
+   "tool": "beam",
+   "profile": "prof.pas_riz_m016",
+   "favorite": "FS lin.pas_riz_m016",
+   "conf": "odhad",
+   "src": "S6"
+  },
+  "lin.sokel_m016": {
+   "type": "linear",
+   "tool": "beam",
+   "profile": "prof.sokel_m016",
+   "favorite": "FS lin.sokel_m016",
+   "conf": "odhad",
+   "src": "S2"
+  },
+  "lin.naroznik_m016": {
+   "type": "linear",
+   "tool": "column",
+   "profile": "prof.naroznik_m016",
+   "favorite": "FS lin.naroznik_m016",
+   "conf": "odhad",
+   "src": "S2",
+   "note": "corner pilaster = one Column with the L profile (one element round the corner)"
+  },
+  "lin.sill_m016": {
+   "type": "linear",
+   "tool": "beam",
+   "profile": "prof.sill_m016",
+   "favorite": "FS lin.sill_m016",
+   "conf": "odhad",
+   "src": "S2"
+  }
+ },
+ "zones": {
+  "Z1": {
+   "system": "wall.omietka_tehla_450",
+   "role": "main"
+  },
+  "Z2": {
+   "system": "wall.omietka_tehla_570",
+   "role": "rizalit",
+   "thickness": {
+    "v": 0.57,
+    "src": null,
+    "conf": "odhad",
+    "note": "0.45 + rizalit 0.12: inside face aligned with Z1 / Z3"
+   }
+  },
+  "Z3": {
+   "system": "wall.omietka_tehla_450",
+   "role": "main"
+  },
+  "Z4": {
+   "system": "wall.omietka_tehla_450",
+   "role": "side"
+  }
+ },
+ "openings": {
+  "O1": {
+   "system": "win.fixed",
+   "rect": {
+    "v": [
+     1.28,
+     4.7,
+     0.08,
+     2.3
+    ],
+    "src": "S6",
+    "conf": "meranie",
+    "note": "right edge 4.71 (wall); top = bottom of the band (glass dark up to v' 2.285); left edge behind the tree (pilot 1.28)"
+   }
+  },
+  "O2": {
+   "system": "win.1kr"
+  },
+  "O3": {
+   "system": "win.1kr"
+  },
+  "O4": {
+   "system": "door.2kr_white"
+  },
+  "O5": {
+   "system": "door.2kr_white"
+  },
+  "O6": {
+   "system": "door.arch_2kr",
+   "head_in": "A1",
+   "rect": {
+    "v": [
+     6.15,
+     8.55,
+     7.1,
+     9.2
+    ],
+    "src": "S2",
+    "conf": "odhad",
+    "note": "door of the arched gable incl. its semicircular head (springing AV 8.00 + rIn 1.20); domy.py has the door to 8.00 + a recessed lunette r 1.20 above it, otvory.py 7.10 .. 9.10 - NEJEDNOZNAČNÉ, the photo is covered by the tree"
+   },
+   "shoulder_h": {
+    "v": 0.9,
+    "src": "S2",
+    "conf": "odhad",
+    "note": "springing AV 8.00 - 7.10"
+   }
+  },
+  "O7": {
+   "system": "win.fixed",
+   "rect": {
+    "v": [
+     9.46,
+     13.44,
+     0.08,
+     2.3
+    ],
+    "src": "S6",
+    "conf": "meranie",
+    "note": "masonry: left edge 9.46 (wall -> reveal; frame 9.66, pilot 9.70), right edge 13.44 (the frame is visible up to it, the post stands right of it), top = bottom of the band"
+   },
+   "photo_edges": [
+    {
+     "name": "ľavá hrana murovaného otvoru výkladu (stena -> ostenie)",
+     "edge": "left",
+     "range": [
+      0.6,
+      1.8
+     ],
+     "brighter": "left",
+     "tol": 0.03,
+     "search": 0.05
+    }
+   ]
+  },
+  "O8": {
+   "system": "win.1kr",
+   "rect": {
+    "v": [
+     10.47,
+     11.62,
+     4.13,
+     5.62
+    ],
+    "src": "S6",
+    "conf": "meranie",
+    "note": "masonry: left 10.465 (wall -> reveal; frame 10.66, pilot 10.55), right 11.62, top 5.62 (pilot 5.58), bottom on the sill (pilot)"
+   },
+   "photo_edges": [
+    {
+     "name": "ľavá hrana murovaného otvoru (stena -> ostenie)",
+     "edge": "left",
+     "range": [
+      4.4,
+      5.4
+     ],
+     "brighter": "left",
+     "tol": 0.03,
+     "search": 0.05
+    },
+    {
+     "name": "pravá hrana murovaného otvoru",
+     "edge": "right",
+     "range": [
+      4.4,
+      5.4
+     ],
+     "brighter": "right",
+     "tol": 0.03,
+     "search": 0.05
+    },
+    {
+     "name": "horná hrana murovaného otvoru",
+     "edge": "top",
+     "range": [
+      10.7,
+      11.5
+     ],
+     "brighter": "above",
+     "tol": 0.03,
+     "search": 0.05
+    }
+   ]
+  },
+  "O9": {
+   "system": "win.1kr",
+   "rect": {
+    "v": [
+     12.08,
+     13.22,
+     4.13,
+     5.62
+    ],
+    "src": "S6",
+    "conf": "meranie",
+    "note": "masonry: left 12.085 (wall -> reveal; frame 12.26, pilot 12.15), right 13.215, top 5.62"
+   },
+   "photo_edges": [
+    {
+     "name": "ľavá hrana murovaného otvoru (stena -> ostenie)",
+     "edge": "left",
+     "range": [
+      4.4,
+      5.4
+     ],
+     "brighter": "left",
+     "tol": 0.03,
+     "search": 0.05
+    },
+    {
+     "name": "pravá hrana murovaného otvoru",
+     "edge": "right",
+     "range": [
+      4.4,
+      5.4
+     ],
+     "brighter": "right",
+     "tol": 0.03,
+     "search": 0.05
+    },
+    {
+     "name": "horná hrana murovaného otvoru",
+     "edge": "top",
+     "range": [
+      12.3,
+      13.1
+     ],
+     "brighter": "above",
+     "tol": 0.03,
+     "search": 0.05
+    }
+   ]
+  },
+  "O10": {
+   "system": "win.fixed",
+   "note": "východná strana, výklad (ODHAD pilota, IMG_8439 okraj)"
+  },
+  "O11": {
+   "system": "win.fixed",
+   "note": "východná strana, výklad pokračuje (D1 2026-10-08, ODHAD ±0,4 m)"
+  },
+  "O12": {
+   "system": "win.1kr",
+   "note": "východná strana, 2.NP (ODHAD ±0,4 m)"
+  },
+  "O13": {
+   "system": "win.1kr",
+   "note": "východná strana, 2.NP (ODHAD ±0,4 m)"
+  }
+ },
+ "linear": [
+  {
+   "id": "B1",
+   "kind": "band",
+   "system": "lin.pas_m016",
+   "axis": "h",
+   "s": {
+    "v": [
+     0.1,
+     5.7
+    ],
+    "src": "S2",
+    "conf": "meranie",
+    "note": "band sbox from 0.10 (domy.py) to the rizalit"
+   },
+   "v": {
+    "v": 2.3,
+    "src": "S2",
+    "conf": "meranie",
+    "note": "BAND0 2.30; photo v' 2.29 (left) .. 2.33 (right)"
+   },
+   "photo_edges": [
+    {
+     "name": "spodná hrana pásu",
+     "corner": "bottom_front",
+     "s": [
+      1.5,
+      4.5
+     ],
+     "brighter": "above",
+     "photo_v": 2.29,
+     "tol": 0.03
+    },
+    {
+     "name": "horná hrana pásu",
+     "corner": "top_front",
+     "s": [
+      1.5,
+      4.5
+     ],
+     "brighter": "above",
+     "photo_v": 2.79,
+     "tol": 0.03
+    }
+   ],
+   "note": "modrý pás nad parterom"
+  },
+  {
+   "id": "B2",
+   "kind": "band",
+   "system": "lin.pas_riz_m016",
+   "axis": "h",
+   "s": {
+    "v": [
+     5.7,
+     9.0
+    ],
+    "src": "S2",
+    "conf": "meranie",
+    "note": "over the rizalit"
+   },
+   "v": {
+    "v": 2.3,
+    "src": "S2",
+    "conf": "meranie",
+    "note": "BAND0"
+   },
+   "w": {
+    "v": 0.12,
+    "src": "S2",
+    "conf": "odhad",
+    "note": "on the face of the rizalit (RZ)"
+   },
+   "note": "pás na rizalite (líce zarovno s pásom vedľa)"
+  },
+  {
+   "id": "B3",
+   "kind": "band",
+   "system": "lin.pas_m016",
+   "axis": "h",
+   "wrap": "b",
+   "s": {
+    "v": [
+     9.0,
+     "L+0.2"
+    ],
+    "src": "S2",
+    "conf": "meranie",
+    "note": "to the corner and 0.20 round it (covers the end of the side band)"
+   },
+   "v": {
+    "v": 2.3,
+    "src": "S2",
+    "conf": "meranie",
+    "note": "BAND0"
+   },
+   "photo_edges": [
+    {
+     "name": "spodná hrana pásu",
+     "corner": "bottom_front",
+     "s": [
+      10.0,
+      13.0
+     ],
+     "brighter": "above",
+     "photo_v": 2.33,
+     "tol": 0.03
+    },
+    {
+     "name": "horná hrana pásu",
+     "corner": "top_front",
+     "s": [
+      10.0,
+      13.0
+     ],
+     "brighter": "above",
+     "photo_v": 2.82,
+     "tol": 0.03
+    }
+   ],
+   "note": "modrý pás - pravá časť, obchádza nárožie"
+  },
+  {
+   "id": "B4",
+   "kind": "band",
+   "system": "lin.pas_m016",
+   "axis": "h",
+   "plane": "S",
+   "s": {
+    "v": [
+     0,
+     6.4
+    ],
+    "src": "S2",
+    "conf": "odhad",
+    "note": "east side: band to about 6.4 m (D1 2026-10-08, ODHAD)"
+   },
+   "v": {
+    "v": 2.3,
+    "src": "S2",
+    "conf": "odhad",
+    "note": "BAND0"
+   },
+   "note": "pás na východnej strane (bez fotky)"
+  },
+  {
+   "id": "P1",
+   "kind": "plinth",
+   "system": "lin.sokel_m016",
+   "axis": "h",
+   "s": {
+    "v": [
+     0,
+     1.28
+    ],
+    "src": "S2",
+    "conf": "odhad",
+    "note": "plinth between the openings (domy.py)"
+   },
+   "v": {
+    "v": 0,
+    "src": "S2",
+    "conf": "odhad",
+    "note": "foot"
+   }
+  },
+  {
+   "id": "P2",
+   "kind": "plinth",
+   "system": "lin.sokel_m016",
+   "axis": "h",
+   "s": {
+    "v": [
+     4.7,
+     5.7
+    ],
+    "src": "S2",
+    "conf": "odhad",
+    "note": "to the rizalit"
+   },
+   "v": {
+    "v": 0,
+    "src": "S2",
+    "conf": "odhad",
+    "note": "foot"
+   }
+  },
+  {
+   "id": "P3",
+   "kind": "plinth",
+   "system": "lin.sokel_m016",
+   "axis": "h",
+   "s": {
+    "v": [
+     9.0,
+     9.46
+    ],
+    "src": "S6",
+    "conf": "meranie",
+    "note": "rizalit to the corrected shop window (pilot 9.70)"
+   },
+   "v": {
+    "v": 0,
+    "src": "S2",
+    "conf": "odhad",
+    "note": "foot"
+   }
+  },
+  {
+   "id": "P4",
+   "kind": "plinth",
+   "system": "lin.sokel_m016",
+   "axis": "h",
+   "s": {
+    "v": [
+     13.44,
+     "L-0.45"
+    ],
+    "src": "S6",
+    "conf": "odhad",
+    "note": "shop window to the corner pilaster"
+   },
+   "v": {
+    "v": 0,
+    "src": "S2",
+    "conf": "odhad",
+    "note": "foot"
+   }
+  },
+  {
+   "id": "P5",
+   "kind": "plinth",
+   "system": "lin.sokel_m016",
+   "axis": "h",
+   "plane": "S",
+   "s": {
+    "v": [
+     5.6,
+     "L"
+    ],
+    "src": "S2",
+    "conf": "odhad",
+    "note": "east side behind the shop window (the pilot plinth from 3.30 would stand in front of the extended shop window O11)"
+   },
+   "v": {
+    "v": 0,
+    "src": "S2",
+    "conf": "odhad",
+    "note": "foot"
+   }
+  },
+  {
+   "id": "K1",
+   "kind": "corner_pilaster",
+   "system": "lin.naroznik_m016",
+   "axis": "v",
+   "wrap": "b",
+   "s": {
+    "v": [
+     "L-0.45",
+     "L+0.04"
+    ],
+    "src": "S2",
+    "conf": "odhad",
+    "note": "dark corner column 0.45 on the front + 0.04 cladding of the side (Street View, domy.py)"
+   },
+   "v": {
+    "v": [
+     0,
+     2.3
+    ],
+    "src": "S2",
+    "conf": "odhad",
+    "note": "up to the band"
+   },
+   "note": "nárožný pilaster (tmavý obklad nárožia) - jeden stĺp s profilom L okolo rohu"
+  }
+ ],
+ "sills": {
+  "openings": [
+   "O2",
+   "O3",
+   "O8",
+   "O9",
+   "O12",
+   "O13"
+  ],
+  "system": "lin.sill_m016",
+  "side": {
+   "v": 0.06,
+   "src": "S2",
+   "conf": "odhad",
+   "note": "sill(...) side 0.06 in geo.py"
+  },
+  "photo_edges": {
+   "O8": [
+    10.7,
+    11.5
+   ],
+   "O9": [
+    12.3,
+    13.1
+   ]
+  }
+ },
+ "objects": [
+  {
+   "id": "A1",
+   "kind": "arch_gable",
+   "system": "gdl.arch_gable",
+   "zone": "Z2",
+   "origin": {
+    "v": [
+     7.35,
+     8.0,
+     0.12
+    ],
+    "src": "S2",
+    "conf": "odhad",
+    "note": "centre AC 7.35 on the springing AV 8.00 (domy.py, parallax-corrected from IMG_8439), on the face of the rizalit"
+   },
+   "params": {
+    "rIn": {
+     "v": 1.2,
+     "src": "S2",
+     "conf": "odhad",
+     "note": "arch_shell inner radius 1.20 = half width of the gable door O6"
+    },
+    "rOut": {
+     "v": 1.65,
+     "src": "S2",
+     "conf": "odhad",
+     "note": "AR 1.65: the arch spans the whole rizalit 5.70 .. 9.00"
+    },
+    "depth": {
+     "v": 0.57,
+     "src": null,
+     "conf": "odhad",
+     "note": "= thickness of the rizalit wall Z2"
+    },
+    "nSeg": {
+     "v": 24,
+     "src": null,
+     "conf": "default",
+     "note": "polygonal arc, 24 segments per half circle"
+    },
+    "bInfill": {
+     "v": false,
+     "src": "S2",
+     "conf": "odhad",
+     "note": "no closed lunette: the arched head of the door O6 fills the ring"
+    },
+    "infRecess": {
+     "v": 0.15,
+     "src": "S2",
+     "conf": "odhad",
+     "note": "pilot lunette recess (not used)"
+    }
+   },
+   "note": "oblúkový štít rizalitu nad pätkou oblúka (prstenec r 1,20 .. 1,65)"
+  }
+ ],
+ "pilot_mapping": {
+  "sbox:plinth": "model: plinths P1..P5 (lin.sokel_m016)",
+  "sbox:band": "model: bands B1..B4 (front left, rizalit, right round the corner, east side)",
+  "sbox:corner_column": "model: corner pilaster K1 (one column with an L profile round the corner)",
+  "arch_shell:arch": "model: arch gable A1 (GDL FS_ArchGable)",
+  "splate:arch": "model: the recessed lunette of the pilot is the arched head of the door O6 (Arch Double Door 27) inside A1",
+  "arch_shell:barrel_roof": "skip: valená strecha za oblúkovým štítom - strecha, nie fasáda",
+  "window_frame": "model: frames are part of the window / door elements",
+  "sill": "model: sills O2_sill..O13_sill (lin.sill_m016)",
+  "balcony": "skip: 2 balkóny rizalitu (segmentová doska + zábradlie) a balkón štítu na východnej strane - dosky a zábradlia (I6) nie sú v pilote A",
+  "sprism:roof": "skip: strecha - nie fasáda"
+ },
+ "simplifications": [
+  {
+   "ref": "zones[Z2], objects[A1]",
+   "text": "Rizalit je samostatná stena Z2 (0,12 m pred lícom, hrúbka 0,57) po pätku oblúka 8,00; oblúkový štít nad ňou je GDL objekt FS_ArchGable (polkruhový prstenec r 1,20–1,65 hĺbky steny). Stena s oblúkovým vrcholom sa cez API nedá (najbližšia natívna cesta podľa ADR D2: GDL pred morfom). Valená strecha za štítom nie je modelovaná.",
+   "proposal": "prijať; prípadne architekt nahradí stenou + SEO orezaním oblúkom"
+  },
+  {
+   "ref": "openings[O6]",
+   "text": "Dvere štítu sú jedny oblúkové dvojkrídlové dvere (Arch Double Door 27, pätka 8,00, polkruh r 1,20 = vrch 9,20) - pilot má dvere po 8,00 + zapustenú lunetu; otvory.py 7,10–9,10. Hlava oblúka stojí nad stenou Z2 v prstenci A1. NEJEDNOZNAČNÉ (strom).",
+   "proposal": "overiť záberom bez stromu (výška dverí, nadsvetlík v oblúku)"
+  },
+  {
+   "ref": "planes[S], linear[K1, B3]",
+   "text": "Nárožie: východná strana je druhá rovina S (stena Z4 so spoločným rohom referenčných čiar s pravou stenou Z3); tmavé nárožie je jeden stĺp s profilom L (0,45 na čele + 0,30 na boku, 4 cm), pás B3 prechádza 0,20 m za roh a nadväzuje na pás B4. Štít východnej strany nad odkvapom (okno 4,10–5,70, balkón) nie je modelovaný.",
+   "proposal": "štít doplniť ako stenu s orezaním strechou (mimo pilota A)"
+  },
+  {
+   "ref": "planes[S]",
+   "text": "Východná strana nemá rektifikovanú fotku: otvory a pás sú ODHAD pilota (±0,4–0,5 m), overlay voči fotke nie je možný.",
+   "proposal": "vyžiadať čelný záber východnej strany"
+  },
+  {
+   "ref": "openings[O1, O7, O10, O11]",
+   "text": "Výklady (4–5 polí s nadsvetlíkom) sú pevné okná z favoritu bez delenia; O10+O11 sa dotýkajú (jeden výklad).",
+   "proposal": "CW s rastrom (I5)"
+  },
+  {
+   "ref": "openings[O4, O5]",
+   "text": "Vstupná presklená stena a balkónové dvere rizalitu sú dvojkrídlové dvere bez bočných polí (Double Door with Transom 27 bez nadsvetlíka).",
+   "proposal": "CW (I5)"
+  },
+  {
+   "ref": "openings[O2, O3, O4, O5]",
+   "text": "Okná 2.NP vľavo (za stromom), vstup a balkónové dvere rizalitu sú podľa pilota bez prečítania hrán (strom, zábradlie, pás).",
+   "proposal": "prijať"
+  },
+  {
+   "ref": "linear[P3, P4, P5]",
+   "text": "Sokel je skrátený pri opravenom výklade O7 (9,00–9,46) a pri nárožnom pilastri (13,44–13,70); na východnej strane začína až za výkladom O11 (5,60), inak by stál pred otvorom.",
+   "proposal": "prijať"
+  },
+  {
+   "ref": "camera",
+   "text": "Kamera M016 nemá známu polohu pozdĺž fasády (s) - hrany mimo roviny (pás) sú prepočítané len vo výške; zvislé hrany sú len v rovine steny.",
+   "proposal": "doplniť foot_x z rektifikácie (pilot)"
+  },
+  {
+   "ref": "openings[O1, O4, O5, O7, O8, O9] (hrany × fotka automaticky)",
+   "text": "Automatická kontrola hrán (informatívna): ľavá hrana O1 za stromom (+4 cm), vstup O4 hore/dole bez kontrastu, ľavá hrana balkónových dverí O5 za stĺpikmi zábradlia (+4 cm), vrch výkladu O7 = spodok pásu (pás predstupuje 0,20 m, +3 cm), spodné hrany O8, O9 zakrýva parapet. Vykázané.",
+   "proposal": "prijať"
+  }
+ ],
+ "g1_proposals": {
+  "zones[Z2].w": "prijať 0,12 m (predsadenie rizalitu, ODHAD pilota)",
+  "objects[A1].origin": "prijať pätku 8,00 a stred 7,35 (pilot)",
+  "openings[O6].rect": "overiť (strom)",
+  "linear[K1].s": "prijať nárožný pilaster 0,45 m (Street View)"
+ }
+}

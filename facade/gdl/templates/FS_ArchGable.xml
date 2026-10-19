@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Symbol IsArchivable="false" IsPlaceable="true" MainGUID="0D4E8A11-E960-5E08-9731-5DF1AA3F460A" MigrationValue="Normal" Owner="0" Version="46">
+<!-- FS_ArchGable 1.0 - arched gable / archivolt above a wall (ADR-001 D5): the part of a wall above the springing
+     line whose top is a semicircle. Units: metres. Origin = centre of the arch on the springing line in the
+     outside wall face; x = along the facade, z = up, y = out of the wall plane (the body lies in y [-depth, 0]).
+     Ring between rIn and rOut (rIn = radius of the arched opening below it, e.g. an arch door head); optional
+     half-disc infill inside rIn, recessed by infRecess (a closed lunette). Polygonal arcs with nSeg segments. -->
+<Ancestry SectVersion="1" SectionFlags="0" SubIdent="0" Template="false">
+	<MainGUID>F938E33A-329D-4A36-BE3E-85E126820996</MainGUID>
+	<MainGUID>103E8D2C-8230-42E1-9597-46F84CCE28C0</MainGUID>
+</Ancestry>
+
+<CalledMacros SectVersion="2" SectionFlags="0" SubIdent="0">
+</CalledMacros>
+
+<ParamSection SectVersion="27" SectionFlags="0" SubIdent="0">
+	<ParamSectHeader>
+		<AutoHotspots>false</AutoHotspots>
+		<StatBits>
+			<STBit_FixSize/>
+		</StatBits>
+		<WDLeftFrame>0</WDLeftFrame>
+		<WDRightFrame>0</WDRightFrame>
+		<WDTopFrame>0</WDTopFrame>
+		<WDBotFrame>0</WDBotFrame>
+		<LayFlags>65535</LayFlags>
+		<WDMirrorThickness>0</WDMirrorThickness>
+		<WDWallInset>0</WDWallInset>
+	</ParamSectHeader>
+	<Parameters>
+		<Length Name="A">
+			<Description><![CDATA["Overall width (information only)"]]></Description>
+			<Value>3.3</Value>
+		</Length>
+		<Length Name="B">
+			<Description><![CDATA["Depth (information only)"]]></Description>
+			<Value>0.57</Value>
+		</Length>
+		<Length Name="ZZYZX">
+			<Description><![CDATA["Overall height (information only)"]]></Description>
+			<Value>1.65</Value>
+		</Length>
+		<Length Name="rIn">
+			<Description><![CDATA["Inner radius of the ring"]]></Description>
+			<Value>1.2</Value>
+		</Length>
+		<Length Name="rOut">
+			<Description><![CDATA["Outer radius (top of the gable)"]]></Description>
+			<Value>1.65</Value>
+		</Length>
+		<Length Name="depth">
+			<Description><![CDATA["Depth of the body into the wall"]]></Description>
+			<Value>0.57</Value>
+		</Length>
+		<Integer Name="nSeg">
+			<Description><![CDATA["Segments of a half circle"]]></Description>
+			<Value>24</Value>
+		</Integer>
+		<Boolean Name="bInfill">
+			<Description><![CDATA["Half-disc infill inside the ring (closed lunette)"]]></Description>
+			<Value>0</Value>
+		</Boolean>
+		<Length Name="infRecess">
+			<Description><![CDATA["Recess of the infill behind the wall face"]]></Description>
+			<Value>0.15</Value>
+		</Length>
+		<Material Name="matRing">
+			<Description><![CDATA["Ring surface (0 = object surface)"]]></Description>
+			<Value>0</Value>
+		</Material>
+		<Material Name="matInfill">
+			<Description><![CDATA["Infill surface (0 = object surface)"]]></Description>
+			<Value>0</Value>
+		</Material>
+	</Parameters>
+</ParamSection>
+
+<Script_1D SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+! FS_ArchGable 1.0 - master script
+n = MAX(nSeg, 2)
+]]></Script_1D>
+
+<Script_2D SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+HOTSPOT2 -rOut, 0
+HOTSPOT2 rOut, 0
+HOTSPOT2 -rOut, -depth
+HOTSPOT2 rOut, -depth
+PROJECT2 3, 270, 2
+]]></Script_2D>
+
+<Script_3D SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+HOTSPOT -rOut, 0, 0
+HOTSPOT rOut, 0, 0
+HOTSPOT -rOut, -depth, 0
+HOTSPOT rOut, -depth, 0
+HOTSPOT 0, 0, rOut
+HOTSPOT 0, -depth, rOut
+
+! after ROTX 90: local x = x, local y = up (z), extrusion along local z = into the wall (-y)
+IF matRing > 0 THEN MATERIAL matRing
+ROTX 90
+FOR i = 0 TO n
+	a = 180 * i / n
+	PUT rOut * COS(a), rOut * SIN(a), 15
+NEXT i
+FOR i = n TO 0 STEP -1
+	a = 180 * i / n
+	PUT rIn * COS(a), rIn * SIN(a), 15
+NEXT i
+PRISM_ NSP / 3, depth, GET(NSP)
+DEL 1
+
+IF bInfill AND depth > infRecess THEN
+	IF matInfill > 0 THEN MATERIAL matInfill
+	ADDY -infRecess
+	ROTX 90
+	FOR i = 0 TO n
+		a = 180 * i / n
+		PUT rIn * COS(a), rIn * SIN(a), 15
+	NEXT i
+	PRISM_ NSP / 3, depth - infRecess, GET(NSP)
+	DEL 2
+ENDIF
+]]></Script_3D>
+
+<Script_PR SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+VALUES "rIn" RANGE (0, ]
+VALUES "rOut" RANGE (0, ]
+VALUES "depth" RANGE (0, ]
+VALUES "nSeg" RANGE [2, 96]
+VALUES "infRecess" RANGE [0, ]
+]]></Script_PR>
+
+<Script_UI SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+]]></Script_UI>
+
+<Script_VL SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+]]></Script_VL>
+
+<Comment SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[FS_ArchGable 1.0 - tapir-private facade pipeline (ADR-001)]]></Comment>
+
+<Keywords SectVersion="1" SectionFlags="0" SubIdent="0"><![CDATA[FS facade arch gable stit oblukovy archivolt]]></Keywords>
+
+<Copyright SectVersion="1" SectionFlags="0" SubIdent="0">
+	<Author>tapir-private</Author>
+	<License>
+		<Type>CC BY</Type>
+		<Version>4.0</Version>
+	</License>
+</Copyright>
+
+</Symbol>

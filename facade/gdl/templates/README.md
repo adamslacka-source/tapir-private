@@ -33,7 +33,7 @@ Umiestnenie na fasádu s osou `a → b`: počiatok v ľavom dolnom rohu poľa / 
 **vľavo** od `a → b`; ak je exteriér **vpravo** (`outside: right_of_ab`, napr. M015), uhol `atan2(d) + 180°` a počiatok na
 **pravom** okraji (lokálne `x` potom beží proti `s`). Overené v teste K5 (M015, uhol 141°).
 
-Spoločné: 2D symbol `PROJECT2 3, 270, 2` + `HOTSPOT2` na rohoch; 3D z `BLOCK` (každý prvok = 1 hranol, 8 vrcholov) + `HOTSPOT`
+Spoločné: 2D symbol `PROJECT2 3, 270, 2` + `HOTSPOT2` na rohoch; 3D z `BLOCK` (každý prvok = 1 hranol, 8 vrcholov; `FS_ArchGable` z `PRISM_`, vrcholy 4·(nSeg+1) + výplň 2·(nSeg+1)) + `HOTSPOT`
 na rohoch obalového kvádra; povrchy ako parametre typu Material (`0` = povrch objektu z nastavení prvku). `A`, `ZZYZX` sú
 rozmery poľa (FS_Surround ich má len informatívne), `B` je informatívne (hĺbku určujú pomenované parametre).
 
@@ -48,6 +48,7 @@ Objekt (posledne použitý objekt), nie zo šablóny.
 | `FS_SpandrelPanel` | `A`, `ZZYZX`, `thk` hrúbka, `proj` vyloženie, `nDiv` delenie, `joint` škára, `matPanel` | `nDiv` rovnakých dielov `x [0, A]`, `y [proj, proj + thk]` |
 | `FS_CladdingPanels` | `A`, `ZZYZX`, `rx`, `ry` raster, `joint` škára, `thk`, `offs` odsadenie od steny, `matPanel` | raster od počiatku, škáry centrované na vnútorných čiarach rastra, vonkajšie hrany lícujú s 0 / `A`, 0 / `ZZYZX`; posledný stĺpec/riadok je zvyšok (môže byť úzky pás) |
 | `FS_Surround` | `opW`, `opH` otvor, `bandW` šírka pásu, `bandD` vyloženie, `bTop`, `bBottom`, `bLeft`, `bRight`, `headOvh` presah nadpražia, `matBand` | počiatok = ľavý dolný roh otvoru; ostenia `z [0, opH]`, nadpražie nad nimi `z [opH, opH + bandW]` cez ostenia + presah, spodný pás pod ostením |
+| `FS_ArchGable` | `rIn`, `rOut` polomery prstenca, `depth` hĺbka do steny, `nSeg` segmenty polkruhu, `bInfill` zapustená výplň (luneta), `infRecess`, `matRing`, `matInfill` | počiatok = stred oblúka na pätke v líci steny; polkruhový prstenec `rIn..rOut` z `PRISM_` (ROTX 90), telo `y [-depth, 0]` (v stene, nie pred ňou); výplň vnútri `rIn` od `-infRecess` po `-depth`. Pilot A: oblúkový štít rizalitu M016 nad stenou zóny (pätka = vrch zóny), hlavu oblúkových dverí `Arch Double Door 27` nesie prstenec |
 
 ## Zmena šablóny
 

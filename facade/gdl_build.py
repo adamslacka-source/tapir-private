@@ -41,7 +41,7 @@ CONVERTER = Path(r"C:\Program Files\Graphisoft\Archicad 29\LP_XMLConverter.exe")
 PROJECT = r"C:\FacadePilot\Fasada_pilot_A.pln"
 EMBEDDED_DIR = "FS_GDL"                         # folder inside the embedded library
 CONVERT_TIMEOUT = 120                            # s per converter call
-TEMPLATE_NAMES = ("FS_Louvers", "FS_SpandrelPanel", "FS_CladdingPanels", "FS_Surround")
+TEMPLATE_NAMES = ("FS_Louvers", "FS_SpandrelPanel", "FS_CladdingPanels", "FS_Surround", "FS_ArchGable")
 IGNORED_ERRORS = ("Missing ancestor",)
 
 

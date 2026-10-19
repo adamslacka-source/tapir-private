@@ -419,34 +419,36 @@ def ensure_favorites(ac: TapirClient, spec: dict, attrs: Attrs, composites: dict
     changes = 0
     ac.tapir("ChangeWindow", {"windowType": "3DModel"})          # modeller trap: create from the 3D window
     try:
-        # host wall = sample of the wall system when one is needed, else a plain basic wall
-        wall_sid = next((sid for sid, p in todo.items() if p["kind"] == "wall"), None)
-        host = {"begCoordinate": {"x": x0 + 12.0, "y": y0}, "endCoordinate": {"x": x0, "y": y0}, "floorIndex": floor,
-                "zCoordinate": 0.0, "height": 4.0, "referenceLineLocation": "Outside"}
-        if wall_sid:
-            c = todo[wall_sid]["content"]
-            host.update({"favoriteName": c["base"], "structureType": c["structure"], "referenceLineLocation": c["reference_line"]})
-            if c["compositeId"]:
-                host["compositeId"] = {"guid": c["compositeId"]}
-        else:
-            host.update({"structureType": "Basic", "thickness": 0.45})
-        res = ac.tapir("CreateWalls", {"wallsData": [host]})
-        host_guid = res["elements"][0].get("elementId", {}).get("guid")
-        if not host_guid:
-            raise TapirError(f"sample host wall: {res}")
-        manifest["scratch"].append(host_guid)
-        save_manifest(out_root, manifest)
-        if wall_sid:
-            r = ac.tapir("ModifyWalls", {"wallsWithDetails": [{"elementId": {"guid": host_guid},
-                                                                 "referenceMaterial": {"overridden": False},
-                                                                 "oppositeMaterial": {"overridden": False}}]})
-            if errs := results_ok(r["executionResults"]):
-                raise TapirError(f"ModifyWalls (surface overrides off): {errs}")
-            d = ac.tapir("GetDetailsOfElements", {"elements": [{"elementId": {"guid": host_guid}}]})["detailsOfElements"][0]["details"]
-            if d.get("structureType") != todo[wall_sid]["content"]["structure"] or \
-                    (d.get("compositeId") or {}).get("guid") != todo[wall_sid]["content"]["compositeId"]:
-                raise TapirError(f"sample wall: structure/composite not as sent ({d.get('structureType')}, {d.get('compositeId')})")
-            changes += _store_favorite(ac, host_guid, todo[wall_sid], existing["wall"], manifest, log)
+        # one sample wall per wall system to (re)store; the first one (or a plain basic wall) hosts the window/door samples
+        host_guid = None
+        for wi, sid in enumerate([sid for sid, p in todo.items() if p["kind"] == "wall"] or [None]):
+            yy = y0 - 3.0 * wi
+            host = {"begCoordinate": {"x": x0 + 12.0, "y": yy}, "endCoordinate": {"x": x0, "y": yy}, "floorIndex": floor,
+                    "zCoordinate": 0.0, "height": 4.0, "referenceLineLocation": "Outside"}
+            if sid:
+                c = todo[sid]["content"]
+                host.update({"favoriteName": c["base"], "structureType": c["structure"], "referenceLineLocation": c["reference_line"]})
+                if c["compositeId"]:
+                    host["compositeId"] = {"guid": c["compositeId"]}
+            else:
+                host.update({"structureType": "Basic", "thickness": 0.45})
+            res = ac.tapir("CreateWalls", {"wallsData": [host]})
+            g = res["elements"][0].get("elementId", {}).get("guid")
+            if not g:
+                raise TapirError(f"sample wall {sid}: {res}")
+            manifest["scratch"].append(g)
+            save_manifest(out_root, manifest)
+            host_guid = host_guid or g
+            if sid:
+                r = ac.tapir("ModifyWalls", {"wallsWithDetails": [{"elementId": {"guid": g},
+                                                                     "referenceMaterial": {"overridden": False},
+                                                                     "oppositeMaterial": {"overridden": False}}]})
+                if errs := results_ok(r["executionResults"]):
+                    raise TapirError(f"ModifyWalls (surface overrides off): {errs}")
+                d = ac.tapir("GetDetailsOfElements", {"elements": [{"elementId": {"guid": g}}]})["detailsOfElements"][0]["details"]
+                if d.get("structureType") != todo[sid]["content"]["structure"] or                         (d.get("compositeId") or {}).get("guid") != todo[sid]["content"]["compositeId"]:
+                    raise TapirError(f"sample wall {sid}: structure/composite not as sent ({d.get('structureType')}, {d.get('compositeId')})")
+                changes += _store_favorite(ac, g, todo[sid], existing["wall"], manifest, log)
 
         s_at = 0.3
         for k, (sid, p) in enumerate(todo.items()):
@@ -543,6 +545,62 @@ def cleanup_scratch(ac: TapirClient, manifest: dict, out_root: Path, log: list) 
     save_manifest(out_root, manifest)
 
 
+# ---- GDL objects (pilot A: FS_Surround, FS_ArchGable from the I4 templates) ------------------------------------
+def gdl_templates(spec: dict) -> list[str]:
+    return sorted({s["template"] for s in spec["systems"].values() if s["type"] == "gdl"})
+
+
+def ensure_gdl(ac: TapirClient, spec: dict, project: str, log: list, write: bool = True) -> tuple[int, dict]:
+    """Templates used by the gdl systems are compiled and loaded into the embedded library (gdl_build.deploy, idempotent
+    through its manifest hash). Returns (number of templates (re)loaded, template -> {hash, libpart index / guid})."""
+    names = gdl_templates(spec)
+    if not names:
+        return 0, {}
+    import gdl_build
+    if write:
+        r = gdl_build.deploy(ac, tuple(names), project=project)
+        if r["changed"]:
+            log.append(f"GDL templates loaded: {r['changed']}")
+        n = len(r["changed"])
+        parts = r["parts"]
+    else:
+        n = 0
+        parts = gdl_build.loaded_parts(ac, names)
+    man = gdl_build.load_manifest()["parts"]
+    out = {}
+    for name in names:
+        if name not in parts or name not in man:
+            raise TapirError(f"GDL template {name} is not loaded in the project - run build first")
+        out[name] = {"hash": man[name]["hash"], "index": parts[name].get("index"), "guid": parts[name].get("guid"),
+                     "template_guid": man[name]["guid"]}
+    return n, out
+
+
+def classification_of_systems(ac: TapirClient, spec: dict) -> dict:
+    """gdl system id -> ClassificationId of its 'classification' (item name, unique in the classification system of the
+    project). An object placed by CreateObjects from a library part is unclassified and then cannot carry the FS_*
+    properties (their availability is per classification item)."""
+    want = {sid: s["classification"] for sid, s in spec["systems"].items() if s["type"] == "gdl" and s.get("classification")}
+    if not want:
+        return {}
+    found: dict[str, list] = {}
+    for cs in ac.api("API.GetAllClassificationSystems")["classificationSystems"]:
+        tree = ac.api("API.GetAllClassificationsInSystem", {"classificationSystemId": cs["classificationSystemId"]})["classificationItems"]
+        stack = list(tree)
+        while stack:
+            it = stack.pop()["classificationItem"]
+            found.setdefault(it["id"], []).append({"classificationSystemId": cs["classificationSystemId"],
+                                                   "classificationItemId": it["classificationItemId"]})
+            stack += it.get("children", [])
+    out = {}
+    for sid, name in want.items():
+        hits = found.get(name, [])
+        if len(hits) != 1:
+            raise TapirError(f"systems[{sid}]: classification item '{name}' found {len(hits)} times in the project")
+        out[sid] = hits[0]
+    return out
+
+
 # ---- entry points ------------------------------------------------------------------------------------
 def ensure(ac: TapirClient, spec: dict, project: str, out_root: Path, log: list) -> dict:
     """Make every system of the spec exist in Archicad. Returns sysinfo for build.plan()."""
@@ -554,9 +612,10 @@ def ensure(ac: TapirClient, spec: dict, project: str, out_root: Path, log: list)
     save_manifest(out_root, manifest)
     n_fav, plans, exceptions = ensure_favorites(ac, spec, attrs, composites, manifest, out_root, log, profiles)
     save_manifest(out_root, manifest)
+    n_gdl, gdl = ensure_gdl(ac, spec, project, log, write=True)
     return {"composites": composites, "props": props, "favorites": {sid: {"name": p["name"], "hash": p["hash"]} for sid, p in plans.items()},
-            "profiles": profiles, "exceptions": exceptions,
-            "changes": {"composites": n_comp, "properties": n_prop, "profiles": n_prof, "favorites": n_fav},
+            "profiles": profiles, "exceptions": exceptions, "gdl": gdl, "classes": classification_of_systems(ac, spec),
+            "changes": {"composites": n_comp, "properties": n_prop, "profiles": n_prof, "favorites": n_fav, "gdl": n_gdl},
             "manifest": manifest, "attrs": attrs}
 
 
@@ -576,5 +635,7 @@ def resolve(ac: TapirClient, spec: dict, project: str, out_root: Path) -> dict:
     exceptions = []
     for sid, p in plans.items():
         exceptions += manifest["favorites"].get(p["name"], {}).get("exceptions", [])
+    _, gdl = ensure_gdl(ac, spec, project, [], write=False)
     return {"composites": composites, "props": props, "favorites": {sid: {"name": p["name"], "hash": p["hash"]} for sid, p in plans.items()},
-            "profiles": profiles, "exceptions": exceptions, "manifest": manifest, "attrs": attrs}
+            "profiles": profiles, "exceptions": exceptions, "manifest": manifest, "attrs": attrs, "gdl": gdl,
+            "classes": classification_of_systems(ac, spec)}

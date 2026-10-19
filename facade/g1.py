@@ -67,6 +67,10 @@ def g1_markdown(spec: dict, exceptions: list[dict]) -> str:
             lines.append(f"| {i} | `{s['ref']}` | {s['text']} | {s['proposal']} | |")
     else:
         lines.append("Žiadne.")
+    odh = spec.get("generated", {}).get("pilot_odhady", [])
+    if odh:
+        lines += ["", "## 4. ODHAD zapísané v pilote (info[\"odhady\"] skriptu domu, len na vedomie)", ""]
+        lines += [f"- {o}" for o in odh]
     return "\n".join(lines) + "\n"
 
 

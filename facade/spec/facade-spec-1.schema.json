@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "facade-spec/1#I3",
-  "title": "facade-spec/1 - subset for increments I1-I3 (reference, stories, zones[wall], openings, linear, systems catalog)",
+  "$id": "facade-spec/1#I7a",
+  "title": "facade-spec/1 - subset for increments I1-I4 + pilot A zones (reference, planes, stories, zones[wall], openings, linear, objects, systems catalog)",
   "description": "Machine specification of one facade (ADR-001, ch. 4). Local facade coordinates: s = m along the reference line a->b (left to right seen from outside), v = m above reference.z0, w = m out of the facade plane. Every number that drives the model carries a source (src) and a certainty (conf).",
   "type": "object",
   "required": [
@@ -92,6 +92,18 @@
             },
             "note": {
               "type": "string"
+            }
+          }
+        },
+        "joins": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "a": {
+              "$ref": "#/$defs/planeId"
+            },
+            "b": {
+              "$ref": "#/$defs/planeId"
             }
           }
         }
@@ -233,6 +245,24 @@
           },
           "note": {
             "type": "string"
+          },
+          "plane": {
+            "$ref": "#/$defs/planeId"
+          },
+          "w": {
+            "$ref": "#/$defs/value",
+            "description": "offset of the outside face of the zone from its plane (m, + = out; a rizalit, a cladding standing in front of the render)"
+          },
+          "role": {
+            "enum": [
+              "main",
+              "parter",
+              "rizalit",
+              "side",
+              "corner",
+              "gable"
+            ],
+            "description": "what the zone is (information, G1)"
           }
         }
       }
@@ -313,6 +343,29 @@
           "merged_into": {
             "type": "string",
             "description": "id of the opening this one is built with as ONE element (e.g. a shop window that is the sidelight of a door, one frame on the photo). Its rect stays the photo reading; the build derives sidelight width / parapet of the host from it."
+          },
+          "photo_edges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/photoEdge"
+            }
+          },
+          "shoulder_h": {
+            "$ref": "#/$defs/value",
+            "description": "arch door / window: height of the springing above the bottom of the wall hole (m)"
+          },
+          "head_in": {
+            "type": "string",
+            "description": "id of the object (arch gable) that carries the arched head of this opening above the top of its wall zone"
+          },
+          "rect_pilot": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 4,
+            "maxItems": 4,
+            "description": "rect of the pilot source when the spec corrects it (record)"
           }
         }
       }
@@ -333,7 +386,8 @@
               "window",
               "door",
               "profile",
-              "linear"
+              "linear",
+              "gdl"
             ]
           },
           "favorite": {
@@ -497,6 +551,19 @@
           "profile": {
             "type": "string",
             "description": "linear: id of the profile system"
+          },
+          "template": {
+            "type": "string",
+            "pattern": "^FS_",
+            "description": "gdl: FS template (facade/gdl/templates)"
+          },
+          "corner_profile": {
+            "type": "boolean",
+            "description": "profile of an element that runs round a corner (wrap): x may be < 0 (behind the plane, along the other facade)"
+          },
+          "classification": {
+            "type": "string",
+            "description": "gdl: classification item (its ID, unique in the project) given to the placed objects - needed for the FS_* properties"
           }
         }
       }
@@ -629,7 +696,11 @@
               "sill_ledge",
               "surround_head",
               "surround_jamb",
-              "attic"
+              "attic",
+              "eaves",
+              "sill",
+              "pilaster",
+              "corner_pilaster"
             ]
           },
           "system": {
@@ -707,8 +778,174 @@
                 "search": {
                   "type": "number",
                   "description": "half height of the search band in the photo around the projected model edge (m), default 0.06"
+                },
+                "axis": {
+                  "enum": [
+                    "v"
+                  ]
                 }
               }
+            }
+          },
+          "note": {
+            "type": "string"
+          },
+          "plane": {
+            "$ref": "#/$defs/planeId"
+          },
+          "w": {
+            "$ref": "#/$defs/value",
+            "description": "offset of the back of the profile from the plane (m), e.g. on the face of a rizalit"
+          },
+          "wrap": {
+            "enum": [
+              "a",
+              "b"
+            ],
+            "description": "the element runs round the corner at end a / b of its plane (the plane joins another there): s may go beyond 0..L by the profile, a corner profile may reach behind the plane"
+          }
+        }
+      }
+    },
+    "planes": {
+      "type": "array",
+      "description": "further facade planes of the same spec (e.g. the side facade at a corner = nárožie); the reference is plane 'F'. Same z0 as the reference.",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "a",
+          "b",
+          "outside",
+          "src",
+          "conf"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/planeId"
+          },
+          "a": {
+            "$ref": "#/$defs/xy"
+          },
+          "b": {
+            "$ref": "#/$defs/xy"
+          },
+          "outside": {
+            "enum": [
+              "right_of_ab",
+              "left_of_ab"
+            ]
+          },
+          "src": {
+            "$ref": "#/$defs/src"
+          },
+          "conf": {
+            "$ref": "#/$defs/conf"
+          },
+          "photo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "source id of a rectified photo of this plane, null = none (no overlay)"
+          },
+          "joins": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "a": {
+                "$ref": "#/$defs/planeId"
+              },
+              "b": {
+                "$ref": "#/$defs/planeId"
+              }
+            },
+            "description": "plane that meets this one at its end a / b (corner); the reference may list its joins in reference.joins"
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "objects": {
+      "type": "array",
+      "description": "GDL objects of the facade from FS templates (surrounds, arch gables)",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "system",
+          "origin",
+          "params"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/itemId"
+          },
+          "kind": {
+            "enum": [
+              "surround",
+              "arch_gable"
+            ]
+          },
+          "system": {
+            "type": "string"
+          },
+          "plane": {
+            "$ref": "#/$defs/planeId"
+          },
+          "host": {
+            "type": "string",
+            "description": "opening the object belongs to"
+          },
+          "zone": {
+            "type": "string",
+            "description": "wall zone the object sits on (arch gable: on top of it)"
+          },
+          "origin": {
+            "type": "object",
+            "required": [
+              "v",
+              "src",
+              "conf"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "v": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "src": {
+                "$ref": "#/$defs/src"
+              },
+              "conf": {
+                "$ref": "#/$defs/conf"
+              },
+              "note": {
+                "type": "string"
+              }
+            },
+            "description": "[s, v, w] of the local origin of the template"
+          },
+          "params": {
+            "type": "object",
+            "description": "GDL parameter -> value (numbers / booleans; a Material parameter takes a surface name)",
+            "additionalProperties": {
+              "$ref": "#/$defs/anyValue"
+            }
+          },
+          "photo_edges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/photoEdge"
             }
           },
           "note": {
@@ -852,6 +1089,62 @@
         },
         "note": {
           "type": "string"
+        }
+      }
+    },
+    "planeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+      "description": "'F' = the reference plane, else the id of an entry of planes"
+    },
+    "photoEdge": {
+      "type": "object",
+      "required": [
+        "name",
+        "edge",
+        "range",
+        "brighter"
+      ],
+      "additionalProperties": false,
+      "description": "edge of an opening / object checked on the rectified photo: model edge (3D, projected with the camera of the photo) vs the strongest brightness step of the given sign near it",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "edge": {
+          "enum": [
+            "left",
+            "right",
+            "top",
+            "bottom"
+          ]
+        },
+        "range": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "window along the edge: v range for left/right, s range for top/bottom (m)"
+        },
+        "brighter": {
+          "enum": [
+            "left",
+            "right",
+            "above",
+            "below"
+          ]
+        },
+        "photo": {
+          "type": "number",
+          "description": "edge read by hand (for the record)"
+        },
+        "tol": {
+          "type": "number"
+        },
+        "search": {
+          "type": "number"
         }
       }
     }

@@ -12,17 +12,19 @@ import sys
 from pathlib import Path
 
 import jsonschema
+import numpy as np
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from geom import frame_of, rect_overlap_area, rects_touch  # noqa: E402
+from geom import REFERENCE_PLANE, frame_of, frames_of, item_plane, outside_of, rect_overlap_area, rects_touch, zone_w  # noqa: E402
+import gdl_expect  # noqa: E402
 
 SCHEMA_PATH = HERE / "spec" / "facade-spec-1.schema.json"
 GDL_MAP_PATH = HERE / "gdl_param_map.json"
 LOW_CONF = ("odhad", "default")
 G1_CONF = ("pravidlo", "odhad", "default")          # below 'meranie' -> gate G1 (ADR 3.1)
 CONF_ORDER = ("kota", "meranie", "pravidlo", "odhad", "default")
-VALUE_KEYS = ("transom_h", "sidelight_w", "sidelight_sill", "transom_bars", "transom_bar_h", "bar_h", "reveal")
+VALUE_KEYS = ("transom_h", "sidelight_w", "sidelight_sill", "transom_bars", "transom_bar_h", "bar_h", "reveal", "shoulder_h")
 TYPE_KEYS = ("leaves", "transom", "sidelight", "sash_bars", "leaf_panel", "frame_surface")
 EPS = 1e-6
 
@@ -107,6 +109,7 @@ def validate(spec: dict) -> tuple[list[str], list[str]]:
     frame = frame_of(spec)
     if frame.length < 0.1:
         errors.append("reference: a and b are (almost) identical")
+    frames = _check_planes(spec, errors, check_src)
 
     for st in spec["stories"]:
         check_src(f"stories[{st['id']}].level", st["level"]["src"], st["level"]["conf"])
@@ -122,21 +125,44 @@ def validate(spec: dict) -> tuple[list[str], list[str]]:
         s0, s1, v0, v1 = z["rect"]["v"]
         check_src(f"zones[{zid}].rect", z["rect"]["src"], z["rect"]["conf"])
         check_src(f"zones[{zid}].thickness", z["thickness"]["src"], z["thickness"]["conf"])
+        if z.get("w"):
+            check_src(f"zones[{zid}].w", z["w"]["src"], z["w"]["conf"])
+        pl = z.get("plane", REFERENCE_PLANE)
+        if pl not in frames:
+            errors.append(f"zones[{zid}]: plane '{pl}' does not exist")
+            continue
+        length = frames[pl].length
         if not (s1 > s0 and v1 > v0):
             errors.append(f"zones[{zid}]: empty rect {z['rect']['v']}")
-        if s0 < -EPS or s1 > frame.length + 0.01:
-            errors.append(f"zones[{zid}]: rect s {s0}..{s1} outside 0..L = {frame.length:.3f}")
+        if s0 < -EPS or s1 > length + 0.01:
+            errors.append(f"zones[{zid}]: rect s {s0}..{s1} outside 0..L = {length:.3f} of plane {pl}")
         if z["thickness"]["v"] <= 0:
             errors.append(f"zones[{zid}]: thickness must be > 0")
+        if zone_w(z) >= z["thickness"]["v"]:
+            errors.append(f"zones[{zid}]: offset w {zone_w(z)} >= thickness - the wall would stand in front of its plane")
         sysdef = systems.get(z["system"])
         if sysdef is None:
             errors.append(f"zones[{zid}]: system '{z['system']}' is not in systems")
         elif sysdef["type"] != "wall":
             errors.append(f"zones[{zid}]: system '{z['system']}' is a {sysdef['type']}, not a wall")
-    if len(zones) != 1:
-        errors.append(f"I1 supports exactly one wall zone per facade, got {len(zones)}")
+    if not zones:
+        errors.append("no wall zone")
+    zl = list(zones.values())
+    for i, z1 in enumerate(zl):                       # zones of one plane: no overlap (modeller rule 9)
+        for z2 in zl[i + 1:]:
+            if z1.get("plane", REFERENCE_PLANE) != z2.get("plane", REFERENCE_PLANE):
+                continue
+            area = rect_overlap_area(z1["rect"]["v"], z2["rect"]["v"])
+            if area > EPS:
+                errors.append(f"zones {z1['id']} and {z2['id']} overlap ({area:.3f} m2) - two walls in one place")
+            elif rects_touch(z1["rect"]["v"], z2["rect"]["v"]):
+                back1, back2 = zone_w(z1) - z1["thickness"]["v"], zone_w(z2) - z2["thickness"]["v"]
+                if abs(back1 - back2) > 0.001 and z1.get("role") != "rizalit" and z2.get("role") != "rizalit":
+                    warnings.append(f"zones {z1['id']} and {z2['id']} touch but their inside faces differ "
+                                    f"({back1:+.3f} / {back2:+.3f} m) - step on the inside of the wall")
 
     openings = spec["openings"]
+    objects = {ob["id"]: ob for ob in spec.get("objects", [])}
     for o in openings:
         oid = o["id"]
         if oid in item_ids:
@@ -150,12 +176,17 @@ def validate(spec: dict) -> tuple[list[str], list[str]]:
         if not (s1 > s0 and v1 > v0):
             errors.append(f"openings[{oid}]: empty rect {o['rect']['v']}")
             continue
+        if len(zones) > 1 and not o.get("zone"):
+            errors.append(f"openings[{oid}]: several wall zones - the opening must name its zone")
         zone = zones.get(o.get("zone")) if o.get("zone") else next(iter(zones.values()), None)
         if zone is None:
             errors.append(f"openings[{oid}]: zone '{o.get('zone')}' does not exist")
         else:
             zs0, zs1, zv0, zv1 = zone["rect"]["v"]
-            if s0 < zs0 - EPS or s1 > zs1 + EPS or v0 < zv0 - EPS or v1 > zv1 + EPS:
+            top = v1
+            if o.get("head_in"):                       # arched head carried by an arch gable above the zone
+                top = _check_arch_head(o, zone, objects.get(o["head_in"]), errors)
+            if s0 < zs0 - EPS or s1 > zs1 + EPS or v0 < zv0 - EPS or top > zv1 + EPS:
                 errors.append(f"openings[{oid}]: rect {o['rect']['v']} is not inside wall zone {zone['id']} {zone['rect']['v']}")
         sysdef = systems.get(o["system"])
         if sysdef is None:
@@ -170,6 +201,8 @@ def validate(spec: dict) -> tuple[list[str], list[str]]:
 
     for i, o1 in enumerate(openings):
         for o2 in openings[i + 1:]:
+            if item_plane(o1, zones) != item_plane(o2, zones):
+                continue
             r1, r2 = o1["rect"]["v"], o2["rect"]["v"]
             area = rect_overlap_area(r1, r2)
             if area > EPS:
@@ -182,7 +215,8 @@ def validate(spec: dict) -> tuple[list[str], list[str]]:
                                     "probably one unit in reality; keep as two until a combined system exists (I2)")
 
     errors += _check_i2(spec, zones, openings, check_src)
-    errors += _check_linear(spec, openings, frame, item_ids, check_src)
+    errors += _check_linear(spec, openings, frames, item_ids, check_src, zones)
+    errors += _check_objects(spec, openings, frames, item_ids, check_src, zones)
 
     axes = spec.get("axes")
     if axes and axes.get("s"):
@@ -263,6 +297,60 @@ def _check_i2(spec: dict, zones: dict, openings: list, check_src) -> list[str]:
     return errors
 
 
+def _check_planes(spec: dict, errors: list, check_src) -> dict:
+    """Further planes (pilot A: nárožie): source, length, and corners - a plane named in joins must share that end point."""
+    frames = frames_of(spec)
+    ends = {pid: {"a": fr.a, "b": fr.b} for pid, fr in frames.items()}
+    seen = {REFERENCE_PLANE}
+    for p in spec.get("planes", []):
+        if p["id"] in seen:
+            errors.append(f"planes[{p['id']}]: duplicate id (F is the reference)")
+        seen.add(p["id"])
+        check_src(f"planes[{p['id']}]", p["src"], p["conf"])
+        if frames[p["id"]].length < 0.1:
+            errors.append(f"planes[{p['id']}]: a and b are (almost) identical")
+        if p.get("photo") and p["photo"] not in {s["id"] for s in spec["sources"]}:
+            errors.append(f"planes[{p['id']}]: photo '{p['photo']}' is not in sources")
+    joins = [(REFERENCE_PLANE, spec["reference"].get("joins", {}))] + [(p["id"], p.get("joins", {})) for p in spec.get("planes", [])]
+    for pid, jn in joins:
+        for end, other in jn.items():
+            if other not in frames:
+                errors.append(f"plane {pid}: joins.{end} = '{other}' does not exist")
+                continue
+            here = ends[pid][end]
+            if min(float(np.linalg.norm(here - ends[other][e])) for e in ("a", "b")) > 0.01:
+                errors.append(f"plane {pid}: end {end} does not meet plane {other} (no common corner point, modeller rule 8)")
+    return frames
+
+
+def _joined(spec: dict, plane: str, end: str) -> bool:
+    if plane == REFERENCE_PLANE:
+        return end in spec["reference"].get("joins", {})
+    return any(p["id"] == plane and end in p.get("joins", {}) for p in spec.get("planes", []))
+
+
+def _check_arch_head(o: dict, zone: dict, ob: dict | None, errors: list) -> float:
+    """An opening whose arched head stands above its wall zone, inside an arch gable object: the arch must fit the ring.
+    Returns the top of the part of the opening inside the zone (the springing line)."""
+    s0, s1, v0, v1 = o["rect"]["v"]
+    oid = o["id"]
+    if ob is None or ob["kind"] != "arch_gable":
+        errors.append(f"openings[{oid}]: head_in '{o.get('head_in')}' is not an arch gable object")
+        return v1
+    if "shoulder_h" not in o:
+        errors.append(f"openings[{oid}]: an arched head needs shoulder_h (springing above the bottom of the hole)")
+        return v1
+    spring = v0 + o["shoulder_h"]["v"]
+    r_in = ob["params"]["rIn"]["v"]
+    os_, ov, _ = ob["origin"]["v"]
+    for what, got, want in (("centre s", 0.5 * (s0 + s1), os_), ("half width = rIn", 0.5 * (s1 - s0), r_in),
+                            ("springing = arch origin v", spring, ov), ("springing = top of zone", spring, zone["rect"]["v"][3]),
+                            ("top = springing + rIn", v1, spring + r_in)):
+        if abs(got - want) > 0.01:
+            errors.append(f"openings[{oid}]: arched head - {what}: {got:.3f} != {want:.3f}")
+    return spring
+
+
 def linear_box(it: dict, prof: dict) -> list[float]:
     """[s0, s1, v0, v1] of a linear element on the facade plane."""
     s0, s1 = it["s"]["v"]
@@ -271,11 +359,17 @@ def linear_box(it: dict, prof: dict) -> list[float]:
     return [s0, s1] + list(it["v"]["v"])
 
 
-def _check_linear(spec: dict, openings: list, frame, item_ids: set, check_src) -> list[str]:
+def _check_linear(spec: dict, openings: list, frames: dict, item_ids: set, check_src, zones: dict | None = None) -> list[str]:
     """I3 rules: profile systems (polygon outside the facade plane, w/h = polygon extents), linear systems (tool +
-    existing profile), linear elements inside 0..L, vertical band width = profile width, nothing in front of an opening."""
+    existing profile), linear elements inside 0..L of their plane (beyond it only round a joined corner, by at most the
+    profile), vertical band width = profile width, nothing in front of an opening of the same plane."""
     errors: list[str] = []
     systems = spec["systems"]
+    wrap_profiles: dict = {}
+    for it in spec.get("linear", []):
+        sd = systems.get(it["system"], {})
+        if sd.get("profile"):
+            wrap_profiles.setdefault(sd["profile"], set()).add(bool(it.get("wrap")))
     for sid, s in systems.items():
         if s["type"] == "profile":
             pts = s.get("polygon_wv") or []
@@ -284,8 +378,11 @@ def _check_linear(spec: dict, openings: list, frame, item_ids: set, check_src) -
                 continue
             if not s.get("name", "").startswith("FS ") or not s.get("material"):
                 errors.append(f"systems[{sid}]: a profile needs name 'FS ...' and material")
-            if min(p[0] for p in pts) < -EPS or min(p[1] for p in pts) < -EPS:
+            corner = s.get("corner_profile") is True
+            if min(p[1] for p in pts) < -EPS or (min(p[0] for p in pts) < -EPS and not corner):
                 errors.append(f"systems[{sid}]: profile polygon must lie in x >= 0 (outside the facade plane) and y >= 0")
+            if corner and wrap_profiles.get(sid, {True}) != {True}:
+                errors.append(f"systems[{sid}]: a corner profile (x < 0 round the corner) is only for elements with 'wrap'")
             for key, idx in (("w", 0), ("h", 1)):
                 if key in s:
                     check_src(f"systems[{sid}].{key}", s[key]["src"], s[key]["conf"])
@@ -296,7 +393,8 @@ def _check_linear(spec: dict, openings: list, frame, item_ids: set, check_src) -
             prof = systems.get(s.get("profile", ""))
             if not s.get("tool") or prof is None or prof["type"] != "profile":
                 errors.append(f"systems[{sid}]: a linear system needs tool and an existing profile system (got {s.get('profile')!r})")
-    rects = {o["id"]: o["rect"]["v"] for o in openings}
+    zones = zones or {}
+    rects = {o["id"]: (o["rect"]["v"], item_plane(o, zones)) for o in openings}
     for it in spec.get("linear", []):
         lid = it["id"]
         if lid in item_ids:
@@ -304,6 +402,13 @@ def _check_linear(spec: dict, openings: list, frame, item_ids: set, check_src) -
         item_ids.add(lid)
         check_src(f"linear[{lid}].s", it["s"]["src"], it["s"]["conf"])
         check_src(f"linear[{lid}].v", it["v"]["src"], it["v"]["conf"])
+        if it.get("w"):
+            check_src(f"linear[{lid}].w", it["w"]["src"], it["w"]["conf"])
+        plane = it.get("plane", REFERENCE_PLANE)
+        if plane not in frames:
+            errors.append(f"linear[{lid}]: plane '{plane}' does not exist")
+            continue
+        length = frames[plane].length
         sysdef = systems.get(it["system"])
         if sysdef is None or sysdef["type"] != "linear":
             errors.append(f"linear[{lid}]: system '{it['system']}' is not a linear system")
@@ -317,8 +422,13 @@ def _check_linear(spec: dict, openings: list, frame, item_ids: set, check_src) -
         s0, s1 = it["s"]["v"]
         if not s1 > s0:
             errors.append(f"linear[{lid}]: empty s range {it['s']['v']}")
-        if s0 < -EPS or s1 > frame.length + 0.01:
-            errors.append(f"linear[{lid}]: s {s0}..{s1} outside 0..L = {frame.length:.3f}")
+        reach = max(abs(p[0]) for p in prof["polygon_wv"]) + 0.01     # how far a wrapped element may pass the corner
+        lo = -reach if it.get("wrap") == "a" and _joined(spec, plane, "a") else -EPS
+        hi = length + (reach if it.get("wrap") == "b" and _joined(spec, plane, "b") else 0.01)
+        if it.get("wrap") and not _joined(spec, plane, it["wrap"]):
+            errors.append(f"linear[{lid}]: wrap '{it['wrap']}' but plane {plane} joins no plane at that end")
+        if s0 < lo or s1 > hi:
+            errors.append(f"linear[{lid}]: s {s0}..{s1} outside 0..L = {length:.3f} of plane {plane}")
         if it["axis"] == "h" and not isinstance(it["v"]["v"], (int, float)):
             errors.append(f"linear[{lid}]: a horizontal element needs v = one number (base of the profile)")
             continue
@@ -332,9 +442,94 @@ def _check_linear(spec: dict, openings: list, frame, item_ids: set, check_src) -
         if it.get("host") and it["host"] not in rects:
             errors.append(f"linear[{lid}]: host opening '{it['host']}' does not exist")
         box = linear_box(it, prof)
-        for oid, r in rects.items():                                 # modeller rule 30: nothing in front of an opening
-            if rect_overlap_area(box, r) > 1e-4:
+        for oid, (r, opl) in rects.items():                          # modeller rule 30: nothing in front of an opening
+            if opl == plane and rect_overlap_area(box, r) > 1e-4:
                 errors.append(f"linear[{lid}]: lies in front of opening {oid} ({rect_overlap_area(box, r):.4f} m2)")
+    return errors
+
+
+def object_values(ob: dict) -> dict:
+    """GDL parameter name -> plain value of an object of the spec."""
+    return {k: v["v"] for k, v in ob["params"].items()}
+
+
+def object_bbox(spec: dict, ob: dict) -> list[float]:
+    """[s0, s1, v0, v1, w0, w1] of a GDL object on its plane (expected from the template and the parameters)."""
+    tpl = spec["systems"][ob["system"]]["template"]
+    plane = ob.get("plane", REFERENCE_PLANE)
+    return gdl_expect.facade_bbox(tpl, object_values(ob), ob["origin"]["v"], outside_of(spec, plane))
+
+
+def _check_objects(spec: dict, openings: list, frames: dict, item_ids: set, check_src, zones: dict) -> list[str]:
+    """GDL objects: FS template system, parameters with source, inside 0..L; a surround frames its host opening exactly
+    (jambs at the opening edges, head on the opening top) and covers no other opening; an arch gable stands on top of
+    its wall zone, in the zone face, within its width and as deep as the wall."""
+    errors: list[str] = []
+    systems = spec["systems"]
+    by_id = {o["id"]: o for o in openings}
+    for sid, s in systems.items():
+        if s["type"] == "gdl" and s.get("template") not in gdl_expect.TEMPLATES:
+            errors.append(f"systems[{sid}]: gdl template {s.get('template')!r} has no expected geometry (gdl_expect.TEMPLATES)")
+    for ob in spec.get("objects", []):
+        bid = ob["id"]
+        if bid in item_ids:
+            errors.append(f"objects[{bid}]: duplicate id")
+        item_ids.add(bid)
+        check_src(f"objects[{bid}].origin", ob["origin"]["src"], ob["origin"]["conf"])
+        for k, v in ob["params"].items():
+            check_src(f"objects[{bid}].params.{k}", v["src"], v["conf"])
+        sysdef = systems.get(ob["system"])
+        if sysdef is None or sysdef["type"] != "gdl" or sysdef.get("template") not in gdl_expect.TEMPLATES:
+            errors.append(f"objects[{bid}]: system '{ob['system']}' is not a known gdl system")
+            continue
+        plane = ob.get("plane", REFERENCE_PLANE)
+        if plane not in frames:
+            errors.append(f"objects[{bid}]: plane '{plane}' does not exist")
+            continue
+        missing = [k for k in gdl_expect.TEMPLATES[sysdef["template"]] if k not in ob["params"]]
+        if missing:
+            errors.append(f"objects[{bid}]: parameters {missing} missing for template {sysdef['template']}")
+            continue
+        bb = object_bbox(spec, ob)
+        if bb[0] < -EPS or bb[1] > frames[plane].length + 0.01:
+            errors.append(f"objects[{bid}]: s {bb[0]:.3f}..{bb[1]:.3f} outside 0..L of plane {plane}")
+        p = object_values(ob)
+        os_, ov, ow = ob["origin"]["v"]
+        if ob["kind"] == "surround":
+            host = by_id.get(ob.get("host", ""))
+            if host is None:
+                errors.append(f"objects[{bid}]: host opening '{ob.get('host')}' does not exist")
+                continue
+            if item_plane(host, zones) != plane:
+                errors.append(f"objects[{bid}]: host {host['id']} lies on another plane")
+            s0, s1, v0, v1 = host["rect"]["v"]
+            right = outside_of(spec, plane) == "right_of_ab"
+            for what, got, want in (("opening width opW", p["opW"], s1 - s0), ("origin s at the jamb", os_, s1 if right else s0),
+                                    ("head on the opening top (origin v + opH)", ov + p["opH"], v1)):
+                if abs(got - want) > 0.001:
+                    errors.append(f"objects[{bid}]: {what} {got:.4f} != {want:.4f} (host {host['id']})")
+            if ov > v0 + EPS:
+                errors.append(f"objects[{bid}]: jambs start above the opening bottom ({ov} > {v0})")
+            hz = zones.get(host.get("zone")) if host.get("zone") else next(iter(zones.values()), None)
+            if hz and abs(ow - zone_w(hz)) > 0.001:
+                errors.append(f"objects[{bid}]: origin w {ow} is not on the face of zone {hz['id']} (w {zone_w(hz)})")
+            for oid, o in by_id.items():                              # modeller rule 30: nothing in front of another opening
+                if oid != host["id"] and item_plane(o, zones) == plane and rect_overlap_area(bb[:4], o["rect"]["v"]) > 1e-4:
+                    errors.append(f"objects[{bid}]: lies in front of opening {oid}")
+        elif ob["kind"] == "arch_gable":
+            z = zones.get(ob.get("zone", ""))
+            if z is None:
+                errors.append(f"objects[{bid}]: zone '{ob.get('zone')}' does not exist")
+                continue
+            zs0, zs1, _, zv1 = z["rect"]["v"]
+            if abs(ov - zv1) > 0.001 or abs(ow - zone_w(z)) > 0.001:
+                errors.append(f"objects[{bid}]: springing ({ov}, w {ow}) is not on top of zone {z['id']} ({zv1}, w {zone_w(z)})")
+            if bb[0] < zs0 - 0.001 or bb[1] > zs1 + 0.001:
+                errors.append(f"objects[{bid}]: arch {bb[0]:.3f}..{bb[1]:.3f} wider than zone {z['id']} {zs0}..{zs1}")
+            if p["rIn"] >= p["rOut"]:
+                errors.append(f"objects[{bid}]: rIn {p['rIn']} >= rOut {p['rOut']}")
+            if abs(p["depth"] - z["thickness"]["v"]) > 0.001:
+                errors.append(f"objects[{bid}]: depth {p['depth']} != thickness of zone {z['id']} {z['thickness']['v']}")
     return errors
 
 
