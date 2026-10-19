@@ -20,6 +20,7 @@ Pure Python + numpy around a TapirClient; called from verify.py.
 from __future__ import annotations
 
 import math
+import time
 
 import numpy as np
 
@@ -158,8 +159,17 @@ def verify_cw(ac: TapirClient, spec: dict, want_cw: list[dict], guids: dict, det
         for k, name, sv in ((0, "s0", s0), (1, "s1", s1), (2, "v0", v0), (3, "v1", v1)):
             row(cid, f"CW 3D {name}", sv, bb[k], "3D")
         # depth from the FRAMES (a door panel has handles standing out of the frame plane)
-        fgeo = ac.tapir("Get3DGeometryOfElements", {"elements": sub.get("cWallFrames", [])}, timeout=120)["geometries3D"]
-        fb = _bbox([b_ for g_ in fgeo for b_ in _bodies(g_, fr)])
+        fb = None
+        for attempt in range(2):
+            # Right after a rebuild Archicad can answer with no frame bodies yet; ask once more.
+            fgeo = ac.tapir("Get3DGeometryOfElements", {"elements": sub.get("cWallFrames", [])}, timeout=120)["geometries3D"]
+            fb = _bbox([b_ for g_ in fgeo for b_ in _bodies(g_, fr)])
+            if fb is not None:
+                break
+            time.sleep(2.0)
+        if fb is None:
+            problems.append(f"{cid}: curtain wall frames without 3D")
+            continue
         row(cid, "CW frames 3D w front (outer face = zone face - reveal)", L["w_face"], fb[5], "3D")
         row(cid, "CW frames 3D w back (frame depth)", L["w_face"] - sysdef["frame"]["depth"]["v"], fb[4], "3D")
         z = L["zone"]
