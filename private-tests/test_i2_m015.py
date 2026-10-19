@@ -20,6 +20,7 @@ Acceptance (ADR-001 I2 + task 2026-10-19):
 """
 from __future__ import annotations
 
+import sys
 if hasattr (sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure (encoding='utf-8', errors='replace')
 
