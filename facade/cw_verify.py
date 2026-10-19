@@ -69,7 +69,7 @@ def verify_cw(ac: TapirClient, spec: dict, want_cw: list[dict], guids: dict, det
         fr = L["frame"]
         sysdef = spec["systems"][cw["system"]]
         names = it["names"]
-        if details[key]["floorIndex"] != spec["reference"]["home_story"]["floorIndex"]:
+        if details[key]["floorIndex"] != it["payload"].get("floorIndex", spec["reference"]["home_story"]["floorIndex"]):
             problems.append(f"{key}: home story {details[key]['floorIndex']} != spec")
         sub = ac.tapir("GetSubelementsOfHierarchicalElements", {"elements": [{"elementId": {"guid": guids[key]}}]})["subelements"][0]
         frs = _details(ac, sub.get("cWallFrames", []))
@@ -80,8 +80,9 @@ def verify_cw(ac: TapirClient, spec: dict, want_cw: list[dict], guids: dict, det
         prof_bad = {"frame": [], "boundary": []}
         for f in frs:
             d = f.get("details", {})
-            a = fr.to_svw(np.array([[d["begCoordinate"]["x"], d["begCoordinate"]["y"], d["begCoordinate"]["z"]],
-                                    [d["endCoordinate"]["x"], d["endCoordinate"]["y"], d["endCoordinate"]["z"]]]))
+            zs = it.get("z_story", 0.0)                     # frame / panel z of the details are relative to the home story
+            a = fr.to_svw(np.array([[d["begCoordinate"]["x"], d["begCoordinate"]["y"], d["begCoordinate"]["z"] + zs],
+                                    [d["endCoordinate"]["x"], d["endCoordinate"]["y"], d["endCoordinate"]["z"] + zs]]))
             kind = "boundary" if d.get("type") == "Boundary" else "frame"
             if kind == "boundary":
                 bnd.append(a)
@@ -127,7 +128,7 @@ def verify_cw(ac: TapirClient, spec: dict, want_cw: list[dict], guids: dict, det
             pts = d.get("polygonCoordinates", [])
             if not pts:
                 continue
-            svw = fr.to_svw(np.array([[q["x"], q["y"], q["z"]] for q in pts]))
+            svw = fr.to_svw(np.array([[q["x"], q["y"], q["z"] + it.get("z_story", 0.0)] for q in pts]))
             cs, cv = float(svw[:, 0].mean()), float(svw[:, 1].mean())
             col = next((i for i, (a, b) in enumerate(cols) if a - 1e-3 <= cs <= b + 1e-3), None)
             rw = next((i for i, (a, b) in enumerate(rows) if a - 1e-3 <= cv <= b + 1e-3), None)
@@ -162,12 +163,12 @@ def verify_cw(ac: TapirClient, spec: dict, want_cw: list[dict], guids: dict, det
         row(cid, "CW frames 3D w front (outer face = zone face - reveal)", L["w_face"], fb[5], "3D")
         row(cid, "CW frames 3D w back (frame depth)", L["w_face"] - sysdef["frame"]["depth"]["v"], fb[4], "3D")
         z = L["zone"]
-        if bb[4] < zone_w(z) - z["thickness"]["v"] - 1e-3:
+        if z is not None and bb[4] < zone_w(z) - z["thickness"]["v"] - 1e-3:
             problems.append(f"{cid}: curtain wall sticks out of the back of wall {z['id']} (w {bb[4]:.3f})")
         # (b) photo: bars of the axes read on the photo
         if lum is None or rect is None or L["plane"] != REFERENCE_PLANE:
             continue
-        zw = zone_w(z)
+        zw = zone_w(z) if z is not None else 0.0
         for key_ax, axis in (("u_axes", "v"), ("v_axes", "h")):
             ax = cw.get(key_ax)
             if not ax or ax["conf"] not in ("meranie", "kota"):

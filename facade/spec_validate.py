@@ -218,6 +218,9 @@ def validate(spec: dict) -> tuple[list[str], list[str]]:
                                     "probably one unit in reality; keep as two until a combined system exists (I2)")
 
     errors += _check_i2(spec, zones, openings, check_src)
+    pb_errors, pb_warnings = _check_pilot_b(spec, frames, item_ids, check_src)
+    errors += pb_errors
+    warnings += pb_warnings
     i6_errors, i6_warnings = _check_i6(spec, zones, openings, frames, item_ids, check_src)
     errors += i6_errors
     warnings += i6_warnings
@@ -361,7 +364,7 @@ def _check_arch_head(o: dict, zone: dict, ob: dict | None, errors: list) -> floa
 def linear_box(it: dict, prof: dict) -> list[float]:
     """[s0, s1, v0, v1] of a linear element on the facade plane."""
     s0, s1 = it["s"]["v"]
-    if it["axis"] == "h":
+    if it["axis"] in ("h", "w"):
         return [s0, s1, it["v"]["v"], it["v"]["v"] + max(p[1] for p in prof["polygon_wv"])]
     return [s0, s1] + list(it["v"]["v"])
 
@@ -423,7 +426,7 @@ def _check_linear(spec: dict, openings: list, frames: dict, item_ids: set, check
         prof = systems.get(sysdef.get("profile", ""))
         if prof is None or prof["type"] != "profile" or not prof.get("polygon_wv"):
             continue
-        if it["axis"] != {"beam": "h", "column": "v"}[sysdef["tool"]]:
+        if it["axis"] not in {"beam": ("h", "w"), "column": ("v",)}[sysdef["tool"]]:
             errors.append(f"linear[{lid}]: axis {it['axis']} does not fit tool {sysdef['tool']}")
             continue
         s0, s1 = it["s"]["v"]
@@ -436,6 +439,17 @@ def _check_linear(spec: dict, openings: list, frames: dict, item_ids: set, check
             errors.append(f"linear[{lid}]: wrap '{it['wrap']}' but plane {plane} joins no plane at that end")
         if s0 < lo or s1 > hi:
             errors.append(f"linear[{lid}]: s {s0}..{s1} outside 0..L = {length:.3f} of plane {plane}")
+        if it["axis"] == "w":
+            if not it.get("w_span") or not it["w_span"]["v"][1] > it["w_span"]["v"][0]:
+                errors.append(f"linear[{lid}]: a bracket (axis w) needs w_span [w0, w1] with w1 > w0")
+                continue
+            check_src(f"linear[{lid}].w_span", it["w_span"]["src"], it["w_span"]["conf"])
+            width = max(p[0] for p in prof["polygon_wv"])
+            if abs((s1 - s0) - width) > 0.001:
+                errors.append(f"linear[{lid}]: bracket width {s1 - s0:.3f} != profile width {width:.3f}")
+            if not isinstance(it["v"]["v"], (int, float)):
+                errors.append(f"linear[{lid}]: a bracket needs v = one number (base of the profile)")
+            continue
         if it["axis"] == "h" and not isinstance(it["v"]["v"], (int, float)):
             errors.append(f"linear[{lid}]: a horizontal element needs v = one number (base of the profile)")
             continue
@@ -540,13 +554,15 @@ def _check_objects(spec: dict, openings: list, frames: dict, item_ids: set, chec
     return errors
 
 
-CW_DOOR_PARTS = ("CW Door 27", "CW Double Door 27")          # door panels of the Archicad 29 library (placed in a CW cell, spike 2026-10-19)
+CW_DOOR_PARTS = ("CW Door 27", "CW Double Door 27",
+                 "Dvoukřídlé dveře LOP 26", "Dvoukřídlé dveře asymetrické LOP 26")   # + SK template (CZ library 26, pilot B)          # door panels of the Archicad 29 library (placed in a CW cell, spike 2026-10-19)
 MIN_CELL = 0.15                                                 # m - smallest column / row of a curtain wall field
 
 
 def cw_as_openings(spec: dict) -> list[dict]:
     """The glazed fields as pseudo-openings (id, zone, rect, kind 'cw') for the rules that look at the holes of a wall."""
-    return [{"id": cw["id"], "zone": cw["zone"], "rect": cw["rect"], "kind": "cw", "system": cw["system"]} for cw in spec.get("cw_fields", [])]
+    return [{"id": cw["id"], "zone": cw["zone"], "rect": cw["rect"], "kind": "cw", "system": cw["system"]} for cw in spec.get("cw_fields", [])
+            if cw.get("zone")]                                   # a freestanding CW (pilot B) is no opening of a wall
 
 
 def point_in_poly(pt, ring, tol: float = 1e-6) -> bool:
@@ -652,6 +668,9 @@ def _check_i6(spec: dict, zones: dict, openings: list, frames: dict, item_ids: s
         if sysdef is None or sysdef["type"] != "curtain_wall":
             errors.append(f"cw_fields[{cid}]: system '{cw['system']}' is not a curtain wall system")
             continue
+        if not cw.get("zone"):                                   # pilot B: freestanding curtain wall on its plane
+            _check_cw_free(spec, cw, sysdef, frames, cws, errors, warnings)
+            continue
         z = zones.get(cw["zone"])
         if z is None:
             errors.append(f"cw_fields[{cid}]: zone '{cw['zone']}' does not exist")
@@ -697,7 +716,7 @@ def _check_i6(spec: dict, zones: dict, openings: list, frames: dict, item_ids: s
             if oid != cid and any(o["id"] == oid for o in openings):
                 errors.append(f"cw_fields[{cid}]: replaces opening {oid}, which is still in openings")
         for c2 in cws:
-            if c2["id"] == cid or zones.get(c2["zone"], {}).get("plane", REFERENCE_PLANE) != plane:
+            if c2["id"] == cid or not c2.get("zone") or zones.get(c2["zone"], {}).get("plane", REFERENCE_PLANE) != plane:
                 continue
             if rect_overlap_area(cw["rect"]["v"], c2["rect"]["v"]) > EPS:
                 errors.append(f"cw_fields[{cid}]: overlaps glazed field {c2['id']}")
@@ -776,7 +795,15 @@ def _check_i6(spec: dict, zones: dict, openings: list, frames: dict, item_ids: s
             errors.append(f"railings[{rid}]: path has a segment shorter than 5 cm")
         b = bals.get(r.get("on", "")) if r.get("on") else None
         if r.get("on") and b is None:
-            errors.append(f"railings[{rid}]: balcony '{r['on']}' does not exist")
+            sl = next((x for x in spec.get("slabs", []) if x["id"] == r["on"]), None)
+            if sl is None:
+                errors.append(f"railings[{rid}]: balcony / slab '{r['on']}' does not exist")
+            else:                                             # pilot B: on a walkway slab
+                if abs(r["v"]["v"] - sl["v_top"]["v"]) > 0.001:
+                    errors.append(f"railings[{rid}]: base v {r['v']['v']} != top of slab {sl['id']} ({sl['v_top']['v']})")
+                out = [q for q in pts if not point_in_poly(q, slab_ring(sl), 0.002)]
+                if out:
+                    errors.append(f"railings[{rid}]: path points {out[:3]} outside slab {sl['id']}")
         elif b is not None:                                   # the railing stands on its slab (modeller: nothing hangs)
             if abs(r["v"]["v"] - b["v_top"]["v"]) > 0.001:
                 errors.append(f"railings[{rid}]: base v {r['v']['v']} != top of balcony {b['id']} ({b['v_top']['v']})")
@@ -791,6 +818,103 @@ def _check_i6(spec: dict, zones: dict, openings: list, frames: dict, item_ids: s
                 pass
         else:
             warnings.append(f"railings[{rid}]: stands on no balcony of the spec (base v {r['v']['v']})")
+    return errors, warnings
+
+
+def _check_cw_free(spec: dict, cw: dict, sysdef: dict, frames: dict, cws: list, errors: list, warnings: list) -> None:
+    """Pilot B: a curtain wall that is not in a wall hole - inside 0..L of its plane, raster, cells, door on the foot,
+    reveal >= 0 (outer face of the frames behind the plane), no overlap with another freestanding CW at the same depth."""
+    cid = cw["id"]
+    s0, s1, v0, v1 = cw["rect"]["v"]
+    plane = cw.get("plane", REFERENCE_PLANE)
+    if plane not in frames:
+        errors.append(f"cw_fields[{cid}]: plane '{plane}' does not exist")
+        return
+    if not (s1 > s0 and v1 > v0) or s0 < -EPS or s1 > frames[plane].length + 0.01:
+        errors.append(f"cw_fields[{cid}]: rect {cw['rect']['v']} empty or outside 0..L of plane {plane}")
+        return
+    for key, lo, hi in (("u_axes", s0, s1), ("v_axes", v0, v1)):
+        ax = [lo] + list(cw.get(key, {}).get("v", [])) + [hi]
+        if any(b_ - a_ < MIN_CELL - EPS for a_, b_ in zip(ax[:-1], ax[1:])):
+            errors.append(f"cw_fields[{cid}].{key}: axes {ax[1:-1]} not ascending inside {lo}..{hi} with cells >= {MIN_CELL} m")
+    cols, rows = cw_grid(cw)
+    panels = sysdef.get("panels") or {}
+    for cell in cw.get("cells", []):
+        if not (0 <= cell["col"] < len(cols) and 0 <= cell["row"] < len(rows)):
+            errors.append(f"cw_fields[{cid}]: cell {cell['col']}/{cell['row']} outside the raster {len(cols)} x {len(rows)}")
+        elif cell["panel"] not in panels:
+            errors.append(f"cw_fields[{cid}]: panel '{cell['panel']}' is not a panel kind of {cw['system']}")
+        elif panels[cell["panel"]].get("libpart") and cell["row"] != 0:
+            errors.append(f"cw_fields[{cid}]: door panel in row {cell['row']} - a door must be in the bottom row")
+    if cw["reveal"]["v"] < -EPS:
+        errors.append(f"cw_fields[{cid}]: a freestanding CW needs reveal >= 0 (frames behind the plane)")
+    if cw.get("story") and cw["story"] not in {st["id"] for st in spec["stories"]}:
+        errors.append(f"cw_fields[{cid}]: story '{cw['story']}' is not in stories")
+    for c2 in cws:
+        if c2["id"] <= cid or c2.get("zone") or c2.get("plane", REFERENCE_PLANE) != plane or abs(c2["reveal"]["v"] - cw["reveal"]["v"]) > 0.05:
+            continue
+        if rect_overlap_area(cw["rect"]["v"], c2["rect"]["v"]) > 1e-4:
+            errors.append(f"cw_fields[{cid}]: overlaps curtain wall {c2['id']} (same depth)")
+
+
+def slab_ring(sl: dict) -> list:
+    return [tuple(q) for q in sl["outline_sw"]["v"]]
+
+
+def _check_pilot_b(spec: dict, frames: dict, item_ids: set, check_src) -> tuple[list[str], list[str]]:
+    """Pilot B: per-element stories (all stories carry floorIndex or none), slabs given by an outline (valid polygon,
+    slab system, inside 0..L), louvres (FS_Louvers) in front of a freestanding curtain wall field, not behind its face."""
+    errors: list[str] = []
+    warnings: list[str] = []
+    st = spec["stories"]
+    with_idx = [s for s in st if "floorIndex" in s]
+    if with_idx and len(with_idx) != len(st):
+        errors.append("stories: floorIndex on some stories only")
+    lv = [s["level"]["v"] for s in st]
+    if with_idx and lv != sorted(lv):
+        errors.append("stories: levels must ascend")
+    story_ids = {s["id"] for s in st}
+    for sl in spec.get("slabs", []):
+        sid = sl["id"]
+        if sid in item_ids:
+            errors.append(f"slabs[{sid}]: duplicate id")
+        item_ids.add(sid)
+        check_src(f"slabs[{sid}].outline_sw", sl["outline_sw"]["src"], sl["outline_sw"]["conf"])
+        check_src(f"slabs[{sid}].v_top", sl["v_top"]["src"], sl["v_top"]["conf"])
+        sysdef = spec["systems"].get(sl["system"])
+        if sysdef is None or sysdef["type"] != "slab":
+            errors.append(f"slabs[{sid}]: system '{sl['system']}' is not a slab system")
+        ring = slab_ring(sl)
+        if len(ring) < 3 or polygon_area([list(q) for q in ring]) < 1e-4:
+            errors.append(f"slabs[{sid}]: outline empty")
+            continue
+        try:
+            from shapely.geometry import Polygon
+            if not Polygon(ring).is_valid:
+                errors.append(f"slabs[{sid}]: outline self-intersects")
+        except ImportError:
+            pass
+        plane = sl.get("plane", REFERENCE_PLANE)
+        if plane not in frames:
+            errors.append(f"slabs[{sid}]: plane '{plane}' does not exist")
+        elif min(q[0] for q in ring) < -EPS or max(q[0] for q in ring) > frames[plane].length + 0.01:
+            errors.append(f"slabs[{sid}]: outline outside 0..L of plane {plane}")
+        if sl.get("story") and sl["story"] not in story_ids:
+            errors.append(f"slabs[{sid}]: story '{sl['story']}' is not in stories")
+    free = [cw for cw in spec.get("cw_fields", []) if not cw.get("zone")]
+    for ob in spec.get("objects", []):
+        if ob["kind"] != "louvers":
+            continue
+        bb = object_bbox(spec, ob)
+        hosts = [cw for cw in free if cw["rect"]["v"][0] - 0.01 <= bb[0] and bb[1] <= cw["rect"]["v"][1] + 0.01
+                 and cw["rect"]["v"][2] - 0.01 <= bb[2] and bb[3] <= cw["rect"]["v"][3] + 0.01]
+        if not hosts:
+            errors.append(f"objects[{ob['id']}]: louvres {[round(x, 3) for x in bb[:4]]} in front of no curtain wall field")
+        elif any(bb[4] < -h["reveal"]["v"] - EPS for h in hosts):
+            errors.append(f"objects[{ob['id']}]: louvres reach behind the face of their curtain wall (w {bb[4]:.3f})")
+    for it in spec.get("linear", []):
+        if it.get("story") and it["story"] not in story_ids:
+            errors.append(f"linear[{it['id']}]: story '{it['story']}' is not in stories")
     return errors, warnings
 
 

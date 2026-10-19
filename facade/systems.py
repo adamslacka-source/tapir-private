@@ -45,6 +45,12 @@ FAV_TYPES = {"wall": "Wall", "window": "Window", "door": "Door", "beam": "Beam",
 AREA_TOL = 0.01                         # relative - profile area read back vs polygon (ADR I3 acceptance)
 SAMPLE_OFFSET = (1000.0, 0.0)          # m - temporary host wall far away from every pilot facade
 NUM_TOL = 1e-4
+NULL_GUID = "00000000-0000-0000-0000-000000000000"
+# classification of an element the favourite leaves unclassified (FS_* availability is per classification item);
+# item IDs of the Archicad classification in the SK and the CZ template
+KIND_CLASS = {"wall": ("Stena", "Zeď"), "beam": ("Nosník",), "column": ("Stĺp", "Sloup"), "slab": ("Doska", "Deska"),
+              "curtainwall": ("Ľahký obvodový plášť", "Lehký obvodový plášť"), "railing": ("Zábradlie", "Zábradlí"),
+              "object": ("Tieniaci prvok", "Stínící prvek")}
 
 
 def _hash(obj) -> str:
@@ -344,7 +350,7 @@ def ensure_availability(ac: TapirClient, prop_ids: dict, element_guids: list[str
     items = set()
     for ec in res["elementClassifications"]:
         for c in ec.get("classificationIds", []):
-            if c.get("classificationItemId"):
+            if c.get("classificationItemId") and c["classificationItemId"]["guid"] != NULL_GUID:   # unclassified = zero guid
                 items.add(c["classificationItemId"]["guid"])
     new = sorted(items - set(manifest.get("prop_availability", [])))
     if not new:
@@ -852,6 +858,41 @@ def classification_of_systems(ac: TapirClient, spec: dict) -> dict:
             raise TapirError(f"systems[{sid}]: classification item '{name}' found {len(hits)} times in the project")
         out[sid] = hits[0]
     return out
+
+
+def classify_unclassified(ac: TapirClient, items: list[tuple[str, str]], log: list) -> int:
+    """(guid, kind) of elements: the unclassified ones get the classification item of their kind (KIND_CLASS)."""
+    if not items:
+        return 0
+    systems_ = ac.api("API.GetAllClassificationSystems")["classificationSystems"]
+    res = ac.tapir("GetClassificationsOfElements", {"elements": [{"elementId": {"guid": g}} for g, _ in items],
+                                                     "classificationSystemIds": [{"classificationSystemId": s["classificationSystemId"]} for s in systems_]})
+    todo = []
+    for (g, kind), ec in zip(items, res["elementClassifications"]):
+        ids = [c for c in ec.get("classificationIds", []) if c.get("classificationItemId") and c["classificationItemId"]["guid"] != NULL_GUID]
+        if not ids and kind in KIND_CLASS:
+            todo.append((g, kind))
+    if not todo:
+        return 0
+    found: dict[str, list] = {}
+    for cs in systems_:
+        tree = ac.api("API.GetAllClassificationsInSystem", {"classificationSystemId": cs["classificationSystemId"]})["classificationItems"]
+        stack = list(tree)
+        while stack:
+            it = stack.pop()["classificationItem"]
+            found.setdefault(it["id"], []).append({"classificationSystemId": cs["classificationSystemId"], "classificationItemId": it["classificationItemId"]})
+            stack += it.get("children", [])
+    data = []
+    for g, kind in todo:
+        hits = next((found[n] for n in KIND_CLASS[kind] if len(found.get(n, [])) == 1), None)
+        if hits:
+            data.append({"elementId": {"guid": g}, "classificationId": hits[0]})
+    if data:
+        r = ac.tapir("SetClassificationsOfElements", {"elementClassifications": data})
+        if errs := results_ok(r["executionResults"]):
+            raise TapirError(f"SetClassificationsOfElements (by kind): {errs}")
+        log.append(f"classified {len(data)} unclassified element(s) by kind")
+    return len(data)
 
 
 # ---- entry points ------------------------------------------------------------------------------------

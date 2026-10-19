@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "facade-spec/1#I7a",
-  "title": "facade-spec/1 - subset for increments I1-I6 + pilot A (reference, planes, stories, zones[wall], openings, cw_fields, balconies, railings, linear, objects, systems catalog)",
+  "$id": "facade-spec/1#I7b",
+  "title": "facade-spec/1 - subset for increments I1-I6 + pilot A (reference, planes, stories, zones[wall], openings, cw_fields, balconies, railings, linear, objects, systems catalog; pilot B: freestanding curtain walls, slabs, brackets, louvres, per-element stories)",
   "description": "Machine specification of one facade (ADR-001, ch. 4). Local facade coordinates: s = m along the reference line a->b (left to right seen from outside), v = m above reference.z0, w = m out of the facade plane. Every number that drives the model carries a source (src) and a certainty (conf).",
   "type": "object",
   "required": [
@@ -193,6 +193,13 @@
             "$ref": "#/$defs/value"
           },
           "note": {
+            "type": "string"
+          },
+          "floorIndex": {
+            "type": "integer",
+            "description": "Archicad story index; when every story has one, every element gets the story its foot stands on"
+          },
+          "name": {
             "type": "string"
           }
         }
@@ -816,7 +823,10 @@
               "eaves",
               "sill",
               "pilaster",
-              "corner_pilaster"
+              "corner_pilaster",
+              "bracket",
+              "column",
+              "eaves"
             ]
           },
           "system": {
@@ -825,9 +835,10 @@
           "axis": {
             "enum": [
               "h",
-              "v"
+              "v",
+              "w"
             ],
-            "description": "h = horizontal (s = [s0, s1], v = base of the profile); v = vertical (s = [s0, s1] = band across the facade, v = [v0, v1])"
+            "description": "h = horizontal (s = [s0, s1], v = base of the profile); v = vertical (s = [s0, s1] = band across the facade, v = [v0, v1]); w = beam perpendicular to the facade (s = [s0, s1] = width of the profile, w_span = [w0, w1], v = base)"
           },
           "host": {
             "type": "string",
@@ -919,6 +930,13 @@
               "b"
             ],
             "description": "the element runs round the corner at end a / b of its plane (the plane joins another there): s may go beyond 0..L by the profile, a corner profile may reach behind the plane"
+          },
+          "w_span": {
+            "$ref": "#/$defs/range",
+            "description": "axis w: from w0 to w1 out of the plane"
+          },
+          "story": {
+            "type": "string"
           }
         }
       }
@@ -1005,7 +1023,8 @@
           "kind": {
             "enum": [
               "surround",
-              "arch_gable"
+              "arch_gable",
+              "louvers"
             ]
           },
           "system": {
@@ -1066,6 +1085,9 @@
           },
           "note": {
             "type": "string"
+          },
+          "story": {
+            "type": "string"
           }
         }
       }
@@ -1077,7 +1099,6 @@
         "type": "object",
         "required": [
           "id",
-          "zone",
           "rect",
           "system",
           "reveal"
@@ -1138,7 +1159,7 @@
           },
           "reveal": {
             "$ref": "#/$defs/value",
-            "description": "outer face of the frames behind the outside face of the zone wall"
+            "description": "outer face of the frames behind the outside face of the zone wall; without zone (freestanding CW, pilot B): outer face of the frames behind the reference plane of the facade"
           },
           "photo_edges": {
             "type": "array",
@@ -1148,8 +1169,19 @@
           },
           "note": {
             "type": "string"
+          },
+          "story": {
+            "type": "string"
+          },
+          "plane": {
+            "$ref": "#/$defs/planeId"
+          },
+          "photo_w": {
+            "$ref": "#/$defs/value",
+            "description": "w of the plane the axes were read on in the photo (pilot B ground floor: the blind plane in front of the glazing)"
           }
-        }
+        },
+        "description": "glazed field as a Curtain Wall: in a hole of the wall of its zone (zone given) or freestanding in front of / behind the plane (no zone, pilot B)"
       }
     },
     "balconies": {
@@ -1223,7 +1255,7 @@
           },
           "on": {
             "type": "string",
-            "description": "balcony it stands on"
+            "description": "balcony or slab (walkway) it stands on"
           },
           "system": {
             "type": "string"
@@ -1244,6 +1276,54 @@
           "approx_error": {
             "type": "number",
             "description": "largest distance of the chords from the arc (m)"
+          },
+          "note": {
+            "type": "string"
+          },
+          "story": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "slabs": {
+      "type": "array",
+      "description": "pilot B: slabs given by their outline in (s, w) of a plane (walkway, slab edge strip)",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "system",
+          "outline_sw",
+          "v_top"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/itemId"
+          },
+          "kind": {
+            "enum": [
+              "walkway",
+              "floor_edge",
+              "roof"
+            ]
+          },
+          "system": {
+            "type": "string"
+          },
+          "plane": {
+            "$ref": "#/$defs/planeId"
+          },
+          "outline_sw": {
+            "$ref": "#/$defs/pointList"
+          },
+          "v_top": {
+            "$ref": "#/$defs/value"
+          },
+          "story": {
+            "type": "string"
           },
           "note": {
             "type": "string"

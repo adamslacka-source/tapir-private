@@ -12,6 +12,7 @@ import math
 TEMPLATES = {
     "FS_Surround": ("opW", "opH", "bandW", "bandD", "bTop", "bBottom", "bLeft", "bRight", "headOvh"),
     "FS_ArchGable": ("rIn", "rOut", "depth", "nSeg"),
+    "FS_Louvers": ("A", "ZZYZX", "lamD", "offs", "bFrame", "frameD"),
 }
 
 
@@ -28,6 +29,9 @@ def local_bbox(template: str, p: dict) -> list[float]:
         return [x0, x1, 0.0, p["bandD"], z0, z1]
     if template == "FS_ArchGable":
         return [-p["rOut"], p["rOut"], -p["depth"], 0.0, 0.0, p["rOut"]]
+    if template == "FS_Louvers":                       # hotspot box of the template: y offs .. offs + max(lamD, frameD)
+        d = max(p["lamD"], p["frameD"]) if p["bFrame"] else p["lamD"]
+        return [0.0, p["A"], p["offs"], p["offs"] + d, 0.0, p["ZZYZX"]]
     raise KeyError(f"no expectation for template {template}")
 
 
