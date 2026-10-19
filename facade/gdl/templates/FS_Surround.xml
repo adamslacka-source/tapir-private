@@ -1,0 +1,173 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Symbol IsArchivable="false" IsPlaceable="true" MainGUID="3A6EC23E-790D-5AAC-AFD3-3FADD5863A0B" MigrationValue="Normal" Owner="0" Version="46">
+<!-- FS_Surround 1.0 - window / door surround (šambrána) as one object (ADR-001 D5). Units: metres.
+     Origin = lower left corner of the opening in the wall face; x = along the facade, z = up,
+     y = out of the wall plane. Bands project y [0, bandD]. Jambs x [-bandW, 0] and [opW, opW + bandW],
+     z [0, opH]; head z [opH, opH + bandW], runs over the jambs and overhangs them by headOvh;
+     bottom band z [-bandW, 0] under the jambs. -->
+<Ancestry SectVersion="1" SectionFlags="0" SubIdent="0" Template="false">
+	<MainGUID>F938E33A-329D-4A36-BE3E-85E126820996</MainGUID>
+	<MainGUID>103E8D2C-8230-42E1-9597-46F84CCE28C0</MainGUID>
+</Ancestry>
+
+<CalledMacros SectVersion="2" SectionFlags="0" SubIdent="0">
+</CalledMacros>
+
+<ParamSection SectVersion="27" SectionFlags="0" SubIdent="0">
+	<ParamSectHeader>
+		<AutoHotspots>false</AutoHotspots>
+		<StatBits>
+			<STBit_FixSize/>
+		</StatBits>
+		<WDLeftFrame>0</WDLeftFrame>
+		<WDRightFrame>0</WDRightFrame>
+		<WDTopFrame>0</WDTopFrame>
+		<WDBotFrame>0</WDBotFrame>
+		<LayFlags>65535</LayFlags>
+		<WDMirrorThickness>0</WDMirrorThickness>
+		<WDWallInset>0</WDWallInset>
+	</ParamSectHeader>
+	<Parameters>
+		<Length Name="A">
+			<Description><![CDATA["Overall width (information only)"]]></Description>
+			<Value>1.24</Value>
+		</Length>
+		<Length Name="B">
+			<Description><![CDATA["Depth (information only)"]]></Description>
+			<Value>0.03</Value>
+		</Length>
+		<Length Name="ZZYZX">
+			<Description><![CDATA["Overall height (information only)"]]></Description>
+			<Value>1.62</Value>
+		</Length>
+		<Length Name="opW">
+			<Description><![CDATA["Opening width"]]></Description>
+			<Value>1</Value>
+		</Length>
+		<Length Name="opH">
+			<Description><![CDATA["Opening height"]]></Description>
+			<Value>1.5</Value>
+		</Length>
+		<Length Name="bandW">
+			<Description><![CDATA["Band width"]]></Description>
+			<Value>0.12</Value>
+		</Length>
+		<Length Name="bandD">
+			<Description><![CDATA["Band projection from the wall plane"]]></Description>
+			<Value>0.03</Value>
+		</Length>
+		<Boolean Name="bTop">
+			<Description><![CDATA["Head band"]]></Description>
+			<Value>1</Value>
+		</Boolean>
+		<Boolean Name="bBottom">
+			<Description><![CDATA["Bottom band"]]></Description>
+			<Value>0</Value>
+		</Boolean>
+		<Boolean Name="bLeft">
+			<Description><![CDATA["Left jamb band"]]></Description>
+			<Value>1</Value>
+		</Boolean>
+		<Boolean Name="bRight">
+			<Description><![CDATA["Right jamb band"]]></Description>
+			<Value>1</Value>
+		</Boolean>
+		<Length Name="headOvh">
+			<Description><![CDATA["Head overhang beyond the jambs (each side)"]]></Description>
+			<Value>0</Value>
+		</Length>
+		<Material Name="matBand">
+			<Description><![CDATA["Band surface (0 = object surface)"]]></Description>
+			<Value>0</Value>
+		</Material>
+	</Parameters>
+</ParamSection>
+
+<Script_1D SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+! FS_Surround 1.0 - master script: outer extent of the bands
+wl = 0
+wr = 0
+IF bLeft THEN wl = bandW
+IF bRight THEN wr = bandW
+xMin = -wl
+xMax = opW + wr
+IF bTop THEN
+	xMin = MIN(xMin, -wl - headOvh)
+	xMax = MAX(xMax, opW + wr + headOvh)
+ENDIF
+zMin = 0
+IF bBottom THEN zMin = -bandW
+zMax = opH
+IF bTop THEN zMax = opH + bandW
+]]></Script_1D>
+
+<Script_2D SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+HOTSPOT2 0, 0
+HOTSPOT2 opW, 0
+HOTSPOT2 xMin, 0
+HOTSPOT2 xMax, 0
+HOTSPOT2 xMin, bandD
+HOTSPOT2 xMax, bandD
+PROJECT2 3, 270, 2
+]]></Script_2D>
+
+<Script_3D SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+HOTSPOT 0, 0, 0
+HOTSPOT opW, 0, 0
+HOTSPOT 0, 0, opH
+HOTSPOT opW, 0, opH
+HOTSPOT xMin, bandD, zMin
+HOTSPOT xMax, bandD, zMin
+HOTSPOT xMin, bandD, zMax
+HOTSPOT xMax, bandD, zMax
+
+IF matBand > 0 THEN MATERIAL matBand
+IF bLeft THEN
+	ADD -bandW, 0, 0
+	BLOCK bandW, bandD, opH
+	DEL 1
+ENDIF
+IF bRight THEN
+	ADD opW, 0, 0
+	BLOCK bandW, bandD, opH
+	DEL 1
+ENDIF
+IF bTop THEN
+	ADD -wl - headOvh, 0, opH
+	BLOCK opW + wl + wr + 2 * headOvh, bandD, bandW
+	DEL 1
+ENDIF
+IF bBottom THEN
+	ADD -wl, 0, -bandW
+	BLOCK opW + wl + wr, bandD, bandW
+	DEL 1
+ENDIF
+]]></Script_3D>
+
+<Script_PR SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+VALUES "opW" RANGE (0, ]
+VALUES "opH" RANGE (0, ]
+VALUES "bandW" RANGE (0, ]
+VALUES "bandD" RANGE (0, ]
+VALUES "headOvh" RANGE [0, ]
+]]></Script_PR>
+
+<Script_UI SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+]]></Script_UI>
+
+<Script_VL SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+]]></Script_VL>
+
+<Comment SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[FS_Surround 1.0 - tapir-private facade pipeline (ADR-001)]]></Comment>
+
+<Keywords SectVersion="1" SectionFlags="0" SubIdent="0"><![CDATA[FS facade surround sambrana]]></Keywords>
+
+<Copyright SectVersion="1" SectionFlags="0" SubIdent="0">
+	<Author>tapir-private</Author>
+	<License>
+		<Type>CC BY</Type>
+		<Version>4.0</Version>
+	</License>
+</Copyright>
+
+</Symbol>

@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Symbol IsArchivable="false" IsPlaceable="true" MainGUID="9CEA0899-A0F8-5DF7-A8CC-0462CA71E1A5" MigrationValue="Normal" Owner="0" Version="46">
+<!-- FS_CladdingPanels 1.0 - cladding panels in a grid (ADR-001 D5). Units: metres.
+     Local system: x = along the facade (width A), z = up (height ZZYZX), y = out of the wall plane.
+     Grid lines at multiples of rx / ry from the origin; joints are centred on the inner grid lines,
+     the outer edges of the field are flush with 0 / A and 0 / ZZYZX; panels at y [offs, offs + thk]. -->
+<Ancestry SectVersion="1" SectionFlags="0" SubIdent="0" Template="false">
+	<MainGUID>F938E33A-329D-4A36-BE3E-85E126820996</MainGUID>
+	<MainGUID>103E8D2C-8230-42E1-9597-46F84CCE28C0</MainGUID>
+</Ancestry>
+
+<CalledMacros SectVersion="2" SectionFlags="0" SubIdent="0">
+</CalledMacros>
+
+<ParamSection SectVersion="27" SectionFlags="0" SubIdent="0">
+	<ParamSectHeader>
+		<AutoHotspots>false</AutoHotspots>
+		<StatBits>
+			<STBit_FixSize/>
+		</StatBits>
+		<WDLeftFrame>0</WDLeftFrame>
+		<WDRightFrame>0</WDRightFrame>
+		<WDTopFrame>0</WDTopFrame>
+		<WDBotFrame>0</WDBotFrame>
+		<LayFlags>65535</LayFlags>
+		<WDMirrorThickness>0</WDMirrorThickness>
+		<WDWallInset>0</WDWallInset>
+	</ParamSectHeader>
+	<Parameters>
+		<Length Name="A">
+			<Description><![CDATA["Field width (x)"]]></Description>
+			<Value>3</Value>
+		</Length>
+		<Length Name="B">
+			<Description><![CDATA["Depth (information only, y)"]]></Description>
+			<Value>0.07</Value>
+		</Length>
+		<Length Name="ZZYZX">
+			<Description><![CDATA["Field height (z)"]]></Description>
+			<Value>2</Value>
+		</Length>
+		<Length Name="rx">
+			<Description><![CDATA["Grid x (panel module)"]]></Description>
+			<Value>0.6</Value>
+		</Length>
+		<Length Name="ry">
+			<Description><![CDATA["Grid z (panel module)"]]></Description>
+			<Value>0.6</Value>
+		</Length>
+		<Length Name="joint">
+			<Description><![CDATA["Joint width"]]></Description>
+			<Value>0.008</Value>
+		</Length>
+		<Length Name="thk">
+			<Description><![CDATA["Panel thickness"]]></Description>
+			<Value>0.02</Value>
+		</Length>
+		<Length Name="offs">
+			<Description><![CDATA["Offset from the wall plane (y)"]]></Description>
+			<Value>0.05</Value>
+		</Length>
+		<Material Name="matPanel">
+			<Description><![CDATA["Panel surface (0 = object surface)"]]></Description>
+			<Value>0</Value>
+		</Material>
+	</Parameters>
+</ParamSection>
+
+<Script_1D SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+! FS_CladdingPanels 1.0 - master script
+EPS = 0.00001
+gx = MAX(rx, 0.05)
+gy = MAX(ry, 0.05)
+nx = INT(A / gx - EPS) + 1
+ny = INT(ZZYZX / gy - EPS) + 1
+IF nx < 1 THEN nx = 1
+IF ny < 1 THEN ny = 1
+IF nx > 400 THEN nx = 400
+IF ny > 400 THEN ny = 400
+]]></Script_1D>
+
+<Script_2D SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+HOTSPOT2 0, offs
+HOTSPOT2 A, offs
+HOTSPOT2 0, offs + thk
+HOTSPOT2 A, offs + thk
+PROJECT2 3, 270, 2
+]]></Script_2D>
+
+<Script_3D SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+HOTSPOT 0, offs, 0
+HOTSPOT A, offs, 0
+HOTSPOT 0, offs, ZZYZX
+HOTSPOT A, offs, ZZYZX
+HOTSPOT 0, offs + thk, 0
+HOTSPOT A, offs + thk, 0
+HOTSPOT 0, offs + thk, ZZYZX
+HOTSPOT A, offs + thk, ZZYZX
+
+IF matPanel > 0 THEN MATERIAL matPanel
+FOR j = 1 TO ny
+	z0 = (j - 1) * gy
+	z1 = MIN(j * gy, ZZYZX)
+	IF j > 1 THEN z0 = z0 + joint / 2
+	IF j < ny THEN z1 = z1 - joint / 2
+	FOR i = 1 TO nx
+		x0 = (i - 1) * gx
+		x1 = MIN(i * gx, A)
+		IF i > 1 THEN x0 = x0 + joint / 2
+		IF i < nx THEN x1 = x1 - joint / 2
+		IF x1 - x0 > EPS AND z1 - z0 > EPS THEN
+			ADD x0, offs, z0
+			BLOCK x1 - x0, thk, z1 - z0
+			DEL 1
+		ENDIF
+	NEXT i
+NEXT j
+]]></Script_3D>
+
+<Script_PR SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+VALUES "rx" RANGE [0.05, ]
+VALUES "ry" RANGE [0.05, ]
+VALUES "thk" RANGE (0, ]
+VALUES "joint" RANGE [0, ]
+]]></Script_PR>
+
+<Script_UI SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+]]></Script_UI>
+
+<Script_VL SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+]]></Script_VL>
+
+<Comment SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[FS_CladdingPanels 1.0 - tapir-private facade pipeline (ADR-001)]]></Comment>
+
+<Keywords SectVersion="1" SectionFlags="0" SubIdent="0"><![CDATA[FS facade cladding panels]]></Keywords>
+
+<Copyright SectVersion="1" SectionFlags="0" SubIdent="0">
+	<Author>tapir-private</Author>
+	<License>
+		<Type>CC BY</Type>
+		<Version>4.0</Version>
+	</License>
+</Copyright>
+
+</Symbol>

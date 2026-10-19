@@ -1,0 +1,202 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Symbol IsArchivable="false" IsPlaceable="true" MainGUID="A755BA1A-0E02-5DB3-A4EE-AB777D2F7D38" MigrationValue="Normal" Owner="0" Version="46">
+<!-- FS_Louvers 1.0 - field of shading louvres (ADR-001 D5). Units: metres, degrees.
+     Local system: x = along the facade (width A), z = up (height ZZYZX), y = out of the wall plane.
+     The field is the box x [0, A], z [0, ZZYZX]; louvres sit at y >= offs (offset from the wall plane). -->
+<Ancestry SectVersion="1" SectionFlags="0" SubIdent="0" Template="false">
+	<MainGUID>F938E33A-329D-4A36-BE3E-85E126820996</MainGUID>
+	<MainGUID>103E8D2C-8230-42E1-9597-46F84CCE28C0</MainGUID>
+</Ancestry>
+
+<CalledMacros SectVersion="2" SectionFlags="0" SubIdent="0">
+</CalledMacros>
+
+<ParamSection SectVersion="27" SectionFlags="0" SubIdent="0">
+	<ParamSectHeader>
+		<AutoHotspots>false</AutoHotspots>
+		<StatBits>
+			<STBit_FixSize/>
+		</StatBits>
+		<WDLeftFrame>0</WDLeftFrame>
+		<WDRightFrame>0</WDRightFrame>
+		<WDTopFrame>0</WDTopFrame>
+		<WDBotFrame>0</WDBotFrame>
+		<LayFlags>65535</LayFlags>
+		<WDMirrorThickness>0</WDMirrorThickness>
+		<WDWallInset>0</WDWallInset>
+	</ParamSectHeader>
+	<Parameters>
+		<Length Name="A">
+			<Description><![CDATA["Width of the field (x)"]]></Description>
+			<Value>2</Value>
+		</Length>
+		<Length Name="B">
+			<Description><![CDATA["Depth (information only, y)"]]></Description>
+			<Value>0.3</Value>
+		</Length>
+		<Length Name="ZZYZX">
+			<Description><![CDATA["Height of the field (z)"]]></Description>
+			<Value>1.5</Value>
+		</Length>
+		<Integer Name="iOrient">
+			<Description><![CDATA["Louvre direction: 0 horizontal, 1 vertical"]]></Description>
+			<Value>0</Value>
+		</Integer>
+		<Integer Name="iSpacing">
+			<Description><![CDATA["Distribution: 0 by count, 1 by pitch"]]></Description>
+			<Value>0</Value>
+		</Integer>
+		<Integer Name="nLam">
+			<Description><![CDATA["Number of louvres (iSpacing = 0)"]]></Description>
+			<Value>6</Value>
+		</Integer>
+		<Length Name="pitch">
+			<Description><![CDATA["Pitch of louvres (iSpacing = 1)"]]></Description>
+			<Value>0.25</Value>
+		</Length>
+		<Length Name="lamD">
+			<Description><![CDATA["Louvre depth (blade width)"]]></Description>
+			<Value>0.2</Value>
+		</Length>
+		<Length Name="lamT">
+			<Description><![CDATA["Louvre thickness"]]></Description>
+			<Value>0.02</Value>
+		</Length>
+		<Angle Name="lamAng">
+			<Description><![CDATA["Louvre angle"]]></Description>
+			<Value>0</Value>
+		</Angle>
+		<Length Name="offs">
+			<Description><![CDATA["Offset from the wall plane (y)"]]></Description>
+			<Value>0.1</Value>
+		</Length>
+		<Boolean Name="bFrame">
+			<Description><![CDATA["Frame around the field"]]></Description>
+			<Value>1</Value>
+		</Boolean>
+		<Length Name="frameW">
+			<Description><![CDATA["Frame width"]]></Description>
+			<Value>0.05</Value>
+		</Length>
+		<Length Name="frameD">
+			<Description><![CDATA["Frame depth"]]></Description>
+			<Value>0.2</Value>
+		</Length>
+		<Material Name="matLam">
+			<Description><![CDATA["Louvre surface (0 = object surface)"]]></Description>
+			<Value>0</Value>
+		</Material>
+		<Material Name="matFrame">
+			<Description><![CDATA["Frame surface (0 = object surface)"]]></Description>
+			<Value>0</Value>
+		</Material>
+	</Parameters>
+</ParamSection>
+
+<Script_1D SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+! FS_Louvers 1.0 - master script: layout shared by the 2D and 3D scripts
+EPS = 0.00001
+fw = 0
+IF bFrame THEN fw = frameW
+IF iOrient = 0 THEN
+	span = ZZYZX
+ELSE
+	span = A
+ENDIF
+lo = fw
+hi = span - fw
+IF iSpacing = 0 THEN
+	n = MAX(1, nLam)
+	p = (hi - lo) / n
+ELSE
+	p = MAX(pitch, 0.001)
+	n = INT((hi - lo) / p + EPS)
+	IF n < 1 THEN n = 1
+ENDIF
+IF n > 2000 THEN n = 2000
+start = lo + ((hi - lo) - n * p) / 2 + p / 2
+dMax = lamD
+IF bFrame THEN dMax = MAX(lamD, frameD)
+]]></Script_1D>
+
+<Script_2D SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+HOTSPOT2 0, offs
+HOTSPOT2 A, offs
+HOTSPOT2 0, offs + dMax
+HOTSPOT2 A, offs + dMax
+PROJECT2 3, 270, 2
+]]></Script_2D>
+
+<Script_3D SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+HOTSPOT 0, offs, 0
+HOTSPOT A, offs, 0
+HOTSPOT 0, offs, ZZYZX
+HOTSPOT A, offs, ZZYZX
+HOTSPOT 0, offs + dMax, 0
+HOTSPOT A, offs + dMax, 0
+HOTSPOT 0, offs + dMax, ZZYZX
+HOTSPOT A, offs + dMax, ZZYZX
+
+IF matLam > 0 THEN MATERIAL matLam
+FOR i = 1 TO n
+	c = start + (i - 1) * p
+	IF iOrient = 0 THEN
+		ADD fw, offs + lamD / 2, c
+		ROTx lamAng
+		ADD 0, -lamD / 2, -lamT / 2
+		BLOCK A - 2 * fw, lamD, lamT
+		DEL 3
+	ELSE
+		ADD c, offs + lamD / 2, fw
+		ROTz lamAng
+		ADD -lamT / 2, -lamD / 2, 0
+		BLOCK lamT, lamD, ZZYZX - 2 * fw
+		DEL 3
+	ENDIF
+NEXT i
+
+IF bFrame THEN
+	IF matFrame > 0 THEN MATERIAL matFrame
+	ADD 0, offs, 0
+	BLOCK A, frameD, fw
+	ADDz ZZYZX - fw
+	BLOCK A, frameD, fw
+	DEL 1
+	ADDz fw
+	BLOCK fw, frameD, ZZYZX - 2 * fw
+	ADDx A - fw
+	BLOCK fw, frameD, ZZYZX - 2 * fw
+	DEL 2
+	DEL 1
+ENDIF
+]]></Script_3D>
+
+<Script_PR SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+VALUES "iOrient" 0, 1
+VALUES "iSpacing" 0, 1
+VALUES "nLam" RANGE [1, 2000]
+VALUES "pitch" RANGE (0, ]
+VALUES "lamD" RANGE (0, ]
+VALUES "lamT" RANGE (0, ]
+VALUES "frameW" RANGE [0, ]
+]]></Script_PR>
+
+<Script_UI SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+]]></Script_UI>
+
+<Script_VL SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+]]></Script_VL>
+
+<Comment SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[FS_Louvers 1.0 - tapir-private facade pipeline (ADR-001)]]></Comment>
+
+<Keywords SectVersion="1" SectionFlags="0" SubIdent="0"><![CDATA[FS facade louvres shading]]></Keywords>
+
+<Copyright SectVersion="1" SectionFlags="0" SubIdent="0">
+	<Author>tapir-private</Author>
+	<License>
+		<Type>CC BY</Type>
+		<Version>4.0</Version>
+	</License>
+</Copyright>
+
+</Symbol>

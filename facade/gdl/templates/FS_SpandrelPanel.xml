@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Symbol IsArchivable="false" IsPlaceable="true" MainGUID="FC4B0FA7-0562-5D78-89D8-00C568751FE7" MigrationValue="Normal" Owner="0" Version="46">
+<!-- FS_SpandrelPanel 1.0 - opaque spandrel / parapet panel (ADR-001 D5). Units: metres.
+     Local system: x = along the facade (width A), z = up (height ZZYZX), y = out of the wall plane.
+     Panel body: x [0, A], y [proj, proj + thk], z [0, ZZYZX]; nDiv equal parts separated by joints. -->
+<Ancestry SectVersion="1" SectionFlags="0" SubIdent="0" Template="false">
+	<MainGUID>F938E33A-329D-4A36-BE3E-85E126820996</MainGUID>
+	<MainGUID>103E8D2C-8230-42E1-9597-46F84CCE28C0</MainGUID>
+</Ancestry>
+
+<CalledMacros SectVersion="2" SectionFlags="0" SubIdent="0">
+</CalledMacros>
+
+<ParamSection SectVersion="27" SectionFlags="0" SubIdent="0">
+	<ParamSectHeader>
+		<AutoHotspots>false</AutoHotspots>
+		<StatBits>
+			<STBit_FixSize/>
+		</StatBits>
+		<WDLeftFrame>0</WDLeftFrame>
+		<WDRightFrame>0</WDRightFrame>
+		<WDTopFrame>0</WDTopFrame>
+		<WDBotFrame>0</WDBotFrame>
+		<LayFlags>65535</LayFlags>
+		<WDMirrorThickness>0</WDMirrorThickness>
+		<WDWallInset>0</WDWallInset>
+	</ParamSectHeader>
+	<Parameters>
+		<Length Name="A">
+			<Description><![CDATA["Panel width (x)"]]></Description>
+			<Value>1.2</Value>
+		</Length>
+		<Length Name="B">
+			<Description><![CDATA["Depth (information only, y)"]]></Description>
+			<Value>0.05</Value>
+		</Length>
+		<Length Name="ZZYZX">
+			<Description><![CDATA["Panel height (z)"]]></Description>
+			<Value>0.9</Value>
+		</Length>
+		<Length Name="thk">
+			<Description><![CDATA["Panel thickness"]]></Description>
+			<Value>0.05</Value>
+		</Length>
+		<Length Name="proj">
+			<Description><![CDATA["Projection from the wall plane (y)"]]></Description>
+			<Value>0</Value>
+		</Length>
+		<Integer Name="nDiv">
+			<Description><![CDATA["Number of equal parts along x"]]></Description>
+			<Value>1</Value>
+		</Integer>
+		<Length Name="joint">
+			<Description><![CDATA["Joint between the parts"]]></Description>
+			<Value>0.01</Value>
+		</Length>
+		<Material Name="matPanel">
+			<Description><![CDATA["Panel surface (0 = object surface)"]]></Description>
+			<Value>0</Value>
+		</Material>
+	</Parameters>
+</ParamSection>
+
+<Script_1D SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+! FS_SpandrelPanel 1.0 - master script
+n = MAX(1, nDiv)
+IF n > 500 THEN n = 500
+w = (A - (n - 1) * joint) / n
+]]></Script_1D>
+
+<Script_2D SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+HOTSPOT2 0, proj
+HOTSPOT2 A, proj
+HOTSPOT2 0, proj + thk
+HOTSPOT2 A, proj + thk
+PROJECT2 3, 270, 2
+]]></Script_2D>
+
+<Script_3D SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+HOTSPOT 0, proj, 0
+HOTSPOT A, proj, 0
+HOTSPOT 0, proj, ZZYZX
+HOTSPOT A, proj, ZZYZX
+HOTSPOT 0, proj + thk, 0
+HOTSPOT A, proj + thk, 0
+HOTSPOT 0, proj + thk, ZZYZX
+HOTSPOT A, proj + thk, ZZYZX
+
+IF matPanel > 0 THEN MATERIAL matPanel
+FOR i = 1 TO n
+	ADD (i - 1) * (w + joint), proj, 0
+	BLOCK w, thk, ZZYZX
+	DEL 1
+NEXT i
+]]></Script_3D>
+
+<Script_PR SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+VALUES "nDiv" RANGE [1, 500]
+VALUES "thk" RANGE (0, ]
+VALUES "joint" RANGE [0, ]
+]]></Script_PR>
+
+<Script_UI SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+]]></Script_UI>
+
+<Script_VL SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+]]></Script_VL>
+
+<Comment SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[FS_SpandrelPanel 1.0 - tapir-private facade pipeline (ADR-001)]]></Comment>
+
+<Keywords SectVersion="1" SectionFlags="0" SubIdent="0"><![CDATA[FS facade spandrel panel]]></Keywords>
+
+<Copyright SectVersion="1" SectionFlags="0" SubIdent="0">
+	<Author>tapir-private</Author>
+	<License>
+		<Type>CC BY</Type>
+		<Version>4.0</Version>
+	</License>
+</Copyright>
+
+</Symbol>
