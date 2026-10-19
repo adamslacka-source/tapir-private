@@ -1,5 +1,5 @@
 {
- "about": "Fill types and wall build-up of M015_L1, read by hand from the rectified photo (ADR-001 I2). Values carry source and certainty like the spec. Read from 3x crops of kontrola/fasada_M015_J_rektif.jpg with a 0.1 m grid (120 px/m), 2026-10-19; a clearly visible edge is 'meranie' (+-5 cm), anything hidden or inferred is 'odhad'.",
+ "about": "Fill types and wall build-up of M015_L1, read by hand from the rectified photo (ADR-001 I2). Values carry source and certainty like the spec. Read from 3x crops of kontrola/fasada_M015_J_rektif.jpg with a 0.1 m grid (120 px/m), 2026-10-19; a clearly visible edge is 'meranie' (+-5 cm), anything hidden or inferred is 'odhad'. I3 (2026-10-19): camera, profiles, linear elements (cornice, string course, surrounds and sill ledges of the 2nd floor), gate with transom.",
  "source": {
   "id": "S6",
   "type": "photo",
@@ -130,8 +130,7 @@
   },
   "door.gate": {
    "type": "door",
-   "libpart": "Garage Double Door 27",
-   "base_favorite": "Dvoukřídlá garážová vrata",
+   "libpart": "Double Door with Transom 27",
    "favorite": "FS door.gate",
    "nominal": "wallhole",
    "leaves": {
@@ -144,18 +143,12 @@
     "v": true,
     "src": "S6",
     "conf": "meranie",
-    "note": "ornamental oval fanlight; a rectangular transom with one bar would do (simplification) - NOT realisable now, see gdl_param_map"
+    "note": "ornamental oval fanlight above the leaves; modelled as a rectangular glazed transom (simplification)"
    },
    "sidelight": {
     "v": "none",
     "src": "S6",
     "conf": "meranie"
-   },
-   "leaf_panel": {
-    "v": 14,
-    "src": "S6",
-    "conf": "odhad",
-    "note": "panel style 14: big top panel (stands in for the fanlight visually), two narrow middle panels (glazed grilles), bottom panel - closest of the 10 styles of the part"
    },
    "frame_surface": {
     "v": "Barva 02 - titanově bílá",
@@ -165,7 +158,207 @@
    },
    "conf": "pravidlo",
    "src": "S6",
-   "note": "the only two-leaf swing door favourite of the template is the garage double door; a gate with transom needs Tapir gap T7"
+   "note": "two equal leaves + fanlight; the template has no favourite of this part -> sample placed by CreateDoors.libraryPartName (Tapir T7), favourite FS door.gate made from it (I3)",
+   "base_libpart": true
+  },
+  "prof.rimsa_okap": {
+   "type": "profile",
+   "name": "FS prof.rimsa_okap",
+   "polygon_wv": [
+    [
+     0,
+     0
+    ],
+    [
+     0.35,
+     0
+    ],
+    [
+     0.35,
+     0.17
+    ],
+    [
+     0,
+     0.17
+    ]
+   ],
+   "material": "Pozinkovaný plech",
+   "edge_surface": "Barva 02 - titanově bílá",
+   "w": {
+    "v": 0.35,
+    "src": "S2",
+    "conf": "odhad",
+    "note": "projection of the eaves from domy.py sbox (ODHAD in the pilot); one photo cannot separate projection and height"
+   },
+   "h": {
+    "v": 0.17,
+    "src": "S7",
+    "conf": "meranie",
+    "note": "front edges seen at v' 7.40 (gutter bottom) and 7.57 (top of the white fascia); with w 0.35 and the camera -> 7.30 .. 7.47"
+   },
+   "conf": "odhad",
+   "src": "S7",
+   "note": "eaves of the roof: gutter + white fascia, simplified to one block (no stucco cornice visible on the photo)"
+  },
+  "prof.kordon": {
+   "type": "profile",
+   "name": "FS prof.kordon",
+   "polygon_wv": [
+    [
+     0,
+     0
+    ],
+    [
+     0.08,
+     0
+    ],
+    [
+     0.08,
+     0.09
+    ],
+    [
+     0,
+     0.09
+    ]
+   ],
+   "material": "Kamenný obklad",
+   "edge_surface": "Kámen - mramor Carrara bílý",
+   "w": {
+    "v": 0.08,
+    "src": null,
+    "conf": "odhad",
+    "note": "stone cladding of the ground floor (~0.03) + ledge (~0.05); not visible on the frontal photo"
+   },
+   "h": {
+    "v": 0.09,
+    "src": "S7",
+    "conf": "meranie",
+    "note": "light band between two shadow lines, v' 3.84 .. 3.93"
+   },
+   "conf": "odhad",
+   "src": "S7",
+   "note": "string course on top of the marble cladding of the ground floor (same detail as the neighbour M062: ledge on the cladding at 3.90)"
+  },
+  "prof.parapet_rimsa": {
+   "type": "profile",
+   "name": "FS prof.parapet_rimsa",
+   "polygon_wv": [
+    [
+     0,
+     0
+    ],
+    [
+     0.06,
+     0
+    ],
+    [
+     0.06,
+     0.085
+    ],
+    [
+     0,
+     0.085
+    ]
+   ],
+   "material": "Omítka - venkovní",
+   "edge_surface": "Barva 20 - celadonová zelená",
+   "w": {
+    "v": 0.06,
+    "src": null,
+    "conf": "odhad",
+    "note": "projection not visible on the frontal photo"
+   },
+   "h": {
+    "v": 0.085,
+    "src": "S7",
+    "conf": "meranie",
+    "note": "green face v' 4.66 .. 4.745 under O5 (shadow line on top)"
+   },
+   "conf": "odhad",
+   "src": "S7",
+   "note": "window sill ledge of the 2nd floor windows, painted like the surround"
+  },
+  "prof.sambrana": {
+   "type": "profile",
+   "name": "FS prof.sambrana",
+   "polygon_wv": [
+    [
+     0,
+     0
+    ],
+    [
+     0.03,
+     0
+    ],
+    [
+     0.03,
+     0.12
+    ],
+    [
+     0,
+     0.12
+    ]
+   ],
+   "material": "Omítka - venkovní",
+   "edge_surface": "Barva 20 - celadonová zelená",
+   "w": {
+    "v": 0.03,
+    "src": null,
+    "conf": "odhad",
+    "note": "flat plaster surround, projection not visible"
+   },
+   "h": {
+    "v": 0.12,
+    "src": "S7",
+    "conf": "meranie",
+    "note": "band width: right jamb s 2.21 .. 2.33, head v 6.37 .. 6.475 (O5)"
+   },
+   "conf": "odhad",
+   "src": "S7",
+   "note": "flat window surround of the 2nd floor windows, green, lighter than the wall; one profile for the head (beam: x = out, y = up) and the jambs (column: x = out, y = along the facade)"
+  },
+  "lin.rimsa_okap": {
+   "type": "linear",
+   "tool": "beam",
+   "profile": "prof.rimsa_okap",
+   "favorite": "FS lin.rimsa_okap",
+   "conf": "odhad",
+   "src": "S7",
+   "note": "horizontal profiled element = Beam (ADR 6)"
+  },
+  "lin.kordon": {
+   "type": "linear",
+   "tool": "beam",
+   "profile": "prof.kordon",
+   "favorite": "FS lin.kordon",
+   "conf": "odhad",
+   "src": "S7"
+  },
+  "lin.parapet_rimsa": {
+   "type": "linear",
+   "tool": "beam",
+   "profile": "prof.parapet_rimsa",
+   "favorite": "FS lin.parapet_rimsa",
+   "conf": "odhad",
+   "src": "S7"
+  },
+  "lin.sambrana_h": {
+   "type": "linear",
+   "tool": "beam",
+   "profile": "prof.sambrana",
+   "favorite": "FS lin.sambrana_h",
+   "conf": "odhad",
+   "src": "S7",
+   "note": "head of the surround"
+  },
+  "lin.sambrana_v": {
+   "type": "linear",
+   "tool": "column",
+   "profile": "prof.sambrana",
+   "favorite": "FS lin.sambrana_v",
+   "conf": "odhad",
+   "src": "S7",
+   "note": "jambs of the surround: Column with the profile, rotated so that profile x = out of the facade, y = along it"
   }
  },
  "openings": {
@@ -278,8 +471,12 @@
   "systems[win.2kr].transom": "prijať bez nadsvetlíka (horná časť zakrytá roletou); ak je nadsvetlík, nastaviť true",
   "systems[door.shop_sl].base_favorite": "prijať hliníkové dvere so svetlíkom a nadsvetlíkom",
   "systems[door.shop_sl].frame_surface": "vytvoriť povrch 'FS Barva - tyrkysová' (RGB z fotky ≈ 3/103/133) pre O3+O4; O1 ponechať kobaltovú modrú",
-  "systems[door.gate].base_favorite": "dočasne prijať dvojkrídlovú bránu bez nadsvetlíka; cieľ 'Double Door with Transom 27' po oprave Tapiru (T7)",
-  "systems[door.gate].leaf_panel": "prijať štýl 14 (horné pole ako náhrada nadsvetlíka)"
+  "systems[door.gate].base_favorite": "prijať 'Double Door with Transom 27' (dvojkrídlové dvere s nadsvetlíkom, vložené cez názov knižničnej časti)",
+  "systems[prof.rimsa_okap].w": "prijať 0,35 m (vyloženie odkvapu); overiť šikmým záberom",
+  "systems[prof.kordon].w": "prijať 0,08 m (obklad + rímska)",
+  "systems[prof.parapet_rimsa].w": "prijať 0,06 m",
+  "systems[prof.sambrana].w": "prijať 0,03 m (plochá šambrána)",
+  "camera.v": "prijať (výška kamery z rektifikácie; na výšky ríms má vplyv < 1 cm)"
  },
  "simplifications": [
   {
@@ -291,11 +488,6 @@
    "ref": "systems[*].gs_bAutoTurnIn",
    "text": "Omietka sa do ostenia neotáča, aby otvor v líci = murovaný otvor = hrana na fotke (s otočením by bol otvor v líci o 2 cm menší z troch strán).",
    "proposal": "prijať"
-  },
-  {
-   "ref": "openings[O2]",
-   "text": "Ozdobný oválny nadsvetlík brány nie je modelovaný ako nadsvetlík; horné pole krídla (štýl panelu 14) ho len vizuálne nahrádza. Knižničná časť s nadsvetlíkom je dostupná len cez CreateDoors.libraryPartName, ktorého prvky Tapir nevie čítať/zapisovať (T7).",
-   "proposal": "prijať dočasne; po T7 prestavať na 'Double Door with Transom 27' + obdĺžnikový nadsvetlík s 1 priečkou"
   },
   {
    "ref": "openings[O3]",
@@ -311,6 +503,163 @@
    "ref": "systems[door.shop_sl].frame_surface",
    "text": "Modrý rám O1 aj tyrkysový rám O3+O4 majú jeden povrch (kobaltová modrá) – systém je jeden.",
    "proposal": "pozri návrh pri frame_surface"
+  },
+  {
+   "ref": "openings[O2]",
+   "text": "Ozdobný oválny nadsvetlík brány je modelovaný ako obdĺžnikový zasklený nadsvetlík (Double Door with Transom 27, výška 0,89 m); štýl výplne krídel je predvolený štýl knižničnej časti (iDoorPanelType 46) – náhľady knižnice cez API sú len siluety, štýl s mriežkou sa nedal overiť.",
+   "proposal": "prijať; štýl výplne krídel vybrať v ArchiCADe ručne vo favorite FS door.gate alebo dodať zoznam štýlov"
+  },
+  {
+   "ref": "linear[L1]",
+   "text": "Odkvap (žľab + biela čelná doska) je jeden hranolový profil 0,35 × 0,17 m; z jednej fotky sa nedá oddeliť vyloženie od výšky – vyloženie 0,35 je ODHAD pilota, výška 0,17 je z fotky prepočítaná cez kameru pri tomto vyložení.",
+   "proposal": "prijať; pri inom vyložení (šikmý záber, Street View) sa výška prepočíta"
+  },
+  {
+   "ref": "linear[O5_jl..O7_jr]",
+   "text": "Šambrány a podokenné rímsy sú osadené okolo otvorov zo spec (aby rámovali okno). Na fotke je ľavé ostenie šambrány o ~0,11 m vľavo: murovaný otvor O5 je 1,22–2,21 m, spec má 1,32–2,22 (I1 odčítal rám okna za ostením – paralaxa, kamera je vpravo pod uhlom 51°).",
+   "proposal": "v I7 opraviť otvory 2.NP o paralaxu rámu (ľavá hrana ~1,22 / 3,38 / 5,50, šírka ~0,99 m); dovtedy prijať"
+  },
+  {
+   "ref": "linear",
+   "text": "Sokel ako samostatný prvok na M015 nie je: celý parter je kamenný obklad až po kordón (zóna steny, nie lineárny prvok); pri päte sú len schodíky pred vstupmi O2 a O3 (dosky, nie fasáda).",
+   "proposal": "obklad parteru riešiť rozdelením zóny steny (parter s obkladom / poschodie s omietkou) – mimo I3"
   }
- ]
+ ],
+ "camera": {
+  "s": 13.31,
+  "v": 1.08,
+  "D": 21.82,
+  "src": "S7",
+  "conf": "odhad",
+  "note": "camera of IMG_8441 in facade coordinates from the rectification (rect.rectify info of fasady.py M015_J: foot_x 2949.9, horizon_y 1607.5, focal_rect 2757.7 px; xl 1268, yg 1744, ppm 126.4): s = (foot_x - xl)/ppm, v = (yg - horizon_y)/ppm, D = focal_rect/ppm. v 1.08 is below the expected 1.4-1.7 m (POSTUP 10) -> ODHAD; out-of-plane edges are insensitive to it (cornice: 1 mm per 0.4 m)"
+ },
+ "source_i3": {
+  "id": "S7",
+  "type": "photo",
+  "file": "kontrola/fasada_M015_J_rektif.jpg",
+  "note": "I3 linear elements read 2026-10-19 from pixel profiles of the rectified photo (S = 120 px/m, mean over 0.2-1.5 m wide strips free of the tree); edges +-1 cm in the picture; out-of-plane edges converted with the camera of the rectification (t = D/(D - w))"
+ },
+ "linear": [
+  {
+   "id": "L1",
+   "kind": "cornice",
+   "system": "lin.rimsa_okap",
+   "axis": "h",
+   "s": {
+    "v": [
+     0,
+     "L"
+    ],
+    "src": "S4",
+    "conf": "meranie",
+    "note": "whole facade a-b (the eaves continues on the neighbours)"
+   },
+   "v": {
+    "v": 7.3,
+    "src": "S2",
+    "conf": "meranie",
+    "note": "EAVE = 7.30 (domy.py, IMG_8441): bottom of the eaves at the wall = top of the wall zone"
+   },
+   "photo_edges": [
+    {
+     "name": "spodná hrana odkvapu (žľab)",
+     "corner": "bottom_front",
+     "s": [
+      5.9,
+      7.3
+     ],
+     "brighter": "above",
+     "photo_v": 7.4,
+     "tol": 0.03
+    },
+    {
+     "name": "horná hrana čelnej dosky",
+     "corner": "top_front",
+     "s": [
+      5.9,
+      7.3
+     ],
+     "brighter": "below",
+     "photo_v": 7.57,
+     "tol": 0.03
+    }
+   ],
+   "note": "rímsa pod strechou"
+  },
+  {
+   "id": "L2",
+   "kind": "cordon",
+   "system": "lin.kordon",
+   "axis": "h",
+   "s": {
+    "v": [
+     0,
+     "L"
+    ],
+    "src": "S7",
+    "conf": "meranie",
+    "note": "runs over the whole facade (both ends visible)"
+   },
+   "v": {
+    "v": 3.83,
+    "src": "S7",
+    "conf": "meranie",
+    "note": "bottom front edge seen at v' 3.84 (w 0.08 -> 3.83)"
+   },
+   "photo_edges": [
+    {
+     "name": "spodná hrana kordónu",
+     "corner": "bottom_front",
+     "s": [
+      2.6,
+      4.6
+     ],
+     "brighter": "above",
+     "photo_v": 3.84,
+     "tol": 0.03
+    },
+    {
+     "name": "horná hrana kordónu",
+     "corner": "top_front",
+     "s": [
+      2.6,
+      4.6
+     ],
+     "brighter": "below",
+     "photo_v": 3.93,
+     "tol": 0.03
+    }
+   ],
+   "note": "kordónová rímsa medzi parterom a 2.NP (top of the marble cladding)"
+  }
+ ],
+ "surrounds": {
+  "openings": [
+   "O5",
+   "O6",
+   "O7"
+  ],
+  "head_system": "lin.sambrana_h",
+  "jamb_system": "lin.sambrana_v",
+  "ledge_system": "lin.parapet_rimsa",
+  "band": {
+   "v": 0.12,
+   "src": "S7",
+   "conf": "meranie",
+   "note": "= profile prof.sambrana height"
+  },
+  "ledge_top_below_sill": {
+   "v": 0.105,
+   "src": "S7",
+   "conf": "meranie",
+   "note": "ledge top v' 4.745 (real 4.735) under the window bottom 4.84"
+  },
+  "ledge_overhang": {
+   "v": 0.02,
+   "src": "S7",
+   "conf": "meranie",
+   "note": "ledge ends 0.01-0.03 beyond the surround (O5 right: surround 2.33, ledge 2.36)"
+  },
+  "position_note": "surround and ledge hug the spec opening (rule, conf pravidlo) so that they frame the window in the model; the photo shows the left jamb ~0.11 m further left (O5 masonry edge 1.22 vs spec 1.32) - see simplifications"
+ }
 }

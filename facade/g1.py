@@ -17,7 +17,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from spec_validate import low_values  # noqa: E402
 
-UNITS = ("thickness", "reveal", "level", "transom_h", "sidelight_w", "sidelight_sill", "transom_bar_h", "bar_h")
+UNITS = ("thickness", "reveal", "level", "transom_h", "sidelight_w", "sidelight_sill", "transom_bar_h", "bar_h", "].w", "].h", "].v", "].s", "band", "ledge")
 
 
 def _unit(ref: str, value) -> str:

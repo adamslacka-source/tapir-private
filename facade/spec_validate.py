@@ -1,4 +1,4 @@
-"""Validator of facade-spec/1 (I1 + I2 subset): JSON Schema + consistency rules (ADR-001 ch. 4).
+"""Validator of facade-spec/1 (I1 + I2 + I3 subset): JSON Schema + consistency rules (ADR-001 ch. 4).
 
 A broken rule is an ERROR (the build refuses the spec). Warnings are printed and kept in the
 result, they do not stop the build (e.g. two fills that only touch - rule 30 of the modeller).
@@ -61,9 +61,21 @@ def low_values(spec: dict, levels=G1_CONF):
     yield from walk({k: v for k, v in spec.items() if k != "systems"}, "")
     for sid, s in spec.get("systems", {}).items():
         if s.get("conf") in levels:
-            key = "base_favorite" if s.get("base_favorite") else "favorite"
+            key = next((k for k in ("base_favorite", "libpart", "name", "favorite") if s.get(k)), "favorite")
             yield f"systems[{sid}].{key}", s.get(key), s["conf"], s.get("src"), s.get("note", "")
         yield from walk({k: v for k, v in s.items() if k not in ("conf", "src", "note")}, f"systems[{sid}]")
+
+
+def fs_system(s: dict) -> bool:
+    """The system gets an 'FS ' favourite made by systems.py (from a base favourite, a library part or a linear sample)."""
+    return bool(s.get("base_favorite") or s.get("base_libpart") or (s.get("type") == "linear" and s.get("favorite")))
+
+
+def polygon_area(pts) -> float:
+    a = 0.0
+    for (x0, y0), (x1, y1) in zip(pts, list(pts[1:]) + list(pts[:1])):
+        a += x0 * y1 - x1 * y0
+    return abs(a) / 2.0
 
 
 def load_schema() -> dict:
@@ -170,6 +182,7 @@ def validate(spec: dict) -> tuple[list[str], list[str]]:
                                     "probably one unit in reality; keep as two until a combined system exists (I2)")
 
     errors += _check_i2(spec, zones, openings, check_src)
+    errors += _check_linear(spec, openings, frame, item_ids, check_src)
 
     axes = spec.get("axes")
     if axes and axes.get("s"):
@@ -195,15 +208,20 @@ def _check_i2(spec: dict, zones: dict, openings: list, check_src) -> list[str]:
         for k in TYPE_KEYS:
             if k in s:
                 check_src(f"systems[{sid}].{k}", s[k]["src"], s[k]["conf"])
-        if s.get("base_favorite"):
+        if s.get("base_favorite") and s.get("base_libpart"):
+            errors.append(f"systems[{sid}]: base_favorite and base_libpart exclude each other")
+        if fs_system(s):
             if not (s.get("favorite") or "").startswith("FS "):
-                errors.append(f"systems[{sid}]: with base_favorite the target favorite must start with 'FS ' (got {s.get('favorite')!r})")
+                errors.append(f"systems[{sid}]: the target favorite must start with 'FS ' (got {s.get('favorite')!r})")
             if s["type"] in ("window", "door"):
                 lp = gmap.get(s.get("libpart", ""))
                 if lp is None:
                     errors.append(f"systems[{sid}]: library part {s.get('libpart')!r} is not in gdl_param_map.json")
                 elif lp["kind"] != s["type"]:
                     errors.append(f"systems[{sid}]: library part {s['libpart']} is a {lp['kind']}, the system is a {s['type']}")
+                elif s.get("base_libpart"):
+                    if not lp.get("base_libpart"):
+                        errors.append(f"systems[{sid}]: {s['libpart']} is not marked base_libpart in gdl_param_map.json")
                 elif s["base_favorite"] not in lp.get("base_favorites", []):
                     errors.append(f"systems[{sid}]: base favourite {s['base_favorite']!r} is not known to place {s['libpart']}")
         if "composite" in s:
@@ -242,6 +260,81 @@ def _check_i2(spec: dict, zones: dict, openings: list, check_src) -> list[str]:
             errors.append(f"openings[{o['id']}]: sidelight bottom {r[2]} is below the host bottom {h[2]}")
         if "sidelight_w" in host or "sidelight_sill" in host:
             errors.append(f"openings[{host_id}]: sidelight given twice (explicit values and merged {o['id']})")
+    return errors
+
+
+def linear_box(it: dict, prof: dict) -> list[float]:
+    """[s0, s1, v0, v1] of a linear element on the facade plane."""
+    s0, s1 = it["s"]["v"]
+    if it["axis"] == "h":
+        return [s0, s1, it["v"]["v"], it["v"]["v"] + max(p[1] for p in prof["polygon_wv"])]
+    return [s0, s1] + list(it["v"]["v"])
+
+
+def _check_linear(spec: dict, openings: list, frame, item_ids: set, check_src) -> list[str]:
+    """I3 rules: profile systems (polygon outside the facade plane, w/h = polygon extents), linear systems (tool +
+    existing profile), linear elements inside 0..L, vertical band width = profile width, nothing in front of an opening."""
+    errors: list[str] = []
+    systems = spec["systems"]
+    for sid, s in systems.items():
+        if s["type"] == "profile":
+            pts = s.get("polygon_wv") or []
+            if len(pts) < 3 or polygon_area(pts) < 1e-6:
+                errors.append(f"systems[{sid}]: profile polygon is empty")
+                continue
+            if not s.get("name", "").startswith("FS ") or not s.get("material"):
+                errors.append(f"systems[{sid}]: a profile needs name 'FS ...' and material")
+            if min(p[0] for p in pts) < -EPS or min(p[1] for p in pts) < -EPS:
+                errors.append(f"systems[{sid}]: profile polygon must lie in x >= 0 (outside the facade plane) and y >= 0")
+            for key, idx in (("w", 0), ("h", 1)):
+                if key in s:
+                    check_src(f"systems[{sid}].{key}", s[key]["src"], s[key]["conf"])
+                    ext = max(p[idx] for p in pts)
+                    if abs(ext - s[key]["v"]) > 0.001:
+                        errors.append(f"systems[{sid}]: {key} = {s[key]['v']} but the polygon extent is {ext}")
+        elif s["type"] == "linear":
+            prof = systems.get(s.get("profile", ""))
+            if not s.get("tool") or prof is None or prof["type"] != "profile":
+                errors.append(f"systems[{sid}]: a linear system needs tool and an existing profile system (got {s.get('profile')!r})")
+    rects = {o["id"]: o["rect"]["v"] for o in openings}
+    for it in spec.get("linear", []):
+        lid = it["id"]
+        if lid in item_ids:
+            errors.append(f"linear[{lid}]: duplicate id")
+        item_ids.add(lid)
+        check_src(f"linear[{lid}].s", it["s"]["src"], it["s"]["conf"])
+        check_src(f"linear[{lid}].v", it["v"]["src"], it["v"]["conf"])
+        sysdef = systems.get(it["system"])
+        if sysdef is None or sysdef["type"] != "linear":
+            errors.append(f"linear[{lid}]: system '{it['system']}' is not a linear system")
+            continue
+        prof = systems.get(sysdef.get("profile", ""))
+        if prof is None or prof["type"] != "profile" or not prof.get("polygon_wv"):
+            continue
+        if it["axis"] != {"beam": "h", "column": "v"}[sysdef["tool"]]:
+            errors.append(f"linear[{lid}]: axis {it['axis']} does not fit tool {sysdef['tool']}")
+            continue
+        s0, s1 = it["s"]["v"]
+        if not s1 > s0:
+            errors.append(f"linear[{lid}]: empty s range {it['s']['v']}")
+        if s0 < -EPS or s1 > frame.length + 0.01:
+            errors.append(f"linear[{lid}]: s {s0}..{s1} outside 0..L = {frame.length:.3f}")
+        if it["axis"] == "h" and not isinstance(it["v"]["v"], (int, float)):
+            errors.append(f"linear[{lid}]: a horizontal element needs v = one number (base of the profile)")
+            continue
+        if it["axis"] == "v":
+            if not isinstance(it["v"]["v"], list) or not it["v"]["v"][1] > it["v"]["v"][0]:
+                errors.append(f"linear[{lid}]: a vertical element needs v = [v0, v1] with v1 > v0")
+                continue
+            width = max(p[1] for p in prof["polygon_wv"])
+            if abs((s1 - s0) - width) > 0.001:
+                errors.append(f"linear[{lid}]: band width {s1 - s0:.3f} != profile width {width:.3f}")
+        if it.get("host") and it["host"] not in rects:
+            errors.append(f"linear[{lid}]: host opening '{it['host']}' does not exist")
+        box = linear_box(it, prof)
+        for oid, r in rects.items():                                 # modeller rule 30: nothing in front of an opening
+            if rect_overlap_area(box, r) > 1e-4:
+                errors.append(f"linear[{lid}]: lies in front of opening {oid} ({rect_overlap_area(box, r):.4f} m2)")
     return errors
 
 

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "facade-spec/1#I2",
-  "title": "facade-spec/1 - subset for increments I1-I2 (reference, stories, zones[wall], openings, systems catalog)",
+  "$id": "facade-spec/1#I3",
+  "title": "facade-spec/1 - subset for increments I1-I3 (reference, stories, zones[wall], openings, linear, systems catalog)",
   "description": "Machine specification of one facade (ADR-001, ch. 4). Local facade coordinates: s = m along the reference line a->b (left to right seen from outside), v = m above reference.z0, w = m out of the facade plane. Every number that drives the model carries a source (src) and a certainty (conf).",
   "type": "object",
   "required": [
@@ -331,7 +331,9 @@
             "enum": [
               "wall",
               "window",
-              "door"
+              "door",
+              "profile",
+              "linear"
             ]
           },
           "favorite": {
@@ -451,6 +453,50 @@
           "leaf_panel": {
             "$ref": "#/$defs/anyValue",
             "description": "leaf panel style of the library part (e.g. iDoorPanelType)"
+          },
+          "base_libpart": {
+            "type": "boolean",
+            "description": "the FS favourite starts from a sample placed by CreateDoors/CreateWindows.libraryPartName = libpart (a part without a favourite in the template; Tapir T7)"
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^FS ",
+            "description": "profile: name of the Archicad Profile attribute"
+          },
+          "polygon_wv": {
+            "type": "array",
+            "minItems": 3,
+            "items": {
+              "$ref": "#/$defs/xy"
+            },
+            "description": "profile: cross-section, x = w (m out of the facade plane, >= 0), y = m above the base of the element (beam) or along the facade (column); counter-clockwise or clockwise, not closed"
+          },
+          "material": {
+            "type": "string",
+            "description": "building material name (profile / composite)"
+          },
+          "edge_surface": {
+            "type": "string",
+            "description": "profile: surface of every edge"
+          },
+          "w": {
+            "$ref": "#/$defs/value",
+            "description": "profile: projection out of the facade (m)"
+          },
+          "h": {
+            "$ref": "#/$defs/value",
+            "description": "profile: height (beam) / width along the facade (column) (m)"
+          },
+          "tool": {
+            "enum": [
+              "beam",
+              "column"
+            ],
+            "description": "linear: Archicad tool; beam = horizontal (profile x = out, y = up), column = vertical (profile x = out, y = along the facade)"
+          },
+          "profile": {
+            "type": "string",
+            "description": "linear: id of the profile system"
           }
         }
       }
@@ -555,6 +601,121 @@
           }
         }
       }
+    },
+    "linear": {
+      "type": "array",
+      "description": "I3: linear elements of the facade (cornices, string courses, sill ledges, surrounds) as profiled beams / columns",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "system",
+          "axis",
+          "s",
+          "v"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/itemId"
+          },
+          "kind": {
+            "enum": [
+              "cornice",
+              "cordon",
+              "plinth",
+              "band",
+              "sill_ledge",
+              "surround_head",
+              "surround_jamb",
+              "attic"
+            ]
+          },
+          "system": {
+            "type": "string"
+          },
+          "axis": {
+            "enum": [
+              "h",
+              "v"
+            ],
+            "description": "h = horizontal (s = [s0, s1], v = base of the profile); v = vertical (s = [s0, s1] = band across the facade, v = [v0, v1])"
+          },
+          "host": {
+            "type": "string",
+            "description": "opening the element belongs to (surround, sill ledge)"
+          },
+          "s": {
+            "$ref": "#/$defs/range"
+          },
+          "v": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/value"
+              },
+              {
+                "$ref": "#/$defs/range"
+              }
+            ]
+          },
+          "photo_edges": {
+            "type": "array",
+            "description": "edges checked on the rectified photo (verify overlay): corner of the profile projected with the camera of the photo",
+            "items": {
+              "type": "object",
+              "required": [
+                "name",
+                "corner",
+                "s",
+                "brighter"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "corner": {
+                  "enum": [
+                    "bottom_front",
+                    "top_front",
+                    "bottom_back",
+                    "top_back"
+                  ]
+                },
+                "s": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 2,
+                  "maxItems": 2
+                },
+                "brighter": {
+                  "enum": [
+                    "above",
+                    "below"
+                  ]
+                },
+                "photo_v": {
+                  "type": "number",
+                  "description": "edge read by hand (for the record)"
+                },
+                "tol": {
+                  "type": "number"
+                },
+                "search": {
+                  "type": "number",
+                  "description": "half height of the search band in the photo around the projected model edge (m), default 0.06"
+                }
+              }
+            }
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      }
     }
   },
   "$defs": {
@@ -654,6 +815,34 @@
             "boolean",
             "string"
           ]
+        },
+        "src": {
+          "$ref": "#/$defs/src"
+        },
+        "conf": {
+          "$ref": "#/$defs/conf"
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "range": {
+      "type": "object",
+      "required": [
+        "v",
+        "src",
+        "conf"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "v": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2
         },
         "src": {
           "$ref": "#/$defs/src"

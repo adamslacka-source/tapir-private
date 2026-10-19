@@ -9,6 +9,9 @@
                favourites and the FS_* properties of every element. A field the library part cannot carry is
                an EXCEPTION (listed, never passed silently).
 (d) image    - the projection drawn over the rectified photo of the source (overlay PNG)
+(e) linear   - I3: cornice, string course, sill ledges, surrounds (linear_verify.py): parameters, 3D of the beam /
+               column segments, profile area, and their edges projected with the camera of the photo vs the photo
+               (overlay_linear_<id>.png = zoomed crops)
 
 Outputs to <out>/<spec.id>/: deviations.csv, types.csv, overlay_<id>.png, model_<id>.png, report.json, report.md.
 Read-only in Archicad (still refuses to run on another project than --project).
@@ -32,12 +35,13 @@ sys.path.insert(0, str(HERE))
 import systems as fs_systems  # noqa: E402
 from build import DEFAULT_OUT, DEFAULT_PROJECT, gdl_params, opening_units, plan, state_path  # noqa: E402
 from geom import frame_of  # noqa: E402
-from spec_validate import TYPE_KEYS, load_gdl_map, validate  # noqa: E402
+from linear_verify import count_on_layer, to_photo, camera_of, verify_linear  # noqa: E402
+from spec_validate import TYPE_KEYS, fs_system, load_gdl_map, validate  # noqa: E402
 from tapir_client import TapirClient, TapirError  # noqa: E402
 
 FACE_TOL = 0.005          # m - a face lies in the outside plane
 PROTRUSION = 0.10         # m - allowed overhang of sills / boards / handles beyond a wall face
-COLORS = {"wall": (230, 30, 30), "hole": (230, 30, 30), "window": (0, 200, 255), "door": (255, 0, 200),
+COLORS = {"wall": (230, 30, 30), "hole": (230, 30, 30), "window": (0, 200, 255), "door": (255, 0, 200), "linear": (60, 255, 60),
           "spec": (255, 230, 0), "text": (255, 255, 255), "shadow": (0, 0, 0), "exc": (255, 140, 0)}
 HOLE_AREA = "hole area on outside face [m2]"
 
@@ -95,7 +99,7 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
     zone = spec["zones"][0]
     zs0, zs1, zv0, zv1 = zone["rect"]["v"]
     stories = {s["index"]: s["level"] for s in ac.tapir("GetStories")["stories"]}
-    i2 = any(s.get("base_favorite") for s in spec["systems"].values())
+    i2 = any(fs_system(s) for s in spec["systems"].values())
     sysinfo = fs_systems.resolve(ac, spec, path, out_root) if i2 else None
     want = plan(spec, stories, sysinfo)
     units = {u["o"]["id"]: u for u in opening_units(spec)}
@@ -151,7 +155,7 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
 
     # ---- (a) parameters read back
     layer_index = state.get("layer", {}).get("index")
-    for item in [want["wall"]] + want["openings"]:
+    for item in [want["wall"]] + want["openings"] + want["linear"]:
         d = details.get(item["item"])
         if not d:
             continue
@@ -203,7 +207,7 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
                 row(label, "v0 (sidelight parapet)", v0 + sill["v"], bottom + p.get("gs_sidelight_parapet_hgt_right", 0.0), "params")
 
     # ---- (b) 3D geometry projected on the facade plane
-    order = [wall_item] + list(units)
+    order = [wall_item] + list(units)                     # linear elements: linear_verify (segments)
     present = [i for i in order if i in details]
     geos = ac.tapir("Get3DGeometryOfElements", {"elements": [{"elementId": {"guid": guids[i]}} for i in present]}, timeout=120)["geometries3D"]
     proj = {i: _bodies_svw(g, fr) for i, g in zip(present, geos)}
@@ -264,6 +268,18 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
         if bb[5] > PROTRUSION or bb[4] < -zone["thickness"]["v"] - PROTRUSION:
             problems.append(f"{oid}: 3D body sticks out of the wall by more than {PROTRUSION} m (w {bb[4]:.3f}..{bb[5]:.3f})")
 
+    # ---- (e) linear elements (I3)
+    src = next(s for s in spec["sources"] if s.get("rect"))
+    root = Path(source_root or spec.get("generated", {}).get("root", "."))
+    lum = None
+    if want["linear"]:
+        lum = np.asarray(Image.open(root / src["rect"]["image"]).convert("L"), dtype=float)
+    lin = verify_linear(ac, spec, want["linear"], guids, details, fr, stories, sysinfo, lum, row, trow, problems)
+    n_lin_spec = {"beam": sum(it["kind"] == "beam" for it in want["linear"]), "column": sum(it["kind"] == "column" for it in want["linear"])}
+    n_lin_model = count_on_layer(ac, layer_index) if want["linear"] else {"beam": 0, "column": 0}
+    if n_lin_model != n_lin_spec:
+        problems.append(f"linear elements on the facade layer {n_lin_model} != spec {n_lin_spec}")
+
     # ---- (c) types, build-up, favourites, properties (I2)
     if sysinfo:
         attrs = sysinfo["attrs"]
@@ -292,7 +308,8 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
                     continue
                 trow(oid, k, val["v"], fs_systems.read_field(rule["read"], p, attrs))
             if "reveal" in o:
-                trow(oid, "wall inset (reveal, AC_wido_sill)", o["reveal"]["v"], p.get("AC_wido_sill"))
+                trow(oid, "wall inset (reveal, revealDepthOffset)", o["reveal"]["v"], od.get("revealDepthOffset"))
+                trow(oid, "wall inset measured from the wall side (revealDepthLocation)", "Side", od.get("revealDepthLocation"))
                 trow(oid, "wall inset from the outside (refSide)", True, od.get("refSide"))
             if osys.get("favorite"):
                 trow(oid, "placed from favourite (hash in state)", sysinfo["favorites"][o["system"]]["hash"],
@@ -310,9 +327,9 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
             trow(wall_item, "surfaces from the skins (no override)", False,
                  bool(wd.get("referenceMaterial", {}).get("overridden") or wd.get("oppositeMaterial", {}).get("overridden")))
         # FS favourites exist
-        for kind, names in (("Wall", [s["favorite"] for s in spec["systems"].values() if s.get("base_favorite") and s["type"] == "wall"]),
-                            ("Window", [s["favorite"] for s in spec["systems"].values() if s.get("base_favorite") and s["type"] == "window"]),
-                            ("Door", [s["favorite"] for s in spec["systems"].values() if s.get("base_favorite") and s["type"] == "door"])):
+        kind_of = lambda s: {"linear": s.get("tool", "")}.get(s["type"], s["type"])
+        for kind, names in [(fs_systems.FAV_TYPES[k], [s["favorite"] for s in spec["systems"].values() if fs_system(s) and kind_of(s) == k])
+                            for k in ("wall", "window", "door", "beam", "column")]:
             if names:
                 have = set(ac.tapir("GetFavoritesByType", {"elementType": kind}).get("favorites", []))
                 for n in names:
@@ -323,7 +340,7 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
         if len(props) != len(names):
             problems.append(f"FS properties missing: {sorted(set(names) - set(props))}")
         else:
-            items = [want["wall"]] + want["openings"]
+            items = [it for it in [want["wall"]] + want["openings"] + want["linear"] if it["item"] in guids]
             pv = ac.tapir("GetPropertyValuesOfElements", {"elements": [{"elementId": {"guid": guids[it["item"]]}} for it in items],
                                                           "properties": [{"propertyId": {"guid": props[n]}} for n in names]})["propertyValuesForElements"]
             for it, vals in zip(items, pv):
@@ -342,15 +359,18 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
             wr = csv.DictWriter(fh, fieldnames=list(trows[0].keys()))
             wr.writeheader()
             wr.writerows(trows)
-    src = next(s for s in spec["sources"] if s.get("rect"))
-    root = Path(source_root or spec.get("generated", {}).get("root", "."))
-    overlay_png, model_png = draw(spec, src, root / src["rect"]["image"], proj, wall_faces, rows, trows, units, out_dir)
+    overlay_png, model_png = draw(spec, src, root / src["rect"]["image"], proj, wall_faces, rows, trows, units, out_dir, lin["proj"])
+    linear_png = draw_linear(spec, src, root / src["rect"]["image"], lin, out_dir) if want["linear"] else None
 
-    geo_rows = [r for r in rows if r["delta_cm"] is not None and r["quantity"] != HOLE_AREA]
+    geo_rows = [r for r in rows if r["delta_cm"] is not None and r["quantity"] != HOLE_AREA and r["method"] in ("params", "3D")]
     max_delta = {m: max([abs(r["delta_cm"]) for r in geo_rows if r["method"] == m] or [0.0]) for m in ("params", "3D")}
     result = {
         "spec": spec["id"], "at": time.strftime("%Y-%m-%dT%H:%M:%S"), "seconds": round(time.monotonic() - t0, 2),
-        "count": {"spec": n_spec, "model_in_wall": hosted, "ok": count_ok},
+        "count": {"spec": n_spec, "model_in_wall": hosted, "ok": count_ok, "linear_spec": n_lin_spec, "linear_model": n_lin_model},
+        "linear": {"items": len(want["linear"]), "photo_edges": lin["photo"],
+                   "max_delta_cm": {m: max([abs(r["delta_cm"]) for r in rows if r["method"] == m and r["item"] in {it["item"] for it in want["linear"]}
+                                            and r["delta_cm"] is not None] or [0.0]) for m in ("params", "3D", "photo")},
+                   "overlay_png": str(linear_png) if linear_png else None},
         "max_delta_cm": max_delta, "tolerance_cm": tol * 100,
         "rows_failed": sum(not r["ok"] for r in rows), "rows": len(rows),
         "types": {"rows": len(trows), "ok": sum(r["status"] == "OK" for r in trows),
@@ -389,12 +409,13 @@ def _type_label(oid: str, trows: list[dict]) -> str:
         parts.append("BS")
     if t.get("sash_bars", {}).get("model"):
         parts.append("priečka")
-    if "wall inset (reveal, AC_wido_sill)" in t:
-        parts.append(f"osadenie {t['wall inset (reveal, AC_wido_sill)']['model']:.2f}")
+    key = "wall inset (reveal, revealDepthOffset)"
+    if key in t and t[key]["model"] is not None:
+        parts.append(f"osadenie {t[key]['model']:.2f}")
     return " ".join(parts)
 
 
-def draw(spec, src, image_path: Path, proj, wall_faces, rows, trows, units, out_dir: Path):
+def draw(spec, src, image_path: Path, proj, wall_faces, rows, trows, units, out_dir: Path, lin_proj=None):
     r = src["rect"]
     S, u0, v1 = r["S"], r["u0"], r["v1"]
     px = lambda s, v: ((s - u0) * S, (v1 - v) * S)
@@ -423,6 +444,14 @@ def draw(spec, src, image_path: Path, proj, wall_faces, rows, trows, units, out_
                     ring = svw[p["vertexIds"]]
                     pts = [px(s, v) for s, v in ring[:, :2]]
                     dr.line(pts + [pts[0]], fill=COLORS[kind] + (150,), width=1)
+        # linear elements (I3): every face edge projected with the camera of the photo (as the photo sees them)
+        cam = camera_of(spec)
+        for lid, bodies in (lin_proj or {}).items():
+            for svw, polys in bodies:
+                pp = to_photo(svw, cam)
+                for p in polys:
+                    pts = [px(s_, v_) for s_, v_ in pp[p["vertexIds"]]]
+                    dr.line(pts + [pts[0]], fill=COLORS["linear"] + (200,), width=1)
         # wall outside face: outline and holes
         for outline, holes in wall_faces:
             pts = [px(s, v) for s, v in outline]
@@ -455,7 +484,7 @@ def draw(spec, src, image_path: Path, proj, wall_faces, rows, trows, units, out_
         # legend
         lines = [(f"{spec['id']}: model (3D projekcia) × rektifikovaná fotka", COLORS["text"]),
                  ("červená: líce steny + otvory v stene (3D)", COLORS["wall"]),
-                 ("modrá: okná (3D) · fialová: dvere (3D)", COLORS["window"]),
+                 ("modrá: okná (3D) · fialová: dvere (3D) · zelená: rímsy, šambrány (3D cez kameru fotky)", COLORS["window"]),
                  ("žltá prerušovaná: spec (z fotky); žltý text: typ čítaný späť", COLORS["spec"]),
                  ("kr krídla · NS nadsvetlík · BS bočný svetlík · osadenie m", COLORS["text"])]
         y = size[1] - 22 * len(lines) - 8
@@ -474,6 +503,54 @@ def draw(spec, src, image_path: Path, proj, wall_faces, rows, trows, units, out_
     return o_path, m_path
 
 
+def draw_linear(spec, src, image_path: Path, lin: dict, out_dir: Path, k: int = 4) -> Path:
+    """Zoomed crops of the photo with the linear elements projected through the camera (green), the edges found in the
+    photo (cyan) and the projected model edges (magenta), one crop per checked edge, stacked; labels with delta."""
+    r = src["rect"]
+    S, u0, v1 = r["S"], r["u0"], r["v1"]
+    cam = camera_of(spec)
+    base = Image.open(image_path).convert("RGB")
+    try:
+        font = ImageFont.truetype("arial.ttf", 18)
+    except OSError:
+        font = ImageFont.load_default()
+    crops = []
+    for e in lin["photo"]:
+        sa, sb = e["s"][0] - 0.3, e["s"][1] + 0.3
+        vm = e["v_model_projected"]
+        va, vb = vm - 0.35, vm + 0.35
+        x0, x1 = int((sa - u0) * S), int((sb - u0) * S)
+        y0, y1 = int((v1 - vb) * S), int((v1 - va) * S)
+        im = base.crop((x0, y0, x1, y1)).resize(((x1 - x0) * k, (y1 - y0) * k), Image.LANCZOS)
+        layer = Image.new("RGBA", im.size, (0, 0, 0, 0))
+        dr = ImageDraw.Draw(layer)
+        P = lambda s_, v_: (((s_ - u0) * S - x0) * k, ((v1 - v_) * S - y0) * k)
+        for svw, polys in lin["proj"].get(e["item"], []):
+            pp = to_photo(svw, cam)
+            for p in polys:
+                pts = [P(s_, v_) for s_, v_ in pp[p["vertexIds"]]]
+                dr.line(pts + [pts[0]], fill=COLORS["linear"] + (230,), width=2)
+        for v_, col in ((e["v_photo"], (0, 255, 255)), (vm, (255, 0, 255))):
+            dr.line([P(e["s"][0], v_), P(e["s"][1], v_)], fill=col + (255,), width=3)
+        txt = (f"{e['item']} {e['edge']}: foto {e['v_photo']:.3f} m, model (kamera) {vm:.3f} m, "
+               f"Δ {e['delta_cm']:+.1f} cm (tol {e['tol_cm']:.0f})")
+        dr.rectangle([0, 0, im.size[0], 28], fill=(0, 0, 0, 170))
+        dr.text((6, 4), txt, fill=(255, 255, 255, 255), font=font)
+        crops.append(Image.alpha_composite(im.convert("RGBA"), layer).convert("RGB"))
+    legend = "zelená: model cez kameru fotky · azúrová: hrana nájdená vo fotke · fialová: hrana modelu"
+    w = max(c.size[0] for c in crops) if crops else 800
+    h = sum(c.size[1] + 6 for c in crops) + 34
+    sheet = Image.new("RGB", (w, h), (40, 40, 40))
+    y = 0
+    for c in crops:
+        sheet.paste(c, (0, y))
+        y += c.size[1] + 6
+    ImageDraw.Draw(sheet).text((6, y + 6), legend, fill=(255, 255, 255), font=font)
+    path = out_dir / f"overlay_linear_{spec['id']}.png"
+    sheet.save(path)
+    return path
+
+
 def report_md(spec, result, rows, trows) -> str:
     t = result["types"]
     lines = [f"# Kontrola fasády {spec['id']} (verify, {result['at']})", "",
@@ -484,8 +561,18 @@ def report_md(spec, result, rows, trows) -> str:
              f"| max. Δ parametre (čítané späť) | – | {result['max_delta_cm']['params']:.2f} cm | {'áno' if result['max_delta_cm']['params'] <= result['tolerance_cm'] else 'NIE'} |",
              f"| max. Δ 3D projekcia (prvky + otvory v stene) | – | {result['max_delta_cm']['3D']:.2f} cm | {'áno' if result['max_delta_cm']['3D'] <= result['tolerance_cm'] else 'NIE'} |",
              f"| typy, skladba, favority, vlastnosti (riadky) | {t['rows']} | OK {t['ok']} / FAIL {t['fail']} / výnimka {t['exc']} | {'áno' if not t['fail'] else 'NIE'} |",
+             f"| lineárne prvky na vrstve fasády (nosníky / stĺpy) | {result['count'].get('linear_spec')} | {result['count'].get('linear_model')} | "
+             f"{'áno' if result['count'].get('linear_spec') == result['count'].get('linear_model') else 'NIE'} |",
              "", f"Overlay: `{result['overlay_png']}`  ", f"Model bez fotky: `{result['model_png']}`  ",
+             f"Lineárne prvky × fotka (výrezy): `{result['linear'].get('overlay_png')}`  ",
              f"Odchýlky po prvkoch: `{result['deviations_csv']}`" + (f"  \nTypy: `{result['types_csv']}`" if result.get("types_csv") else ""), ""]
+    if result["linear"]["photo_edges"]:
+        lines += ["## Hrany lineárnych prvkov × fotka (projekcia cez kameru fotky)", "",
+                  "| Prvok | Hrana | Foto (auto) m | Foto (ručne) m | Model m | Δ cm | Tol cm |", "|---|---|---|---|---|---|---|"]
+        for e in result["linear"]["photo_edges"]:
+            lines.append(f"| {e['item']} | {e['edge']} | {e['v_photo']} | {e['v_photo_hand'] if e['v_photo_hand'] is not None else '–'} | "
+                         f"{e['v_model_projected']} | {e['delta_cm']:+.1f} | {e['tol_cm']:.0f} |")
+        lines.append("")
     if result["problems"]:
         lines += ["## Problémy", ""] + [f"- {p}" for p in result["problems"]] + [""]
     if result["exceptions"]:

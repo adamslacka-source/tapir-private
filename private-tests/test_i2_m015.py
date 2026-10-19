@@ -37,13 +37,15 @@ FACADE = TESTS.parent / "facade"
 sys.path.insert(0, str(FACADE))
 sys.path.insert(0, str(FACADE / "adapters"))
 
-from spec_validate import validate  # noqa: E402
+from spec_validate import fs_system, validate  # noqa: E402
 from from_senec import build_spec  # noqa: E402
 
 OUT = Path(r"C:\FacadePilot\out")
 PROJECT = r"C:\FacadePilot\Fasada_pilot_A.pln"
 HOUSE = "M015_L1"
-KNOWN_EXCEPTIONS = {("door.gate", "transom"), ("O2", "transom_h")}      # Tapir gap T7, see gdl_param_map.json
+# I2 had the gate transom as a documented exception (Tapir gap T7); I3 builds the gate from 'Double Door with
+# Transom 27' placed by libraryPartName (T7 fixed), so no exception is expected any more.
+KNOWN_EXCEPTIONS: set = set()
 
 results: list[tuple[str, str, str]] = []
 
@@ -58,7 +60,7 @@ def offline() -> dict:
     spec = build_spec(HOUSE)
     errors, warnings = validate(spec)
     check("I2 spec from the adapter is valid", not errors, "; ".join(errors))
-    fav = {s["favorite"] for s in spec["systems"].values() if s.get("base_favorite")}
+    fav = {s["favorite"] for s in spec["systems"].values() if fs_system(s) and s["type"] in ("wall", "window", "door")}
     check("spec has 4 FS systems (wall, window, shop door, gate)", fav == {"FS wall.omietka_tehla_450", "FS win.2kr", "FS door.shop_sl", "FS door.gate"}, str(sorted(fav)))
     check("O4 is merged into O3 (one frame on the photo)", next(o for o in spec["openings"] if o["id"] == "O4").get("merged_into") == "O3")
 
@@ -126,7 +128,7 @@ def live(spec: dict, port: int, save: bool) -> None:
     check("B2 GDL read back = spec, no FAIL rows", not fails, f"{len(trows)} rows, {sum(r['status'] == 'OK' for r in trows)} OK, {len(excs)} EXC"
           + (f"; FAIL {[(r['item'], r['what']) for r in fails]}" if fails else ""))
     exc_list = {(e.get("item", e["system"]), e["field"]) for e in ver["exceptions"]}
-    check("B2 exceptions are exactly the known, documented ones (gate transom, T7)", exc_list == KNOWN_EXCEPTIONS, str(sorted(exc_list)))
+    check("B2 no exceptions left (gate transom realised since I3)", exc_list == KNOWN_EXCEPTIONS, str(sorted(exc_list)))
     st = json.loads((OUT / HOUSE / "state.json").read_text(encoding="utf-8"))["elements"]
     gp = gdl_params(ac, [st[i]["guid"] for i in ("O1", "O2", "O3", "O5")])
     g = {i: gp[st[i]["guid"]] for i in ("O1", "O2", "O3", "O5")}
@@ -141,8 +143,15 @@ def live(spec: dict, port: int, save: bool) -> None:
         "O1 transom 0.55, sidelight 0.60 on 0.63 parapet": abs(g["O1"]["gs_transom_height"] - 0.55) < 1e-6 and
             abs(g["O1"]["gs_sidelight_width_right"] - g["O1"]["gs_frame_width"] - 0.60) < 1e-6 and abs(g["O1"]["gs_sidelight_parapet_hgt_right"] - 0.63) < 1e-6,
         "O2 two leaves": g["O2"]["ifc_optypestr"].startswith("Double Door"),
-        "wall inset O1 0.30 / O3 0.25 / O5 0.12 (AC_wido_sill)": [round(g[i]["AC_wido_sill"], 4) for i in ("O1", "O3", "O5")] == [0.30, 0.25, 0.12],
+        "O2 transom 0.89 (Double Door with Transom 27)": abs(g["O2"].get("gs_transom_height", 0) - 0.89) < 1e-6 and g["O2"]["ifc_TransomThickness"] > 0,
     }
+    # wall inset: native since I3 (revealDepthLocation Side; AC_wido_sill is not refreshed by Archicad for Side)
+    dets = existing(ac, [st[i]["guid"] for i in ("O1", "O3", "O5")])
+    ins = [dets[st[i]["guid"]]["details"] for i in ("O1", "O3", "O5")]
+    spot.update({
+        "wall inset O1 0.30 / O3 0.25 / O5 0.12 (revealDepthOffset, Side, refSide)": [round(d["revealDepthOffset"], 4) for d in ins] == [0.30, 0.25, 0.12]
+            and all(d["revealDepthLocation"] == "Side" and d["refSide"] is True for d in ins),
+    })
     for name, ok in spot.items():
         check(f"B2 spot: {name}", ok)
 

@@ -6,6 +6,10 @@ What it makes (idempotently - a second run changes nothing):
   * Favorites 'FS <system id>' through a sample element (D4): a temporary host wall far from the model, the sample
     placed from the base favourite, GDL system parameters written and READ BACK, CreateFavoritesFromElements
     (UpdateFavoritesFromElements when the content changed), then sample and host are deleted again.
+  * I3: a sample door/window of a library part WITHOUT a favourite in the template is placed by libraryPartName
+    (base_libpart, Tapir T7); Profile attributes 'FS prof.*' from the cross-section polygons of profile systems
+    (CreateProfilesFromPolygons, Tapir T1; area read back from GetProfiles); favourites 'FS lin.*' of linear systems
+    from a sample beam / column carrying the profile.
 
 The content of a favourite cannot be read through the API, so idempotence rests on a manifest
 (<out>/_systems/manifest.json): favourite name -> hash of everything that went into it. A favourite that exists
@@ -21,7 +25,7 @@ import json
 import time
 from pathlib import Path
 
-from spec_validate import TYPE_KEYS, load_gdl_map
+from spec_validate import TYPE_KEYS, fs_system, load_gdl_map, polygon_area
 from tapir_client import TapirClient, TapirError, results_ok
 
 FS_GROUP = "FS"
@@ -30,7 +34,8 @@ FS_PROPS = {
     "FS_istota": "Najnižšia istota hodnôt, ktoré prvok tvarujú: kota > meranie > pravidlo > odhad > default.",
     "FS_spec": "Spec a položka, z ktorej prvok vznikol (<spec.id>.<id>).",
 }
-FAV_TYPES = {"wall": "Wall", "window": "Window", "door": "Door"}
+FAV_TYPES = {"wall": "Wall", "window": "Window", "door": "Door", "beam": "Beam", "column": "Column"}
+AREA_TOL = 0.01                         # relative - profile area read back vs polygon (ADR I3 acceptance)
 SAMPLE_OFFSET = (1000.0, 0.0)          # m - temporary host wall far away from every pilot facade
 NUM_TOL = 1e-4
 
@@ -71,6 +76,7 @@ class Attrs:
         self.surface = {a["name"]: a for a in get("Surface")}
         self.surface_by_index = {a["index"]: a["name"] for a in self.surface.values()}
         self.composite = {a["name"]: a for a in get("Composite")}
+        self.profile = {a["name"]: a for a in get("Profile")}
         self.line = {a["index"]: a for a in get("Line")}
 
     def surface_index(self, name: str) -> int:
@@ -147,7 +153,7 @@ def favorite_content(sysdef: dict, attrs: Attrs) -> tuple[list[dict], list[dict]
     """(GDL writes, checks of fixed fields, exceptions) of a window/door system."""
     m = libpart_map(sysdef)
     lp = m["lp"]
-    writes = [{"name": k, "value": v} for k, v in m["common"].get("system_params", {}).items()]
+    writes = [{"name": k, "value": v} for k, v in {**m["common"].get("system_params", {}), **lp.get("system_params", {})}.items()]
     checks, exceptions = [], []
     for field in TYPE_KEYS:
         if field not in sysdef:
@@ -214,6 +220,80 @@ def ensure_composites(ac: TapirClient, spec: dict, attrs: Attrs, log: list) -> t
     return changes, guids
 
 
+# ---- profiles (I3, Tapir T1) --------------------------------------------------------------------------
+def _ring_area(coords: list[dict]) -> float:
+    a = 0.0
+    for p, q in zip(coords, coords[1:]):
+        a += p["x"] * q["y"] - q["x"] * p["y"]
+    return abs(a) / 2.0
+
+
+def profile_area(details: dict) -> float:
+    """Cross-section area of a Profile from GetProfiles: per skin outer contour minus holes (slot 0 of
+    outlineSubPolyEnds is the anchor, contours are closed by a repeated vertex)."""
+    total = 0.0
+    for skin in details.get("skins", []):
+        coords, ends = skin.get("outlineCoords", []), skin.get("outlineSubPolyEnds", [])
+        rings = [coords[ends[k - 1] + 1: ends[k] + 1] for k in range(1, len(ends))]
+        areas = [_ring_area(r) for r in rings if len(r) >= 4]
+        if areas:
+            total += areas[0] - sum(areas[1:])
+    return total
+
+
+def profile_systems(spec: dict) -> dict:
+    return {sid: s for sid, s in spec["systems"].items() if s["type"] == "profile"}
+
+
+def _profile_payload(s: dict) -> dict:
+    return {"name": s["name"], "polygons": [{"outer": {"polygonCoordinates": [{"x": x, "y": y} for x, y in s["polygon_wv"]]}}],
+            "buildingMaterialName": s["material"], **({"edgeSurfaceName": s["edge_surface"]} if s.get("edge_surface") else {}),
+            "useWith": {"wall": True, "beam": True, "column": True}, "overwriteExisting": True}
+
+
+def profile_details(ac: TapirClient, guids: list[str]) -> list[dict]:
+    if not guids:
+        return []
+    return ac.tapir("GetProfiles", {"attributeIds": [{"attributeId": {"guid": g}} for g in guids]})["profiles"]
+
+
+def ensure_profiles(ac: TapirClient, spec: dict, attrs: Attrs, manifest: dict, log: list, write: bool = True) -> tuple[int, dict]:
+    """sid -> {guid, name, hash, area_spec, area_model}. Rebuilt (overwrite, same guid) when the hash of the polygon /
+    material / surface is unknown or different, or the area read back differs from the polygon by more than 1 %."""
+    profs = profile_systems(spec)
+    out, changes = {}, 0
+    reg = manifest.setdefault("profiles", {})
+    have = {sid: attrs.profile.get(s["name"]) for sid, s in profs.items()}
+    det = dict(zip([sid for sid in profs if have[sid]],
+                   profile_details(ac, [have[sid]["attributeId"]["guid"] for sid in profs if have[sid]])))
+    for sid, s in profs.items():
+        h = _hash(_profile_payload(s))
+        area_spec = polygon_area(s["polygon_wv"])
+        ok = have[sid] is not None and reg.get(s["name"], {}).get("hash") == h and \
+            abs(profile_area(det.get(sid, {})) - area_spec) <= AREA_TOL * area_spec
+        if not ok:
+            if not write:
+                raise TapirError(f"profile {s['name']} missing or different - run build first")
+            res = ac.tapir("CreateProfilesFromPolygons", {"profiles": [_profile_payload(s)]})["attributes"][0]
+            if "attributeId" not in res:
+                raise TapirError(f"CreateProfilesFromPolygons {s['name']}: {res}")
+            changes += 1
+            log.append(f"profile {'created' if res.get('created') else 'overwritten'}: {s['name']} (index {res['index']})")
+            reg[s["name"]] = {"hash": h, "guid": res["attributeId"]["guid"], "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+            guid = res["attributeId"]["guid"]
+            det[sid] = profile_details(ac, [guid])[0]
+        else:
+            guid = have[sid]["attributeId"]["guid"]
+        area_model = profile_area(det[sid])
+        if abs(area_model - area_spec) > AREA_TOL * area_spec:
+            raise TapirError(f"profile {s['name']}: area read back {area_model:.6f} m2 != polygon {area_spec:.6f} m2")
+        out[sid] = {"guid": guid, "name": s["name"], "hash": h, "area_spec": area_spec, "area_model": area_model,
+                    "width": det[sid].get("width"), "height": det[sid].get("height")}
+    if changes:
+        attrs.__init__(ac)
+    return changes, out
+
+
 # ---- properties -------------------------------------------------------------------------------------
 def property_ids(ac: TapirClient) -> tuple[str | None, dict]:
     allp = ac.tapir("GetAllProperties", timeout=60)
@@ -272,20 +352,28 @@ def ensure_availability(ac: TapirClient, prop_ids: dict, element_guids: list[str
 
 
 # ---- favourites -----------------------------------------------------------------------------------
-def favorite_plans(spec: dict, attrs: Attrs, composites: dict) -> dict:
+def favorite_plans(spec: dict, attrs: Attrs, composites: dict, profiles: dict | None = None) -> dict:
     """system id -> what the FS favourite must contain (+ hash). Pure apart from the attribute lookups."""
     plans = {}
+    profiles = profiles or {}
     for sid, s in spec["systems"].items():
-        if not s.get("base_favorite"):
+        if not fs_system(s):
             continue
-        if s["type"] == "wall":
+        if s["type"] == "linear":
+            prof = profiles.get(s["profile"])
+            if prof is None:
+                raise TapirError(f"system {sid}: profile {s['profile']} not prepared")
+            content = {"kind": s["tool"], "profile": prof["name"], "profile_hash": prof["hash"]}
+            plans[sid] = {"name": s["favorite"], "kind": s["tool"], "content": content, "profile_guid": prof["guid"]}
+        elif s["type"] == "wall":
             content = {"kind": "wall", "base": s["base_favorite"], "structure": s.get("structure", "Basic"),
                        "compositeId": composites.get(sid), "composite": s.get("composite"),
                        "reference_line": s.get("reference_line", "Outside"), "surface_override": False}
             plans[sid] = {"name": s["favorite"], "kind": "wall", "content": content}
         else:
             writes, checks, _ = favorite_content(s, attrs)
-            content = {"kind": s["type"], "base": s["base_favorite"], "libpart": s["libpart"], "writes": writes,
+            base = s["base_favorite"] if s.get("base_favorite") else f"libpart:{s['libpart']}"
+            content = {"kind": s["type"], "base": base, "libpart": s["libpart"], "writes": writes,
                        "checks": [{k: c[k] for k in ("field", "want")} for c in checks]}
             plans[sid] = {"name": s["favorite"], "kind": s["type"], "content": content, "writes": writes, "checks": checks}
         plans[sid]["hash"] = _hash(plans[sid]["content"])
@@ -311,8 +399,8 @@ def _gdl_of(ac: TapirClient, guid: str) -> dict:
 
 
 def ensure_favorites(ac: TapirClient, spec: dict, attrs: Attrs, composites: dict, manifest: dict, out_root: Path,
-                     log: list) -> tuple[int, dict, list]:
-    plans = favorite_plans(spec, attrs, composites)
+                     log: list, profiles: dict | None = None) -> tuple[int, dict, list]:
+    plans = favorite_plans(spec, attrs, composites, profiles)
     existing = {}
     for kind in {p["kind"] for p in plans.values()}:
         existing[kind] = set(ac.tapir("GetFavoritesByType", {"elementType": FAV_TYPES[kind]}).get("favorites", []))
@@ -361,13 +449,32 @@ def ensure_favorites(ac: TapirClient, spec: dict, attrs: Attrs, composites: dict
             changes += _store_favorite(ac, host_guid, todo[wall_sid], existing["wall"], manifest, log)
 
         s_at = 0.3
-        for sid, p in todo.items():
+        for k, (sid, p) in enumerate(todo.items()):
+            if p["kind"] in ("beam", "column"):                    # I3: linear sample carrying the FS profile
+                if p["kind"] == "beam":
+                    res = ac.tapir("CreateBeams", {"beamsData": [{"begCoordinate": {"x": x0, "y": y0 + 3.0 + k}, "endCoordinate": {"x": x0 + 2.0, "y": y0 + 3.0 + k},
+                                                                  "floorIndex": floor, "zCoordinate": 1.0, "profileId": {"guid": p["profile_guid"]}}]})
+                else:
+                    res = ac.tapir("CreateColumns", {"columnsData": [{"coordinates": {"x": x0 + 3.0, "y": y0 + 3.0 + k, "z": 0.0}, "floorIndex": floor,
+                                                                      "height": 2.0, "profileId": {"guid": p["profile_guid"]}}]})
+                g = res["elements"][0].get("elementId", {}).get("guid")
+                if not g:
+                    raise TapirError(f"sample {sid}: {res}")
+                manifest["scratch"].append(g)
+                save_manifest(out_root, manifest)
+                d = ac.tapir("GetDetailsOfElements", {"elements": [{"elementId": {"guid": g}}], "fields": ["details"]})["detailsOfElements"][0]
+                if p["profile_guid"].lower() not in json.dumps(d).lower():
+                    raise TapirError(f"sample {sid}: the {p['kind']} does not report profile {p['content']['profile']}")
+                changes += _store_favorite(ac, g, p, existing[p["kind"]], manifest, log)
+                continue
             if p["kind"] == "wall":
                 continue
             w, h, sill = _sample_size(spec, sid)
             key, cmd = ("windowsData", "CreateWindows") if p["kind"] == "window" else ("doorsData", "CreateDoors")
+            base = p["content"]["base"]
+            placement = {"libraryPartName": base[8:]} if base.startswith("libpart:") else {"favoriteName": base}
             res = ac.tapir(cmd, {key: [{"ownerWallId": {"guid": host_guid}, "centerOffset": round(12.0 - s_at - w / 2, 4),
-                                        "width": w, "height": h, "sillHeight": sill, "favoriteName": p["content"]["base"]}]})
+                                        "width": w, "height": h, "sillHeight": sill, **placement}]})
             g = res["elements"][0].get("elementId", {}).get("guid")
             if not g:
                 raise TapirError(f"sample {sid}: {res}")
@@ -443,10 +550,13 @@ def ensure(ac: TapirClient, spec: dict, project: str, out_root: Path, log: list)
     attrs = Attrs(ac)
     n_comp, composites = ensure_composites(ac, spec, attrs, log)
     n_prop, props = ensure_properties(ac, log)
-    n_fav, plans, exceptions = ensure_favorites(ac, spec, attrs, composites, manifest, out_root, log)
+    n_prof, profiles = ensure_profiles(ac, spec, attrs, manifest, log)
+    save_manifest(out_root, manifest)
+    n_fav, plans, exceptions = ensure_favorites(ac, spec, attrs, composites, manifest, out_root, log, profiles)
     save_manifest(out_root, manifest)
     return {"composites": composites, "props": props, "favorites": {sid: {"name": p["name"], "hash": p["hash"]} for sid, p in plans.items()},
-            "exceptions": exceptions, "changes": {"composites": n_comp, "properties": n_prop, "favorites": n_fav},
+            "profiles": profiles, "exceptions": exceptions,
+            "changes": {"composites": n_comp, "properties": n_prop, "profiles": n_prof, "favorites": n_fav},
             "manifest": manifest, "attrs": attrs}
 
 
@@ -461,9 +571,10 @@ def resolve(ac: TapirClient, spec: dict, project: str, out_root: Path) -> dict:
                 raise TapirError(f"composite {s['composite']['name']} missing - run build first")
             composites[sid] = attrs.composite[s["composite"]["name"]]["attributeId"]["guid"]
     _, props = property_ids(ac)
-    plans = favorite_plans(spec, attrs, composites)
+    _, profiles = ensure_profiles(ac, spec, attrs, manifest, [], write=False)
+    plans = favorite_plans(spec, attrs, composites, profiles)
     exceptions = []
     for sid, p in plans.items():
         exceptions += manifest["favorites"].get(p["name"], {}).get("exceptions", [])
     return {"composites": composites, "props": props, "favorites": {sid: {"name": p["name"], "hash": p["hash"]} for sid, p in plans.items()},
-            "exceptions": exceptions, "manifest": manifest, "attrs": attrs}
+            "profiles": profiles, "exceptions": exceptions, "manifest": manifest, "attrs": attrs}

@@ -7,7 +7,9 @@ or written. Sources used:
   skripty/otvory.py           OPENINGS[<facade>]: kind (window/door), certainty, note
   skripty/fasady.py           FACADES[<facade>]: ends a/b, photo, metric rectification frame
   kontrola/fasada_<facade>_rektif.jpg   rectified photo (size only)
-  senec_types/<house>.json    (in this repo) I2 fill types + wall build-up read from the rectified photo
+  senec_types/<house>.json    (in this repo) I2 fill types + wall build-up read from the rectified photo;
+                              I3 camera of the photo, profiles, linear elements (cornice, string course) and the
+                              surrounds + sill ledges generated around the listed openings (apply_linear)
 
 I1 limits: one wall plane per facade = one literal panel(...) call with a literal opening list;
 anything else (grid(...), several panels) is refused with a clear error.
@@ -303,6 +305,58 @@ def apply_types(spec: dict, types: dict) -> None:
         by_id[oid].update(extra)
         if "reveal" in by_id[oid]:
             by_id[oid]["reveal"]["note"] = "depth from oblique views (ODHAD); I2: wall inset of the frame from the outside face"
+    apply_linear(spec, types)
+
+
+def apply_linear(spec: dict, types: dict) -> None:
+    """I3: camera of the photo, linear elements (cornice, string course) and the window surrounds of the types file."""
+    if "source_i3" in types:
+        spec["sources"].append(dict(types["source_i3"]))
+    if "camera" in types:
+        photo = next(s for s in spec["sources"] if s.get("rect"))
+        photo["rect"]["camera"] = dict(types["camera"])
+    L = round(spec["zones"][0]["rect"]["v"][1], 4)
+    items = []
+    for it in types.get("linear", []):
+        it = json.loads(json.dumps(it))
+        it["s"]["v"] = [L if x == "L" else x for x in it["s"]["v"]]
+        items.append(it)
+    sur = types.get("surrounds")
+    if sur:
+        by_id = {o["id"]: o for o in spec["openings"]}
+        band, below, over = sur["band"], sur["ledge_top_below_sill"], sur["ledge_overhang"]
+        ledge_h = spec["systems"][spec["systems"][sur["ledge_system"]]["profile"]]["h"]
+        pos = {"src": types.get("source_i3", {}).get("id"), "conf": "pravidlo"}
+        for oid in sur["openings"]:
+            s0, s1, v0, v1 = by_id[oid]["rect"]["v"]
+            b, lt = band["v"], round(v0 - below["v"], 4)
+            ref = f"{sur['position_note']}; band {b} ({band['src']}, {band['conf']})"
+            items += [
+                {"id": f"{oid}_sill", "kind": "sill_ledge", "system": sur["ledge_system"], "axis": "h", "host": oid,
+                 "s": dict(pos, v=[round(s0 - b - over["v"], 4), round(s1 + b + over["v"], 4)],
+                           note=f"surround outside + overhang {over['v']} ({over['src']}, {over['conf']})"),
+                 "v": dict(pos, v=round(lt - ledge_h["v"], 4),
+                           note=f"ledge top = window bottom - {below['v']} ({below['src']}, {below['conf']}), height {ledge_h['v']}"),
+                 "photo_edges": [{"name": "spodná hrana podokennej rímsy", "corner": "bottom_front", "s": [s0 + 0.1, s1 - 0.1],
+                                  "brighter": "above", "tol": 0.05, "search": 0.04}],
+                 "note": "podokenná rímska"},
+                {"id": f"{oid}_head", "kind": "surround_head", "system": sur["head_system"], "axis": "h", "host": oid,
+                 "s": dict(pos, v=[round(s0 - b, 4), round(s1 + b, 4)], note=ref),
+                 "v": dict(pos, v=round(v1, 4), note="on top of the opening"),
+                 "photo_edges": [{"name": "horná hrana šambrány", "corner": "top_front", "s": [s0 + 0.1, s1 - 0.1],
+                                  "brighter": "above", "tol": 0.05, "search": 0.04}],
+                 "note": "šambrána – nadpražie"},
+                {"id": f"{oid}_jl", "kind": "surround_jamb", "system": sur["jamb_system"], "axis": "v", "host": oid,
+                 "s": dict(pos, v=[round(s0 - b, 4), round(s0, 4)], note=ref),
+                 "v": dict(pos, v=[lt, round(v1, 4)], note="from the sill ledge to the head"),
+                 "note": "šambrána – ľavé ostenie"},
+                {"id": f"{oid}_jr", "kind": "surround_jamb", "system": sur["jamb_system"], "axis": "v", "host": oid,
+                 "s": dict(pos, v=[round(s1, 4), round(s1 + b, 4)], note=ref),
+                 "v": dict(pos, v=[lt, round(v1, 4)], note="from the sill ledge to the head"),
+                 "note": "šambrána – pravé ostenie"},
+            ]
+    if items:
+        spec["linear"] = items
 
 
 def main(argv=None) -> int:

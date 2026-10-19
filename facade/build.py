@@ -5,6 +5,10 @@ I2: first the catalogue `systems` (systems.py: Composite, FS Favorites, FS_* pro
     placed from the FS Favorites; per element the instance values of the spec are written (transom height,
     sidelight, glazing bar, wall inset of the frame) and the properties FS_zdroj / FS_istota / FS_spec.
     Openings with `merged_into` are built as ONE element with their host (e.g. door + shop window = sidelight).
+I3: the wall inset of the frames is native (revealDepthLocation 'Side' + revealDepthOffset, Tapir T8) - no
+    subtraction of the outer skins; `linear` elements (cornice, string course, sill ledges, surrounds) are profiled
+    Beams (horizontal: profile x = out of the facade, y = up) and Columns (vertical: profile x = out, y = along the
+    facade) with the FS profile, placed from their FS favourite.
 
 Idempotent: every created element is recorded in <out>/<spec.id>/state.json with a hash of what was sent
 (including the hash of the favourite it comes from). A second run with the same spec changes nothing. Only
@@ -26,8 +30,10 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import systems as fs_systems  # noqa: E402
+import math  # noqa: E402
+
 from geom import frame_of  # noqa: E402
-from spec_validate import element_id, load_gdl_map, lowest_conf, validate  # noqa: E402
+from spec_validate import element_id, fs_system, load_gdl_map, lowest_conf, validate  # noqa: E402
 from tapir_client import TapirClient, TapirError, results_ok  # noqa: E402
 
 DEFAULT_PROJECT = r"C:\FacadePilot\Fasada_pilot_A.pln"
@@ -96,16 +102,6 @@ def _zdroj(parts: list[tuple[str, dict | None]]) -> tuple[str, str]:
     return "; ".join(txt), lowest_conf(*confs) if confs else "default"
 
 
-def outer_skins(wsys: dict) -> float:
-    """Thickness of the composite skins outside the first core skin (0 for a basic wall)."""
-    total = 0.0
-    for sk in wsys.get("composite", {}).get("skins", []):
-        if sk["type"] == "Core":
-            return round(total, 6)
-        total += sk["thickness"]["v"]
-    return 0.0
-
-
 # ---- plan: spec -> Archicad payloads ----------------------------------------------------------
 def plan(spec: dict, story_levels: dict[int, float], sysinfo: dict | None = None) -> dict:
     """Pure function: what has to exist in Archicad for this spec (payloads + hashes)."""
@@ -136,7 +132,7 @@ def plan(spec: dict, story_levels: dict[int, float], sysinfo: dict | None = None
     if wall_payload["structureType"] == "Basic":
         wall_payload["thickness"] = zone["thickness"]["v"]
     wfav = sysinfo["favorites"].get(zone["system"])
-    if wsys.get("base_favorite") and not wfav:
+    if fs_system(wsys) and not wfav:
         raise TapirError(f"system {zone['system']}: FS favourite not prepared (systems.ensure)")
     if wsys.get("favorite"):
         wall_payload["favoriteName"] = wsys["favorite"]
@@ -168,7 +164,7 @@ def plan(spec: dict, story_levels: dict[int, float], sysinfo: dict | None = None
         if osys.get("favorite"):
             payload["favoriteName"] = osys["favorite"]
         ofav = sysinfo["favorites"].get(o["system"])
-        if osys.get("base_favorite") and not ofav:
+        if fs_system(osys) and not ofav:
             raise TapirError(f"system {o['system']}: FS favourite not prepared (systems.ensure)")
         gdl = [NOMINAL_WALLHOLE] if (o["kind"] == "door" and osys.get("nominal") == "wallhole") else []
         inst, reveal, reveal_spec = [], None, None
@@ -184,9 +180,8 @@ def plan(spec: dict, story_levels: dict[int, float], sysinfo: dict | None = None
                     continue
                 inst.append({"field": k, "value": val["v"], "write": rule["write"], "read": rule["read"]})
             rev = gmap["common"][o["kind"]]["reveal"]
-            if "reveal" in o:
-                outer = outer_skins(wsys) if rev.get("core_relative") else 0.0
-                reveal = dict(rev["element_fields"], **{rev["depth_field"]: round(o["reveal"]["v"] - outer, 6)})
+            if "reveal" in o:                                # I3: native, measured from the outside face (Side)
+                reveal = dict(rev["element_fields"], **{rev["depth_field"]: round(o["reveal"]["v"], 6)})
                 reveal_spec = o["reveal"]["v"]
         confs = [o["rect"]["conf"]] + [m["rect"]["conf"] for m in u["members"]]
         eid = element_id(spec, o, *confs)
@@ -200,7 +195,72 @@ def plan(spec: dict, story_levels: dict[int, float], sysinfo: dict | None = None
                 "fav_hash": (ofav or {}).get("hash")}
         item["hash"] = _hash([payload, gdl, inst, reveal, eid, ref["layer"], item["props"], item["fav_hash"], wall["hash"]])
         openings.append(item)
-    return {"wall": wall, "openings": openings, "exceptions": exceptions}
+    linear = plan_linear(spec, fr, floor, story_levels[floor], sysinfo) if spec.get("linear") else []
+    return {"wall": wall, "openings": openings, "linear": linear, "exceptions": exceptions}
+
+
+def plan_linear(spec: dict, fr, floor: int, level: float, sysinfo: dict) -> list[dict]:
+    """Payloads of the I3 linear elements: Beam a->b (or b->a) with the profile on the outside, Column rotated so that
+    its local x is the outward normal; z relative to the home story."""
+    out = []
+    ref = spec["reference"]
+    right = ref["outside"] == "right_of_ab"
+    for it in spec.get("linear", []):
+        sysdef = spec["systems"][it["system"]]
+        prof = spec["systems"][sysdef["profile"]]
+        pinfo = sysinfo.get("profiles", {}).get(sysdef["profile"])
+        if pinfo is None:
+            raise TapirError(f"linear[{it['id']}]: profile {sysdef['profile']} not prepared (systems.ensure)")
+        fav = sysinfo["favorites"].get(it["system"])
+        if fav is None:
+            raise TapirError(f"linear[{it['id']}]: favourite of {it['system']} not prepared (systems.ensure)")
+        s0, s1 = it["s"]["v"]
+        if it["axis"] == "h":
+            a, b = (s0, s1) if right else (s1, s0)                 # Archicad puts the profile x on the RIGHT of beg -> end
+            payload = {"begCoordinate": dict(zip("xy", fr.xy(a))), "endCoordinate": dict(zip("xy", fr.xy(b))),
+                       "floorIndex": floor, "zCoordinate": round(fr.z0 + it["v"]["v"] - level, 6),
+                       "profileId": {"guid": pinfo["guid"]}, "favoriteName": sysdef["favorite"]}
+            tool = "beam"
+        else:
+            v0, v1 = it["v"]["v"]
+            # profile x -> outward normal n, profile y -> n turned +90 deg = +d (outside right of a->b) or -d
+            origin = s0 if right else s1
+            payload = {"coordinates": dict(zip("xy", fr.xy(origin)), z=round(fr.z0 + v0 - level, 6)), "floorIndex": floor,
+                       "height": round(v1 - v0, 6), "axisRotationAngle": round(math.atan2(fr.n[1], fr.n[0]), 9),
+                       "profileId": {"guid": pinfo["guid"]}, "favoriteName": sysdef["favorite"]}
+            tool = "column"
+        eid = element_id(spec, it, it["s"]["conf"], it["v"]["conf"], prof["conf"])
+        parts = [("poloha s", it["s"]), ("výška v", it["v"]), ("profil vyloženie", prof.get("w")), ("profil výška/šírka", prof.get("h")),
+                 ("profil/systém", {"src": prof.get("src"), "conf": prof["conf"]})]
+        zdroj, istota = _zdroj(parts)
+        item = {"item": it["id"], "kind": tool, "payload": payload, "element_id": eid, "layer": ref["layer"],
+                "props": {"FS_zdroj": zdroj, "FS_istota": istota, "FS_spec": f"{spec['id']}.{it['id']}"},
+                "fav_hash": fav["hash"], "profile_guid": pinfo["guid"], "spec_item": it}
+        item["hash"] = _hash([payload, eid, ref["layer"], item["props"], item["fav_hash"], pinfo["hash"]])
+        out.append(item)
+    return out
+
+
+def linear_readback(item: dict, det: dict, tol: float) -> list[str]:
+    """Placement of a beam / column read back = payload (z relative to the story, profile, column height/rotation)."""
+    bad = []
+    p = item["payload"]
+    if item["profile_guid"].lower() not in json.dumps(det).lower():
+        bad.append(f"{item['item']}: profile {item['profile_guid']} not on the element")
+    if item["kind"] == "beam":
+        checks = [("begCoordinate.x", det["begCoordinate"]["x"], p["begCoordinate"]["x"]),
+                  ("begCoordinate.y", det["begCoordinate"]["y"], p["begCoordinate"]["y"]),
+                  ("endCoordinate.x", det["endCoordinate"]["x"], p["endCoordinate"]["x"]),
+                  ("endCoordinate.y", det["endCoordinate"]["y"], p["endCoordinate"]["y"]),
+                  ("level", det["level"], p["zCoordinate"])]
+    else:
+        checks = [("origin.x", det["origin"]["x"], p["coordinates"]["x"]), ("origin.y", det["origin"]["y"], p["coordinates"]["y"]),
+                  ("bottomOffset", det["bottomOffset"], p["coordinates"]["z"]), ("height", det["height"], p["height"]),
+                  ("axisRotationAngle", math.remainder(det["axisRotationAngle"] - p["axisRotationAngle"], 2 * math.pi), 0.0)]
+    for name, got, sent in checks:
+        if abs(got - sent) > tol:
+            bad.append(f"{item['item']}: {name} {got:.4f} != sent {sent:.4f}")
+    return bad
 
 
 # ---- Archicad helpers -----------------------------------------------------------------------------
@@ -347,7 +407,7 @@ def build(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_roo
         else:
             log.append(f"forgot {item_id} {entry['guid']} (not in the project any more; {reason})")
 
-    wanted_ids = {want["wall"]["item"]} | {o["item"] for o in want["openings"]}
+    wanted_ids = {want["wall"]["item"]} | {o["item"] for o in want["openings"]} | {it["item"] for it in want["linear"]}
     for item_id in [k for k in known if k not in wanted_ids]:
         drop(item_id, "not in the spec any more (or merged into another opening)")
 
@@ -400,12 +460,33 @@ def build(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_roo
             log.append(f"created {kind} {o['element_id']} {g}")
         save_state(spath, state)
 
+    # ---- linear elements (I3): independent of the wall, rebuilt only when their own hash changes
+    todo_lin = {"beam": [], "column": []}
+    for item in want["linear"]:
+        if up_to_date(item):
+            changes["kept"] += 1
+            continue
+        if item["item"] in known:
+            drop(item["item"], "changed" if not force else "--force")
+        todo_lin[item["kind"]].append(item)
+    for kind, command, key in (("beam", "CreateBeams", "beamsData"), ("column", "CreateColumns", "columnsData")):
+        if not todo_lin[kind]:
+            continue
+        ac.tapir("ChangeWindow", {"windowType": "3DModel"})
+        guids = _created_guids(ac.tapir(command, {key: [it["payload"] for it in todo_lin[kind]]}, timeout=120), command)
+        for g, it in zip(guids, todo_lin[kind]):
+            known[it["item"]] = {"guid": g, "kind": kind, "hash": it["hash"], "element_id": it["element_id"]}
+            created_now.append((g, it))
+            changes["created"] += 1
+            log.append(f"created {kind} {it['element_id']} {g}")
+        save_state(spath, state)
+
     # FS_* availability for the classification items of the facade elements, then finish every element whose
     # state entry is not marked finished (fresh ones, and any left over by an interrupted earlier run)
     changes["systems_availability"] = fs_systems.ensure_availability(
         ac, sysinfo["props"], [e["guid"] for e in known.values()], sysinfo["manifest"], log)
     fs_systems.save_manifest(out_root, sysinfo["manifest"])
-    by_item = {it["item"]: it for it in [wall] + want["openings"]}
+    by_item = {it["item"]: it for it in [wall] + want["openings"] + want["linear"]}
     unfinished = [(known[i]["guid"], by_item[i]) for i in by_item if not known[i].get("finished")]
     finish_elements(ac, unfinished, layer_index, elementid_prop, sysinfo["props"])
     for g, it in unfinished:
@@ -416,10 +497,10 @@ def build(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_roo
 
     # ---- quick read-back of what was sent (full comparison is verify.py)
     readback = existing(ac, [e["guid"] for e in known.values()])
-    params = gdl_params(ac, [known[o["item"]]["guid"] for o in want["openings"] if o.get("inst") or o.get("reveal")])
+    params = gdl_params(ac, [known[o["item"]]["guid"] for o in want["openings"] if o.get("inst")])
     mismatches = []
     tol = spec["tolerances"]["build"]
-    for item in [wall] + want["openings"]:
+    for item in [wall] + want["openings"] + want["linear"]:
         g = known[item["item"]]["guid"]
         d = readback.get(g)
         if d is None:
@@ -430,6 +511,9 @@ def build(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_roo
             mismatches.append(f"{item['item']}: layer {d['layerIndex']} != {layer_index}")
         if d["id"] != item["element_id"]:
             mismatches.append(f"{item['item']}: Element ID '{d['id']}' != '{item['element_id']}'")
+        if item["kind"] in ("beam", "column"):
+            mismatches += linear_readback(item, det, tol)
+            continue
         keys = (("height", "height"), ("bottomOffset", "zCoordinate")) if item["kind"] == "wall" else \
             tuple((k, k) for k in ("centerOffset", "width", "height", "sillHeight"))
         for k_read, k_sent in keys:
@@ -443,10 +527,11 @@ def build(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_roo
             got = fs_systems.read_field(i["read"], p)
             if not fs_systems.same(got, i["value"], tol):
                 mismatches.append(f"{item['item']}: {i['field']} reads {got!r} != spec {i['value']!r}")
-        if p and item.get("reveal"):
-            if abs(p.get("AC_wido_sill", -1) - item["reveal_spec"]) > tol or det.get("refSide") is not True:
-                mismatches.append(f"{item['item']}: wall inset {p.get('AC_wido_sill')} / refSide {det.get('refSide')} != "
-                                  f"{item['reveal_spec']} / True")
+        if item.get("reveal"):
+            if abs(det.get("revealDepthOffset", -1) - item["reveal_spec"]) > tol or det.get("refSide") is not True \
+                    or det.get("revealDepthLocation") != "Side":
+                mismatches.append(f"{item['item']}: wall inset {det.get('revealDepthOffset')} / {det.get('revealDepthLocation')} / "
+                                  f"refSide {det.get('refSide')} != {item['reveal_spec']} / Side / True")
 
     if save:
         res = ac.tapir("SaveProject", {}, timeout=300)
