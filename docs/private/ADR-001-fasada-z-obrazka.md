@@ -293,3 +293,9 @@ Negatívne / náklady:
 | ArchiCAD 29 DevKit | licencia Graphisoft API Developer | nové Tapir príkazy |
 
 Žiadne secrets, žiadne online služby v pipeline (Street View len ako vizuálna referencia cez `aec-prieskumnik`, podľa pravidiel projektu).
+
+
+### Stav I5/I6 C++ (overené naostro 2026-10-19, `test_i5_i6_cpp.py` 45/45)
+- T2 `SetCurtainWallSystemDefaults`: triedy rámov a panelov zo vstupu, parapety/sklo podľa buniek, Favorite `FS cw.*` dá identický CW. Typ sklo/nepriehľadný API nemá – rozlišuje sa materiálom a povrchom.
+- T3 `ModifyRailingDetails`: výška segmentu áno. Rozostup stĺpikov na **existujúcom** zábradlí zo šablóny nie (chýba podprvok RailingPattern) – známe obmedzenie; pipeline zábradlia vždy stavia nanovo cez `CreateRailings` s `height`/`postSpacing`, čo funguje. Typ výplne a profil madla sa nemenia (záloha R1: základné Favorites).
+- T9: nosník a stĺp majú 3D geometriu. Bug `SetParamValueBool` opravený.
