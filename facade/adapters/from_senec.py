@@ -298,14 +298,22 @@ def _ref_value(v, length: float):
     return v
 
 
-def build_spec(house: str, root: Path = DEFAULT_ROOT, i6: bool = False) -> dict:
+def build_spec(house: str, root: Path = DEFAULT_ROOT, i6: bool = False, corrections=None, types_hook=None) -> dict:
     """facade-spec/1 of a pilot house. i6=True adds the I5/I6 layer of the types file (section 'i6'): shop windows and
-    glazed entrances as curtain wall fields instead of fixed windows / doors, balcony slabs and railings."""
+    glazed entrances as curtain wall fields instead of fixed windows / doors, balcony slabs and railings.
+    corrections: the I7 corrections file (facade/corrections/<house>.json when None, no corrections when False, else a
+    path) - its 'types' entries are applied to the types file before the spec is derived, its 'spec' entries to the
+    result (facade/spec_corrections.py). types_hook(types): test hook (I7 acceptance: an artificial error in the types)."""
+    import spec_corrections as sc
     h = _read_house(root, house)
     otv = _read_otvory(root)
     fac = _read_fasady(root)
     types_file = TYPES_DIR / f"{house}.json"
     types = json.loads(types_file.read_text(encoding="utf-8")) if types_file.exists() else {}
+    if types_hook is not None:
+        types_hook(types)
+    corr = sc.load(None if corrections is False else (sc.path_of(house) if corrections is None else Path(corrections)), house)
+    c_applied, c_stale = sc.apply(types, corr, "types")
     if i6 and not types.get("i6"):
         raise AdapterError(f"{types_file.name}: no 'i6' section (curtain walls, balconies, railings)")
     if i6 and types["i6"].get("pilot_mapping"):
@@ -456,6 +464,8 @@ def build_spec(house: str, root: Path = DEFAULT_ROOT, i6: bool = False) -> dict:
         spec["generated"]["types"] = str(types_file)
     spec.setdefault("simplifications", [])
     spec["simplifications"] += [{"ref": s["ref"], "text": s["text"], "proposal": "mimo rozsah pilota A (vykázané)"} for s in skipped]
+    s_applied, s_stale = sc.apply(spec, corr, "spec")
+    sc.finish_spec(spec, corr, c_applied + s_applied, c_stale + s_stale)
     spec["assumptions"] = assumptions_of(spec)
     return spec
 

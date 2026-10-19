@@ -743,8 +743,11 @@ def finish_elements(ac: TapirClient, items: list[tuple[str, dict]], layer_index:
 
 # ---- main build ------------------------------------------------------------------------------------
 def build(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_root: Path = DEFAULT_OUT,
-          save: bool = False, force: bool = False, verbose: bool = True) -> dict:
+          save: bool = False, force: bool = False, verbose: bool = True, rebuild: set | None = None) -> dict:
+    """rebuild: state items (e.g. 'O1.cw', 'Z1') rebuilt even when their hash is unchanged - the I7 loop uses it when the
+    model was changed outside the spec (class 'build')."""
     t0 = time.monotonic()
+    rebuild = set(rebuild or ())
     errors, warnings = validate(spec)
     if errors:
         raise TapirError("spec is invalid:\n  " + "\n  ".join(errors))
@@ -799,7 +802,7 @@ def build(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_roo
 
     def up_to_date(item: dict) -> bool:
         entry = known.get(item["item"])
-        return bool(entry) and not force and entry["hash"] == item["hash"] and entry["guid"] in alive
+        return bool(entry) and not force and item["item"] not in rebuild and entry["hash"] == item["hash"] and entry["guid"] in alive
 
     def hosted_by(wall_guid: str) -> list[str]:
         """state items whose element sits in the wall (openings die with their wall)."""
@@ -818,7 +821,7 @@ def build(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_roo
             old = known[wall["item"]]["guid"]
             for oid in hosted_by(old):
                 drop(oid, f"owner wall {wall['item']} is rebuilt")
-            drop(wall["item"], "changed" if not force else "--force")
+            drop(wall["item"], "rebuild (I7)" if wall["item"] in rebuild else "changed" if not force else "--force")
         ac.tapir("ChangeWindow", {"windowType": "3DModel"})     # modeller trap: create from the 3D window
         g = _created_guids(ac.tapir("CreateWalls", {"wallsData": [wall["payload"]]}), "CreateWalls")[0]
         known[wall["item"]] = {"guid": g, "kind": "wall", "hash": wall["hash"], "element_id": wall["element_id"]}
@@ -862,7 +865,7 @@ def build(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_roo
             changes["kept"] += 1
             continue
         if item["item"] in known:
-            drop(item["item"], "changed" if not force else "--force")
+            drop(item["item"], "rebuild (I7)" if item["item"] in rebuild else "changed" if not force else "--force")
         todo_free[item["kind"]].append(item)
     for kind, command, key in (("beam", "CreateBeams", "beamsData"), ("column", "CreateColumns", "columnsData"),
                                ("object", "CreateObjects", "objectsData"), ("curtainwall", "CreateCurtainWalls", "curtainWallsData"),

@@ -1,0 +1,373 @@
+{
+ "schema": "facade-corrections/1",
+ "spec": "M015_L1",
+ "corrections": [
+  {
+   "target": "types",
+   "path": [
+    "openings",
+    "O2",
+    "rect"
+   ],
+   "before": null,
+   "after": {
+    "v": [
+     3.42,
+     4.55,
+     0.13,
+     3.1887
+    ],
+    "src": "I7.1",
+    "conf": "meranie",
+    "note": "I7 iterácia 1: hrana top z fotky 3.192 (skok 77, tretiny [3.1927, 3.1913, 3.1903]); pôvodne [3.42, 4.55, 0.13, 3.13] (S1, meranie)"
+   },
+   "id": "M015_L1.c1",
+   "src": "I7.1",
+   "conf": "meranie",
+   "cause": "spec",
+   "iteration": 1,
+   "status": "active",
+   "reason": "model = spec, hrana top je na fotke o +5.9 cm ďalej; leží na línii istej hrany O3, O4 (3.187) - jedna silná hrana, tretiny súhlasia; za ostením slabší skok (0.42 x) - škára v línii nadpražia alebo širší predmet",
+   "evidence": {
+    "method": "remeasure_edge",
+    "window_cm": 10.0,
+    "status": "certain",
+    "pos": 3.1916,
+    "step": 77.2,
+    "reason": "jedna silná hrana, tretiny súhlasia; za ostením slabší skok (0.42 x) - škára v línii nadpražia alebo širší predmet",
+    "candidates": [
+     {
+      "pos": 3.1916,
+      "step": 77.2,
+      "border": false
+     },
+     {
+      "pos": 3.0616,
+      "step": 33.5,
+      "border": false
+     }
+    ],
+    "thirds": [
+     3.1927,
+     3.1913,
+     3.1903
+    ],
+    "continuation": {
+     "beyond": [
+      32.8,
+      6.8
+     ],
+     "ratio": 0.42,
+     "continues": false,
+     "unclear": true
+    }
+   },
+   "crop": "C:\\FacadePilot\\out\\M015_L1\\i7\\M015_L1_O2_top_auto_it1.png",
+   "finding": {
+    "source": "auto",
+    "item": "O2",
+    "edge": "top",
+    "name": "top (automatická kontrola)",
+    "quantity": null,
+    "delta_cm": -5.1,
+    "tol_cm": 3.0
+   },
+   "error_before_cm": 5.88,
+   "error_after_cm": 0.0,
+   "kept": true,
+   "evaluated_in": 2
+  },
+  {
+   "target": "types",
+   "path": [
+    "openings",
+    "O2",
+    "transom_h"
+   ],
+   "before": {
+    "v": 0.89,
+    "src": "S6",
+    "conf": "meranie",
+    "note": "transom bar at v = 2.24"
+   },
+   "after": {
+    "v": 0.9487,
+    "src": "S6",
+    "conf": "meranie",
+    "note": "transom bar at v = 2.24; I7 iterácia 1: vrch otvoru 3.13 -> 3.1887, priečka ostáva na mieste"
+   },
+   "id": "M015_L1.c2",
+   "src": "I7.1",
+   "conf": "meranie",
+   "cause": "spec",
+   "iteration": 1,
+   "status": "active",
+   "reason": "model = spec, hrana top je na fotke o +5.9 cm ďalej; leží na línii istej hrany O3, O4 (3.187) - jedna silná hrana, tretiny súhlasia; za ostením slabší skok (0.42 x) - škára v línii nadpražia alebo širší predmet",
+   "evidence": {
+    "method": "remeasure_edge",
+    "window_cm": 10.0,
+    "status": "certain",
+    "pos": 3.1916,
+    "step": 77.2,
+    "reason": "jedna silná hrana, tretiny súhlasia; za ostením slabší skok (0.42 x) - škára v línii nadpražia alebo širší predmet",
+    "candidates": [
+     {
+      "pos": 3.1916,
+      "step": 77.2,
+      "border": false
+     },
+     {
+      "pos": 3.0616,
+      "step": 33.5,
+      "border": false
+     }
+    ],
+    "thirds": [
+     3.1927,
+     3.1913,
+     3.1903
+    ],
+    "continuation": {
+     "beyond": [
+      32.8,
+      6.8
+     ],
+     "ratio": 0.42,
+     "continues": false,
+     "unclear": true
+    }
+   },
+   "crop": "C:\\FacadePilot\\out\\M015_L1\\i7\\M015_L1_O2_top_auto_it1.png",
+   "finding": {
+    "source": "auto",
+    "item": "O2",
+    "edge": "top",
+    "name": "top (automatická kontrola)",
+    "quantity": null,
+    "delta_cm": -5.1,
+    "tol_cm": 3.0
+   },
+   "error_before_cm": 5.88,
+   "error_after_cm": 0.0,
+   "kept": true,
+   "evaluated_in": 2
+  },
+  {
+   "target": "types",
+   "path": [
+    "i6",
+    "cw_fields",
+    {
+     "id": "O3"
+    },
+    "rect"
+   ],
+   "before": {
+    "v": [
+     5.31,
+     6.33,
+     0.17,
+     3.13
+    ],
+    "src": "S1",
+    "conf": "meranie",
+    "note": "dverový stĺpec obchodu = O3 (I1)"
+   },
+   "after": {
+    "v": [
+     5.31,
+     6.33,
+     0.17,
+     3.1839
+    ],
+    "src": "I7.1",
+    "conf": "meranie",
+    "note": "I7 iterácia 1: hrana top z fotky 3.187 (skok 76, tretiny [3.1885, 3.1876, 3.1847]); pôvodne [5.31, 6.33, 0.17, 3.13] (S1, meranie)"
+   },
+   "id": "M015_L1.c3",
+   "src": "I7.1",
+   "conf": "meranie",
+   "cause": "spec",
+   "iteration": 1,
+   "status": "active",
+   "reason": "model = spec, hrana top je na fotke o +5.4 cm ďalej (istá: jedna silná hrana, tretiny súhlasia, končí na ostení)",
+   "evidence": {
+    "method": "remeasure_edge",
+    "window_cm": 10.0,
+    "status": "certain",
+    "pos": 3.1868,
+    "step": 75.7,
+    "reason": "jedna silná hrana, tretiny súhlasia, končí na ostení",
+    "candidates": [
+     {
+      "pos": 3.1868,
+      "step": 75.7,
+      "border": false
+     },
+     {
+      "pos": 3.1519,
+      "step": 15.3,
+      "border": false
+     }
+    ],
+    "thirds": [
+     3.1885,
+     3.1876,
+     3.1847
+    ],
+    "continuation": {
+     "beyond": [
+      13.4,
+      null
+     ],
+     "ratio": 0.18,
+     "continues": false,
+     "unclear": false
+    }
+   },
+   "crop": "C:\\FacadePilot\\out\\M015_L1\\i7\\M015_L1_O3_top_auto_it1.png",
+   "finding": {
+    "source": "auto",
+    "item": "O3",
+    "edge": "top",
+    "name": "top (automatická kontrola)",
+    "quantity": null,
+    "delta_cm": -5.1,
+    "tol_cm": 3.0
+   },
+   "error_before_cm": 5.4,
+   "error_after_cm": 0.85,
+   "kept": true,
+   "evaluated_in": 2
+  },
+  {
+   "target": "types",
+   "path": [
+    "i6",
+    "cw_fields",
+    {
+     "id": "O4"
+    },
+    "rect"
+   ],
+   "before": {
+    "v": [
+     6.33,
+     7.17,
+     0.65,
+     3.13
+    ],
+    "src": "S1",
+    "conf": "meranie",
+    "note": "výklad obchodu = O4 (I1); spoločné ostenie s O3 v s = 6,33 (stred stĺpika na fotke 6,29)"
+   },
+   "after": {
+    "v": [
+     6.33,
+     7.17,
+     0.65,
+     3.1775
+    ],
+    "src": "I7.1",
+    "conf": "meranie",
+    "note": "I7 iterácia 1: hrana top z fotky 3.180 (skok 73, tretiny [3.1809, 3.1809, 3.1787]); pôvodne [6.33, 7.17, 0.65, 3.13] (S1, meranie)"
+   },
+   "id": "M015_L1.c4",
+   "src": "I7.1",
+   "conf": "meranie",
+   "cause": "spec",
+   "iteration": 1,
+   "status": "active",
+   "reason": "model = spec, hrana top je na fotke o +4.8 cm ďalej (istá: jedna silná hrana, tretiny súhlasia, končí na ostení)",
+   "evidence": {
+    "method": "remeasure_edge",
+    "window_cm": 10.0,
+    "status": "certain",
+    "pos": 3.1804,
+    "step": 73.1,
+    "reason": "jedna silná hrana, tretiny súhlasia, končí na ostení",
+    "candidates": [
+     {
+      "pos": 3.1804,
+      "step": 73.1,
+      "border": false
+     },
+     {
+      "pos": 3.1465,
+      "step": 16.6,
+      "border": false
+     }
+    ],
+    "thirds": [
+     3.1809,
+     3.1809,
+     3.1787
+    ],
+    "continuation": {
+     "beyond": [
+      null,
+      4.7
+     ],
+     "ratio": 0.06,
+     "continues": false,
+     "unclear": false
+    }
+   },
+   "crop": "C:\\FacadePilot\\out\\M015_L1\\i7\\M015_L1_O4_top_auto_it1.png",
+   "finding": {
+    "source": "auto",
+    "item": "O4",
+    "edge": "top",
+    "name": "top (automatická kontrola)",
+    "quantity": null,
+    "delta_cm": -5.1,
+    "tol_cm": 3.0
+   },
+   "error_before_cm": 4.76,
+   "error_after_cm": 0.01,
+   "kept": true,
+   "evaluated_in": 2
+  }
+ ],
+ "simplifications": [
+  {
+   "ref": "openings[O1] (I7: nejednoznačné hrany)",
+   "text": "I7 slučka hranu neopravila: right -6.2 cm - spoločné ostenie s O1b (dotýkajúce sa otvory) - hrana nie je hrana murovaného otvoru, raster sa kontroluje ako lišta; top -3.8 cm - jedna silná hrana, tretiny súhlasia; za ostením slabší skok (0.34 x) - škára v línii nadpražia alebo širší predmet; bez potvrdenia na susednom otvore v tej istej línii - neopravené",
+   "proposal": "prijať model; hranu odčítať z ďalšieho záberu alebo zamerania"
+  },
+  {
+   "ref": "openings[O2] (I7: nejednoznačné hrany)",
+   "text": "I7 slučka hranu neopravila: right +3.8 cm - dve hrany: 4.524 (skok 52) a 4.500 (skok 46)",
+   "proposal": "prijať model; hranu odčítať z ďalšieho záberu alebo zamerania"
+  },
+  {
+   "ref": "openings[O4] (I7: nejednoznačné hrany)",
+   "text": "I7 slučka hranu neopravila: bottom -4.2 cm - žiadny skok jasu >= 12 v okne ±10 cm (nečitateľná)",
+   "proposal": "prijať model; hranu odčítať z ďalšieho záberu alebo zamerania"
+  },
+  {
+   "ref": "openings[O5] (I7: nejednoznačné hrany)",
+   "text": "I7 slučka hranu neopravila: bottom +5.0 cm - hrana pokračuje mimo otvoru (skok [48.7, 53.8] vs 94) - patrí širšiemu predmetu, hrana otvoru je zakrytá",
+   "proposal": "prijať model; hranu odčítať z ďalšieho záberu alebo zamerania"
+  },
+  {
+   "ref": "openings[O6] (I7: nejednoznačné hrany)",
+   "text": "I7 slučka hranu neopravila: bottom -5.0 cm - dve hrany: 4.734 (skok 84) a 4.848 (skok 55)",
+   "proposal": "prijať model; hranu odčítať z ďalšieho záberu alebo zamerania"
+  }
+ ],
+ "sources": [
+  {
+   "id": "I7.1",
+   "type": "iteration",
+   "file": "facade/corrections/M015_L1.json",
+   "note": "I7 slučka, iterácia 1: hrana premeraná na rektifikovanej fotke S1 (facade/photo_measure.py)"
+  },
+  {
+   "id": "I7.2",
+   "type": "iteration",
+   "file": "facade/corrections/M015_L1.json",
+   "note": "I7 slučka, iterácia 2: hrana premeraná na rektifikovanej fotke S1 (facade/photo_measure.py)"
+  }
+ ]
+}

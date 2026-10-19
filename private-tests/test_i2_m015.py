@@ -134,6 +134,7 @@ def live(spec: dict, port: int, save: bool) -> None:
     gp = gdl_params(ac, [st[i]["guid"] for i in ("O1", "O2", "O3", "O5")])
     g = {i: gp[st[i]["guid"]] for i in ("O1", "O2", "O3", "O5")}
     bar_o5 = next(o for o in spec["openings"] if o["id"] == "O5")["bar_h"]["v"]       # 0.53 since pilot A (masonry bottom 4.80)
+    o2_th = next(o for o in spec["openings"] if o["id"] == "O2")["transom_h"]["v"]     # 0.89 before I7, 0.9487 after (corrections)
     spot = {
         "O5 2 sashes (Double Window 27, both opening types set)": sum(1 for k in ("gs_optype_05", "gs_optype_01") if g["O5"].get(k)) == 2,
         f"O5 glazing bar: 'Divided' at {bar_o5} (spec)": g["O5"]["iMullionStyle_05"] == 6 and abs(g["O5"]["gs_horiz_div_height_05"] - bar_o5) < 1e-6,
@@ -145,7 +146,9 @@ def live(spec: dict, port: int, save: bool) -> None:
         "O1 transom 0.55, sidelight 0.60 on 0.63 parapet": abs(g["O1"]["gs_transom_height"] - 0.55) < 1e-6 and
             abs(g["O1"]["gs_sidelight_width_right"] - g["O1"]["gs_frame_width"] - 0.60) < 1e-6 and abs(g["O1"]["gs_sidelight_parapet_hgt_right"] - 0.63) < 1e-6,
         "O2 two leaves": g["O2"]["ifc_optypestr"].startswith("Double Door"),
-        "O2 transom 0.89 (Double Door with Transom 27)": abs(g["O2"].get("gs_transom_height", 0) - 0.89) < 1e-6 and g["O2"]["ifc_TransomThickness"] > 0,
+        # 0.89 until I7; the I7 loop read the top of the gate on the masonry opening (3.13 -> 3.189, facade/corrections/M015_L1.json)
+        # and kept the transom bar where the photo shows it -> the expectation is the spec value, not a literal
+        f"O2 transom {o2_th} = spec (Double Door with Transom 27)": abs(g["O2"].get("gs_transom_height", 0) - o2_th) < 1e-6 and g["O2"]["ifc_TransomThickness"] > 0,
     }
     # wall inset: native since I3 (revealDepthLocation Side; AC_wido_sill is not refreshed by Archicad for Side)
     dets = existing(ac, [st[i]["guid"] for i in ("O1", "O3", "O5")])

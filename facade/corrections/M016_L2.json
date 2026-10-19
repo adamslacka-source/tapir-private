@@ -1,0 +1,40 @@
+{
+ "schema": "facade-corrections/1",
+ "spec": "M016_L2",
+ "corrections": [],
+ "simplifications": [
+  {
+   "ref": "openings[O1] (I7: nejednoznačné hrany)",
+   "text": "I7 slučka hranu neopravila: left -4.0 cm - dve hrany: 1.317 (skok 29) a 1.240 (skok 20)",
+   "proposal": "prijať model; hranu odčítať z ďalšieho záberu alebo zamerania"
+  },
+  {
+   "ref": "openings[O5] (I7: nejednoznačné hrany)",
+   "text": "I7 slučka hranu neopravila: left -4.0 cm - istá hrana leží vnútri otvoru (+3.9 cm) - rám / krídlo, nie hrana murovaného otvoru (spec číta murovaný otvor)",
+   "proposal": "prijať model; hranu odčítať z ďalšieho záberu alebo zamerania"
+  },
+  {
+   "ref": "openings[O7] (I7: nejednoznačné hrany)",
+   "text": "I7 slučka hranu neopravila: top -3.0 cm - hrana pokračuje mimo otvoru (skok [33.2, 1.4] vs 39) - patrí širšiemu predmetu, hrana otvoru je zakrytá",
+   "proposal": "prijať model; hranu odčítať z ďalšieho záberu alebo zamerania"
+  },
+  {
+   "ref": "openings[O8] (I7: nejednoznačné hrany)",
+   "text": "I7 slučka hranu neopravila: bottom +5.0 cm - hrana splýva s prvkom modelu / je ním zakrytá: O8_sill",
+   "proposal": "prijať model; hranu odčítať z ďalšieho záberu alebo zamerania"
+  },
+  {
+   "ref": "openings[O9] (I7: nejednoznačné hrany)",
+   "text": "I7 slučka hranu neopravila: bottom +5.0 cm - hrana splýva s prvkom modelu / je ním zakrytá: O9_sill",
+   "proposal": "prijať model; hranu odčítať z ďalšieho záberu alebo zamerania"
+  }
+ ],
+ "sources": [
+  {
+   "id": "I7.1",
+   "type": "iteration",
+   "file": "facade/corrections/M016_L2.json",
+   "note": "I7 slučka, iterácia 1: hrana premeraná na rektifikovanej fotke S1 (facade/photo_measure.py)"
+  }
+ ]
+}

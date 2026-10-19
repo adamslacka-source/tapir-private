@@ -1233,6 +1233,21 @@ def draw_readings(X: dict, spec: dict, path: Path, scale: float = 0.25) -> None:
     im.save(path)
 
 
+def apply_corrections(spec: dict) -> None:
+    """I7: corrections of the iteration loop (facade/corrections/HOF_B.json, target 'spec'); the module is loaded by its
+    path (this adapter runs isolated, the facade folder is not on sys.path)."""
+    import importlib.util
+    path = Path(__file__).resolve().parents[1] / "spec_corrections.py"
+    mod_spec = importlib.util.spec_from_file_location("spec_corrections", path)
+    sc = importlib.util.module_from_spec(mod_spec)
+    mod_spec.loader.exec_module(sc)
+    corr = sc.load(sc.path_of(SPEC_ID), SPEC_ID)
+    applied, stale = sc.apply(spec, corr, "spec")
+    sc.finish_spec(spec, corr, applied, stale)
+    if applied or stale:
+        print(f"I7 corrections: {len(applied)} applied, stale {stale}")
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--root", type=Path, default=ROOT)
@@ -1245,6 +1260,7 @@ def main(argv=None) -> int:
         print(json.dumps({k: v for k, v in X["rec"].items() if k not in ("console_pairs", "readings_by_eye")}, indent=1, default=float))
         return 0
     spec = assemble(X)
+    apply_corrections(spec)
     out, work = args.root / "out", args.root / "work"
     out.mkdir(parents=True, exist_ok=True)
     work.mkdir(parents=True, exist_ok=True)

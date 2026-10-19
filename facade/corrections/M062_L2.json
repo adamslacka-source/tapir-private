@@ -1,0 +1,127 @@
+{
+ "schema": "facade-corrections/1",
+ "spec": "M062_L2",
+ "corrections": [
+  {
+   "target": "types",
+   "path": [
+    "openings",
+    "O5",
+    "rect"
+   ],
+   "before": null,
+   "after": {
+    "v": [
+     0.75,
+     2.3001,
+     0.1,
+     0.48
+    ],
+    "src": "I7.1",
+    "conf": "meranie",
+    "note": "I7 iterácia 1: hrana right z fotky 2.266 (skok 39, tretiny [2.2661, 2.2662, 2.2654]); pôvodne [0.75, 2.25, 0.1, 0.48] (S1, meranie)"
+   },
+   "id": "M062_L2.c1",
+   "src": "I7.1",
+   "conf": "meranie",
+   "cause": "spec",
+   "iteration": 1,
+   "status": "active",
+   "reason": "model = spec, hrana right je na fotke o +5.0 cm ďalej (istá: jedna silná hrana, tretiny súhlasia, končí na ostení)",
+   "evidence": {
+    "method": "remeasure_edge",
+    "window_cm": 10.0,
+    "status": "certain",
+    "pos": 2.2662,
+    "step": 38.7,
+    "reason": "jedna silná hrana, tretiny súhlasia, končí na ostení",
+    "candidates": [
+     {
+      "pos": 2.2662,
+      "step": 38.7,
+      "border": false
+     }
+    ],
+    "thirds": [
+     2.2661,
+     2.2662,
+     2.2654
+    ],
+    "continuation": {
+     "beyond": [
+      3.9,
+      0.2
+     ],
+     "ratio": 0.1,
+     "continues": false,
+     "unclear": false
+    }
+   },
+   "crop": "C:\\FacadePilot\\out\\M062_L2\\i7\\M062_L2_O5_right_auto_it1.png",
+   "finding": {
+    "source": "auto",
+    "item": "O5",
+    "edge": "right",
+    "name": "right (automatická kontrola)",
+    "quantity": null,
+    "delta_cm": -5.1,
+    "tol_cm": 3.0
+   },
+   "error_before_cm": 5.01,
+   "error_after_cm": 0.0,
+   "kept": true,
+   "evaluated_in": 2
+  }
+ ],
+ "simplifications": [
+  {
+   "ref": "openings[O1] (I7: nejednoznačné hrany)",
+   "text": "I7 slučka hranu neopravila: left -5.5 cm - dve hrany: 1.456 (skok 30) a 1.409 (skok 18); right +3.9 cm - spoločné ostenie s O2 (dotýkajúce sa otvory) - hrana nie je hrana murovaného otvoru, raster sa kontroluje ako lišta; top -4.7 cm - dve hrany: 2.487 (skok 33) a 2.549 (skok 33); bottom -3.9 cm - istá hrana leží vnútri otvoru (+4.1 cm) - rám / krídlo, nie hrana murovaného otvoru (spec číta murovaný otvor)",
+   "proposal": "prijať model; hranu odčítať z ďalšieho záberu alebo zamerania"
+  },
+  {
+   "ref": "openings[O2] (I7: nejednoznačné hrany)",
+   "text": "I7 slučka hranu neopravila: left +3.9 cm - spoločné ostenie s O1 (dotýkajúce sa otvory) - hrana nie je hrana murovaného otvoru, raster sa kontroluje ako lišta; top -4.7 cm - dve hrany: 2.546 (skok 23) a 2.469 (skok 15)",
+   "proposal": "prijať model; hranu odčítať z ďalšieho záberu alebo zamerania"
+  },
+  {
+   "ref": "openings[O3] (I7: nejednoznačné hrany)",
+   "text": "I7 slučka hranu neopravila: top -4.7 cm - dve hrany: 2.546 (skok 22) a 2.579 (skok 17); bottom -3.1 cm - dve hrany: 0.651 (skok 45) a 0.586 (skok 40)",
+   "proposal": "prijať model; hranu odčítať z ďalšieho záberu alebo zamerania"
+  },
+  {
+   "ref": "openings[O5] (I7: nejednoznačné hrany)",
+   "text": "I7 slučka hranu neopravila: left -6.2 cm - istá hrana leží vnútri otvoru (+6.7 cm) - rám / krídlo, nie hrana murovaného otvoru (spec číta murovaný otvor)",
+   "proposal": "prijať model; hranu odčítať z ďalšieho záberu alebo zamerania"
+  },
+  {
+   "ref": "openings[O6] (I7: nejednoznačné hrany)",
+   "text": "I7 slučka hranu neopravila: left -5.4 cm - istá hrana leží vnútri otvoru (+5.1 cm) - rám / krídlo, nie hrana murovaného otvoru (spec číta murovaný otvor); bottom -5.2 cm - tretiny hrany nesúhlasia (0.152, 0.157, 0.174)",
+   "proposal": "prijať model; hranu odčítať z ďalšieho záberu alebo zamerania"
+  },
+  {
+   "ref": "openings[O8] (I7: nejednoznačné hrany)",
+   "text": "I7 slučka hranu neopravila: bottom -3.5 cm - dve hrany: 4.852 (skok 20) a 4.711 (skok 15)",
+   "proposal": "prijať model; hranu odčítať z ďalšieho záberu alebo zamerania"
+  },
+  {
+   "ref": "openings[O9] (I7: nejednoznačné hrany)",
+   "text": "I7 slučka hranu neopravila: bottom -4.3 cm - dve hrany: 4.859 (skok 30) a 4.708 (skok 18)",
+   "proposal": "prijať model; hranu odčítať z ďalšieho záberu alebo zamerania"
+  }
+ ],
+ "sources": [
+  {
+   "id": "I7.1",
+   "type": "iteration",
+   "file": "facade/corrections/M062_L2.json",
+   "note": "I7 slučka, iterácia 1: hrana premeraná na rektifikovanej fotke S1 (facade/photo_measure.py)"
+  },
+  {
+   "id": "I7.2",
+   "type": "iteration",
+   "file": "facade/corrections/M062_L2.json",
+   "note": "I7 slučka, iterácia 2: hrana premeraná na rektifikovanej fotke S1 (facade/photo_measure.py)"
+  }
+ ]
+}

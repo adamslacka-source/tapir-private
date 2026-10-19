@@ -584,6 +584,14 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
     via_cam = bool(cam and cam.get("s") is not None)
     extra = [("cw", {k: v for k, v in cwr["proj"].items()}, False), ("slab", balr["proj"], via_cam), ("railing", railr["proj"], via_cam)]
     overlay_png, model_png = draw(spec, src, root / rect["image"], proj, ref_walls, rows, trows, units, out_dir, lin["proj"], obj_proj, want, extra)
+    # I7: extent of every element of the reference plane on the photo (photo plane, through the camera) - the iteration
+    # loop needs it to tell an edge hidden by / coinciding with another element from a mis-read one
+    lin_pl = {it["item"]: it.get("plane", REFERENCE_PLANE) for it in want["linear"]}
+    obj_pl = {it["item"]: it.get("plane", REFERENCE_PLANE) for it in want["objects"]}
+    proj_boxes = {"unit": _photo_boxes({k: v for k, v in proj.items() if k in units and units[k]["plane"] == REFERENCE_PLANE}, cam),
+                  "linear": _photo_boxes({k: v for k, v in lin["proj"].items() if lin_pl.get(k, REFERENCE_PLANE) == REFERENCE_PLANE}, cam),
+                  "object": _photo_boxes({k: v for k, v in obj_proj.items() if obj_pl.get(k, REFERENCE_PLANE) == REFERENCE_PLANE}, cam),
+                  "cw": _photo_boxes(cwr["proj"], cam)}
     photo_edges = lin["photo"] + edges
     edges_png = draw_edges(spec, src, root / rect["image"], lin, obj_proj, edges, out_dir) if photo_edges else None
 
@@ -614,7 +622,7 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
         "types": {"rows": len(trows), "ok": sum(r["status"] == "OK" for r in trows),
                   "fail": sum(r["status"] == "FAIL" for r in trows), "exc": sum(r["status"] == "EXC" for r in trows)},
         "problems": problems, "exceptions": exceptions, "spec_warnings": warnings,
-        "opening_w_range_m": w_ranges,
+        "opening_w_range_m": w_ranges, "proj_boxes": proj_boxes,
         "overlay_png": str(overlay_png), "model_png": str(model_png), "edges_png": str(edges_png) if edges_png else None,
         "deviations_csv": str(out_dir / "deviations.csv"), "types_csv": str(out_dir / "types.csv") if trows else None,
         "pass": count_ok and not problems,
@@ -632,6 +640,20 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
             print(f"  EXCEPTION: {e.get('item', e['system'])}.{e['field']}: spec {e['spec']!r} - not realisable ({e['reason'][:80]})")
         print("  overlay:", overlay_png)
     return result
+
+
+def _photo_boxes(bodies_by: dict, cam) -> dict:
+    """item -> [s0', s1', v0', v1', w front] of its 3D bodies projected with the camera of the photo (photo plane, m)."""
+    out = {}
+    for k, bodies in bodies_by.items():
+        pts = [b for b, _ in bodies if len(b)]
+        if not pts:
+            continue
+        allp = np.vstack(pts)
+        pp = to_photo(allp, cam)
+        out[k] = [round(float(pp[:, 0].min()), 4), round(float(pp[:, 0].max()), 4), round(float(pp[:, 1].min()), 4),
+                  round(float(pp[:, 1].max()), 4), round(float(allp[:, 2].max()), 4)]
+    return out
 
 
 def _edge_row(item: str, e: dict, bodies, cam, lum, rect, row, edges: list) -> None:

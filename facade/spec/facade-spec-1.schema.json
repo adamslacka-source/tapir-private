@@ -132,7 +132,8 @@
               "drawing",
               "sketch",
               "archicad",
-              "rule"
+              "rule",
+              "iteration"
             ]
           },
           "file": {

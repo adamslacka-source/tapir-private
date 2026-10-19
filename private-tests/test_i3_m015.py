@@ -229,8 +229,11 @@ def live(spec: dict, port: int, save: bool) -> None:
     det = existing(ac, [g])[g]["details"]
     par = gdl_params(ac, [g])[g]
     check("C4 O2 library part = Double Door with Transom 27", det["libPart"]["name"] == "Double Door with Transom 27", det["libPart"]["name"])
-    check("C4 O2 transom 0.89 m read back (gs_transom_height), transom present (ifc_TransomThickness > 0)",
-          abs(par["gs_transom_height"] - 0.89) < 1e-6 and par["ifc_TransomThickness"] > 0 and par["gs_door_transom"] is True,
+    # 0.89 until I7; since I7 the spec value (top of the gate read on the masonry opening, the transom bar kept in place;
+    # facade/corrections/M015_L1.json) - the check compares with the spec, it is not weaker
+    o2_th = next(o for o in spec["openings"] if o["id"] == "O2")["transom_h"]["v"]
+    check(f"C4 O2 transom {o2_th} m (spec) read back (gs_transom_height), transom present (ifc_TransomThickness > 0)",
+          abs(par["gs_transom_height"] - o2_th) < 1e-6 and par["ifc_TransomThickness"] > 0 and par["gs_door_transom"] is True,
           f"{par['gs_transom_height']}, transom offset {par.get('ifc_TransomOffset')}")
     check("C4 O2 two leaves", par["ifc_optypestr"].startswith("Double Door"), par["ifc_optypestr"])
     trows = list(csv.DictReader(open(ver["types_csv"], encoding="utf-8")))
