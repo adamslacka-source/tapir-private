@@ -174,7 +174,7 @@ def test_t1 () -> None:
     if check ('T1 beam with the profile is created', len (beam_ids) == 1, short (beam)):
         beam_details = tapir ('GetDetailsOfElements', {'elements': beam_ids}).get ('detailsOfElements', [{}])[0]
         check ('T1 beam reports the profile', first['attributeId']['guid'].lower () in json.dumps (beam_details).lower (),
-               short (beam_details.get ('typeSpecificDetails', {}), 200))
+               short (beam_details.get ('details', {}), 200))
 
 
 def test_t4 () -> None:
@@ -235,7 +235,7 @@ def test_t7_t8 () -> None:
     if not check ('T7 door created through libraryPartName', bool (door_ids), str (used_part)):
         return
     details = tapir ('GetDetailsOfElements', {'elements': door_ids}).get ('detailsOfElements', [{}])[0]
-    lib_name = details.get ('typeSpecificDetails', {}).get ('libPart', {}).get ('name', '')
+    lib_name = details.get ('details', {}).get ('libPart', {}).get ('name', '')
     check ('T7 door has the requested library part', used_part in json.dumps (details, ensure_ascii=False), lib_name)
     read_and_set_transom (door_ids, 'T7 libraryPartName door')
 
@@ -254,18 +254,18 @@ def test_t7_t8 () -> None:
     for location in ('Core', 'Side'):
         modified = tapir ('ModifyDoors', {'doorsWithDetails': [{'elementId': door_ids[0]['elementId'], 'revealDepthLocation': location}]})
         ok = modified.get ('executionResults', [{}])[0].get ('success') is True
-        read = tapir ('GetDetailsOfElements', {'elements': door_ids}).get ('detailsOfElements', [{}])[0].get ('typeSpecificDetails', {})
+        read = tapir ('GetDetailsOfElements', {'elements': door_ids}).get ('detailsOfElements', [{}])[0].get ('details', {})
         check (f'T8 ModifyDoors revealDepthLocation={location} read back', ok and read.get ('revealDepthLocation') == location,
                short ({'modify': modified, 'read': read.get ('revealDepthLocation')}))
     window = tapir ('CreateWindows', {'windowsData': [{'ownerWallId': wall_id, 'centerOffset': 9.5, 'sillHeight': 0.9,
                                                        'revealDepthLocation': 'Core', 'revealDepthOffset': 0.05}]})
     window_ids = element_ids (window)
     if check ('T8 window with revealDepthLocation created', bool (window_ids), short (window)):
-        read = tapir ('GetDetailsOfElements', {'elements': window_ids}).get ('detailsOfElements', [{}])[0].get ('typeSpecificDetails', {})
+        read = tapir ('GetDetailsOfElements', {'elements': window_ids}).get ('detailsOfElements', [{}])[0].get ('details', {})
         check ('T8 CreateWindows revealDepthLocation=Core read back', read.get ('revealDepthLocation') == 'Core', short (read.get ('revealDepthLocation')))
         check ('T8 CreateWindows revealDepthOffset=0.05 read back', abs (read.get ('revealDepthOffset', -1) - 0.05) < 1e-6, short (read.get ('revealDepthOffset')))
         modified = tapir ('ModifyWindows', {'windowsWithDetails': [{'elementId': window_ids[0]['elementId'], 'revealDepthLocation': 'Side'}]})
-        read = tapir ('GetDetailsOfElements', {'elements': window_ids}).get ('detailsOfElements', [{}])[0].get ('typeSpecificDetails', {})
+        read = tapir ('GetDetailsOfElements', {'elements': window_ids}).get ('detailsOfElements', [{}])[0].get ('details', {})
         check ('T8 ModifyWindows revealDepthLocation=Side read back', read.get ('revealDepthLocation') == 'Side', short ({'modify': modified, 'read': read.get ('revealDepthLocation')}))
 
 
