@@ -1117,3 +1117,219 @@ GS::ObjectState DeleteFavoritesCommand::Execute (const GS::ObjectState& paramete
 
     return response;
 }
+
+// ============================================================================
+// CreateFavoritesFromDefaults - saves the current tool defaults of an element
+// type as a named Favorite, without a sample element in the project.
+// ============================================================================
+
+CreateFavoritesFromDefaultsCommand::CreateFavoritesFromDefaultsCommand () :
+    CommandBase (CommonSchema::Used)
+{
+}
+
+GS::String CreateFavoritesFromDefaultsCommand::GetName () const
+{
+    return "CreateFavoritesFromDefaults";
+}
+
+GS::Optional<GS::UniString> CreateFavoritesFromDefaultsCommand::GetInputParametersSchema () const
+{
+    return R"({
+        "type": "object",
+        "properties": {
+            "favorites": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "description": "One Favorite to save from the current defaults of a tool.",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Name of the Favorite."
+                        },
+                        "elementType": {
+                            "$ref": "#/ElementType",
+                            "description": "The tool whose current defaults are saved, e.g. Beam, Wall, Door. Set the defaults first, e.g. with ApplyFavoritesToElementDefaults or CreateWindows/CreateDoors with libraryPartName."
+                        },
+                        "folder": {
+                            "type": "array",
+                            "description": "Optional folder hierarchy in the Favorites palette to place the new Favorite under. Empty/omitted = root.",
+                            "items": { "type": "string" }
+                        },
+                        "overwriteExisting": {
+                            "type": "boolean",
+                            "description": "Optional. When a Favorite with this name exists, overwrite it with the defaults instead of returning an error. The default is false."
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "name",
+                        "elementType"
+                    ]
+                }
+            }
+        },
+        "additionalProperties": false,
+        "required": [
+            "favorites"
+        ]
+    })";
+}
+
+GS::Optional<GS::UniString> CreateFavoritesFromDefaultsCommand::GetRawResponseSchema () const
+{
+    return R"({
+        "type": "object",
+        "properties": {
+            "favorites": {
+                "type": "array",
+                "description": "One item per input Favorite, in the same order.",
+                "items": {
+                    "oneOf": [
+                        {
+                            "type": "object",
+                            "properties": {
+                                "name": {
+                                    "type": "string"
+                                },
+                                "result": {
+                                    "type": "string",
+                                    "enum": ["created", "overwritten"]
+                                }
+                            },
+                            "additionalProperties": false,
+                            "required": ["name", "result"]
+                        },
+                        {
+                            "$ref": "#/ErrorItem"
+                        }
+                    ]
+                }
+            }
+        },
+        "additionalProperties": false,
+        "required": [
+            "favorites"
+        ]
+    })";
+}
+
+static bool DoesFavoriteExist (const GS::UniString& name)
+{
+    API_Favorite probe (name);
+    return ACAPI_Favorite_Get (&probe) == NoError;
+}
+
+static GS::ObjectState CreateFavoriteResult (const GS::UniString& name, const char* result)
+{
+    GS::ObjectState os;
+    os.Add ("name", name);
+    os.Add ("result", result);
+    return os;
+}
+
+// The defaults are read with their memo (ACAPI_Element_GetDefaults), so a library part based tool
+// keeps its GDL parameters (memo.params) and a profiled beam or column its profile; a tool whose
+// defaults Archicad does not give with a memo is read again without one. Classifications and
+// properties of the tool defaults are not part of the Favorite.
+GS::ObjectState CreateFavoritesFromDefaultsCommand::Execute (const GS::ObjectState& parameters, GS::ProcessControl& /*processControl*/) const
+{
+    GS::Array<GS::ObjectState> favoriteItems;
+    parameters.Get ("favorites", favoriteItems);
+
+    GS::ObjectState response;
+    const auto& results = response.AddList<GS::ObjectState> ("favorites");
+
+    ACAPI_CallUndoableCommand ("CreateFavoritesFromDefaults", [&]() -> GSErrCode {
+        for (const GS::ObjectState& item : favoriteItems) {
+            GS::UniString name;
+            if (!item.Get ("name", name) || name.IsEmpty ()) {
+                results (CreateErrorResponse (APIERR_BADNAME, "Missing or empty 'name'."));
+                continue;
+            }
+            GS::UniString elementTypeStr;
+            item.Get ("elementType", elementTypeStr);
+            const API_ElemTypeID typeId = GetElementTypeFromNonLocalizedName (elementTypeStr);
+            if (typeId == API_ZombieElemID) {
+                results (CreateErrorResponse (APIERR_BADPARS,
+                    GS::UniString::Printf ("Invalid elementType '%T'.", elementTypeStr.ToPrintf ())));
+                continue;
+            }
+            bool overwriteExisting = false;
+            item.Get ("overwriteExisting", overwriteExisting);
+
+            const bool exists = DoesFavoriteExist (name);
+            if (exists && !overwriteExisting) {
+                results (CreateErrorResponse (APIERR_NAMEALREADYUSED, "A Favorite with this name already exists."));
+                continue;
+            }
+
+            API_Favorite favorite (name);
+            favorite.memo.New ();
+#ifdef ServerMainVers_2600
+            favorite.element.header.type = typeId;
+#else
+            favorite.element.header.typeID = typeId;
+#endif
+            GSErrCode err = ACAPI_Element_GetDefaults (&favorite.element, favorite.memo.GetPtr ());
+            if (err != NoError) {
+                ACAPI_DisposeElemMemoHdls (favorite.memo.GetPtr ());
+                favorite.memo.Clear ();
+                favorite.element = {};
+#ifdef ServerMainVers_2600
+                favorite.element.header.type = typeId;
+#else
+                favorite.element.header.typeID = typeId;
+#endif
+                err = ACAPI_Element_GetDefaults (&favorite.element, nullptr);
+            }
+            const GS::OnExit cleanup ([&]() {
+                if (favorite.memo.HasValue ()) {
+                    ACAPI_DisposeElemMemoHdls (favorite.memo.GetPtr ());
+                }
+            });
+            if (err != NoError) {
+                results (CreateErrorResponse (err, "Failed to read the defaults of the tool."));
+                continue;
+            }
+
+            GS::Array<GS::UniString> folderParts;
+            if (item.Get ("folder", folderParts) && !folderParts.IsEmpty ()) {
+                favorite.folder.New ();
+                for (const GS::UniString& part : folderParts) {
+                    favorite.folder->Push (part);
+                }
+            }
+
+            if (exists) {
+                // Change keeps the place of the Favorite in the palette. It refuses a Favorite of
+                // another element type, which is then replaced by a new one.
+                err = ACAPI_Favorite_Change (favorite);
+                if (err != NoError) {
+                    err = ACAPI_Favorite_Delete (name);
+                    if (err == NoError) {
+                        err = ACAPI_Favorite_Create (favorite);
+                    }
+                }
+                if (err != NoError) {
+                    results (CreateErrorResponse (err, "Failed to overwrite the Favorite."));
+                    continue;
+                }
+                results (CreateFavoriteResult (name, "overwritten"));
+                continue;
+            }
+
+            err = ACAPI_Favorite_Create (favorite);
+            if (err != NoError) {
+                results (CreateErrorResponse (err, "Failed to create the Favorite."));
+                continue;
+            }
+            results (CreateFavoriteResult (name, "created"));
+        }
+
+        return NoError;
+    });
+
+    return response;
+}

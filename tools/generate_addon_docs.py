@@ -80,6 +80,9 @@ def EvaluateCondition (condition, acVersion):
         m = re.fullmatch (r'ServerMainVers_(\d\d)(\d\d)', name)
         if m:
             return 'True' if int (m.group (1)) <= acVersion else 'False'
+        if name == 'TAPIR_PRIVATE_BUILD':
+            # Private fork: archicad-addon/CMakeLists.txt defines it (option ON by default).
+            return 'True'
         raise GeneratorError ('Unknown macro in preprocessor condition: ' + condition)
 
     expr = re.sub (r'defined\s*\(?\s*(\w+)\s*\)?', Defined, expr)

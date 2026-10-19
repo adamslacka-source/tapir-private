@@ -7346,6 +7346,19 @@
             },
             "oSide": {
                 "type": "boolean"
+            },
+            "reveal": {
+                "type": "boolean",
+                "description": "The reveal is on."
+            },
+            "revealDepthOffset": {
+                "type": "number",
+                "description": "Inset of the frame from the line given by revealDepthLocation."
+            },
+            "revealDepthLocation": {
+                "type": "string",
+                "enum": ["Side", "Core"],
+                "description": "Where revealDepthOffset is measured from: Side = the clicked side of the wall, Core = the core skin of a composite wall on that side."
             }
         },
         "additionalProperties": false,

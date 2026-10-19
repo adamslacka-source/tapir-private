@@ -3308,6 +3308,14 @@ bool ApplyWindowOrDoorDetails (API_Element& element, API_Element& mask, const GS
         ACAPI_ELEMENT_MASK_SET (mask, API_WindowType, revealDepthOffset);
         changed = true;
     }
+    // Side: the reveal depth is measured from the clicked side of the wall; Core: from the core skin
+    // of a composite wall (API_WindowType::revealDepthLocation).
+    GS::UniString revealDepthLocation;
+    if (details.Get ("revealDepthLocation", revealDepthLocation) && (revealDepthLocation == "Side" || revealDepthLocation == "Core")) {
+        element.window.revealDepthLocation = (revealDepthLocation == "Core") ? APIWDRevealDepth_Core : APIWDRevealDepth_Side;
+        ACAPI_ELEMENT_MASK_SET (mask, API_WindowType, revealDepthLocation);
+        changed = true;
+    }
     return changed;
 }
 
@@ -4145,6 +4153,8 @@ GS::Optional<GS::UniString> CreateWindowsCommand::GetInputParametersSchema () co
                         "reflected": { "type": "boolean" },
                         "refSide": { "type": "boolean" },
                         "oSide": { "type": "boolean" },
+                        "revealDepthOffset": { "type": "number", "description": "Optional. Inset of the frame from the line given by revealDepthLocation." },
+                        "revealDepthLocation": { "type": "string", "enum": ["Side", "Core"], "description": "Optional. Where revealDepthOffset is measured from: Side = the clicked side of the wall, Core = the core skin of a composite wall on that side." },
                         "libraryPartName": {
                             "type": "string",
                             "description": "Optional. Localized library part name (docu_UName) to place instead of the tool default/favorite, e.g. a shutter part that has no favorite. It has to be a window library part. Applied to the tool defaults before cloning."
@@ -4178,6 +4188,71 @@ GS::Optional<GS::UniString> CreateWindowsCommand::GetRawResponseSchema () const
     })";
 }
 
+// Reveal depth of a window/door: revealDepthLocation (Side = from the clicked side of the wall,
+// Core = from the core skin of a composite wall on that side, API_WindowType::revealDepthLocation)
+// and revealDepthOffset (the inset from that line). Shared by CreateWindows/CreateDoors; the
+// Modify commands set the same fields through ApplyWindowOrDoorDetails, with a mask.
+static bool GetRevealDepthLocation (const GS::ObjectState& data, API_WindowDoorRevealDepthLocationID& location)
+{
+    GS::UniString locationStr;
+    if (!data.Get ("revealDepthLocation", locationStr)) {
+        return false;
+    }
+    if (locationStr == "Core") {
+        location = APIWDRevealDepth_Core;
+        return true;
+    }
+    if (locationStr == "Side") {
+        location = APIWDRevealDepth_Side;
+        return true;
+    }
+    return false;
+}
+
+static void ApplyRevealDepthToOpening (const GS::ObjectState& data, API_Element& element)
+{
+    API_WindowDoorRevealDepthLocationID location = APIWDRevealDepth_Side;
+    if (GetRevealDepthLocation (data, location)) {
+        element.window.revealDepthLocation = location;
+    }
+    auto revealDepthOffset = GetOptionalDouble (data, "revealDepthOffset");
+    if (revealDepthOffset.HasValue ()) {
+        element.window.revealDepthOffset = revealDepthOffset.Get ();
+    }
+}
+
+// The actual parameter list of a library part, as Archicad's own settings dialog builds it when the
+// part is picked: ACAPI_LibraryPart_OpenParameters on the part + GetActParameters (the DevKit's
+// LibPart_Test places windows and objects this way). ACAPI_LibraryPart_GetParams only returns the
+// values stored in the part file; an opening created with that list could be placed but its
+// parameters could not be opened again (APIERR_GENERAL in Get/SetGDLParametersOfElements, see
+// ApplyLibPartParamsToOpening). GetParams stays as the fallback when the part cannot be opened.
+// On success the caller owns outParams.
+static GSErrCode GetActualLibPartParams (Int32 libInd, double& outA, double& outB, API_AddParType**& outParams)
+{
+    outParams = nullptr;
+    API_ParamOwnerType paramOwner = {};
+    paramOwner.libInd = libInd;
+    GSErrCode err = ACAPI_LibraryPart_OpenParameters (&paramOwner);
+    if (err == NoError) {
+        API_GetParamsType getParams = {};
+        err = ACAPI_LibraryPart_GetActParameters (&getParams);
+        ACAPI_LibraryPart_CloseParameters ();
+        if (err == NoError && getParams.params != nullptr) {
+            outA = getParams.a;
+            outB = getParams.b;
+            outParams = getParams.params;
+            return NoError;
+        }
+        if (getParams.params != nullptr) {
+            ACAPI_DisposeAddParHdl (&getParams.params);
+        }
+    }
+
+    Int32 addParNum = 0;
+    return ACAPI_LibraryPart_GetParams (libInd, &outA, &outB, &addParNum, &outParams);
+}
+
 // Applies a library part, given by its localized name (docu_UName), to the Door/Window tool
 // defaults BEFORE PrepareWindowOrDoorDefaults, so the cloned defaults and marker are consistent
 // (same reason as for ApplyWindowOrDoorFavoriteToDefaults). Without libraryPartName the tool
@@ -4187,8 +4262,11 @@ GS::Optional<GS::UniString> CreateWindowsCommand::GetRawResponseSchema () const
 // APILib_ObjectID for windows and doors). Given to the search together with the name, the
 // window (or door) typeID limits it to that subtype, so a part of another type (an object, a
 // lamp, a door for CreateWindows) is not found and the tool defaults are left unchanged.
-static GSErrCode ApplyWindowOrDoorLibraryPartToDefaults (const GS::ObjectState& data, API_ElemTypeID typeId)
+// outLibInd receives the index of the part found (0 when libraryPartName was not given), so the
+// caller can put the part's own parameters on the element it creates (ApplyLibPartParamsToOpening).
+static GSErrCode ApplyWindowOrDoorLibraryPartToDefaults (const GS::ObjectState& data, API_ElemTypeID typeId, Int32& outLibInd)
 {
+    outLibInd = 0;
     GS::UniString libName;
     if (!data.Get ("libraryPartName", libName) || libName.IsEmpty ()) {
         return NoError;
@@ -4216,9 +4294,8 @@ static GSErrCode ApplyWindowOrDoorLibraryPartToDefaults (const GS::ObjectState& 
     const GS::OnExit cleanup ([&]() { ACAPI_DisposeElemMemoHdls (&memo); });
 
     double a = 0.0, b = 0.0;
-    Int32 addParNum = 0;
     API_AddParType** addPars = nullptr;
-    err = ACAPI_LibraryPart_GetParams (libPart.index, &a, &b, &addParNum, &addPars);
+    err = GetActualLibPartParams (libPart.index, a, b, addPars);
     if (err != NoError) {
         return err;
     }
@@ -4231,7 +4308,91 @@ static GSErrCode ApplyWindowOrDoorLibraryPartToDefaults (const GS::ObjectState& 
     API_Element mask;
     ACAPI_ELEMENT_MASK_CLEAR (mask);
     ACAPI_ELEMENT_MASK_SET (mask, API_WindowType, openingBase.libInd);
-    return ACAPI_Element_ChangeDefaults (&element, &memo, &mask);
+    err = ACAPI_Element_ChangeDefaults (&element, &memo, &mask);
+    if (err == NoError) {
+        outLibInd = libPart.index;
+    }
+    return err;
+}
+
+// Puts the library part's own actual parameters on the element about to be created, after
+// PrepareWindowOrDoorDefaults cloned the tool defaults (T7 of ADR-001). The element used to get the
+// new libInd from the defaults, but a parameter list that Archicad itself would not build for that
+// part: ACAPI_LibraryPart_GetParams values, put into the defaults by ACAPI_Element_ChangeDefaults
+// with only openingBase.libInd in its mask. Such an opening was placed and drawn, but
+// ACAPI_LibraryPart_OpenParameters refused it with APIERR_GENERAL, so Get/SetGDLParametersOfElements
+// failed on it, and a Favorite made from it inherited the same list. Setting the list built by
+// GetActualLibPartParams directly on the element no longer depends on what the tool defaults kept.
+// The size of the part (A/B) is taken over too, so the opening size and the A/B parameters agree;
+// width/height given by the caller still override it afterwards.
+static GSErrCode ApplyLibPartParamsToOpening (Int32 libInd, API_Element& element, API_ElementMemo& memo)
+{
+    if (libInd <= 0) {
+        return NoError;
+    }
+    double a = 0.0, b = 0.0;
+    API_AddParType** addPars = nullptr;
+    GSErrCode err = GetActualLibPartParams (libInd, a, b, addPars);
+    if (err != NoError) {
+        return err;
+    }
+    if (memo.params != nullptr) {
+        ACAPI_DisposeAddParHdl (&memo.params);
+    }
+    memo.params = addPars;
+    element.window.openingBase.libInd = libInd;
+    if (a > 0.0) {
+        element.window.openingBase.width = a;
+    }
+    if (b > 0.0) {
+        element.window.openingBase.height = b;
+    }
+    return NoError;
+}
+
+// Safety net after the create: when the created opening still cannot open its parameters (the
+// T7 symptom), its parameter list is rebuilt from the library part through the documented edit
+// path (OpenParameters on the part + GetActParameters + ACAPI_Element_Change with
+// APIMemoMask_AddPars). Errors are not reported - the element exists either way.
+static void FixLibPartParamsOfCreatedOpening (const API_Guid& elemGuid, API_ElemTypeID typeId, Int32 libInd)
+{
+    if (libInd <= 0) {
+        return;
+    }
+    API_ParamOwnerType paramOwner = {};
+    paramOwner.libInd = -1;
+    paramOwner.guid = elemGuid;
+#ifdef ServerMainVers_2600
+    paramOwner.type = typeId;
+#else
+    paramOwner.typeID = typeId;
+#endif
+    if (ACAPI_LibraryPart_OpenParameters (&paramOwner) == NoError) {
+        API_GetParamsType getParams = {};
+        const GSErrCode err = ACAPI_LibraryPart_GetActParameters (&getParams);
+        ACAPI_LibraryPart_CloseParameters ();
+        if (getParams.params != nullptr) {
+            ACAPI_DisposeAddParHdl (&getParams.params);
+        }
+        if (err == NoError) {
+            return;
+        }
+    }
+
+    API_Element element = {};
+    element.header.guid = elemGuid;
+    if (ACAPI_Element_Get (&element) != NoError) {
+        return;
+    }
+    double a = 0.0, b = 0.0;
+    API_ElementMemo memo = {};
+    const GS::OnExit cleanup ([&]() { ACAPI_DisposeElemMemoHdls (&memo); });
+    if (GetActualLibPartParams (libInd, a, b, memo.params) != NoError) {
+        return;
+    }
+    API_Element mask;
+    ACAPI_ELEMENT_MASK_CLEAR (mask);
+    ACAPI_Element_Change (&element, &mask, &memo, APIMemoMask_AddPars, true);
 }
 
 GS::ObjectState CreateWindowsCommand::Execute (const GS::ObjectState& parameters, GS::ProcessControl&) const
@@ -4289,9 +4450,10 @@ GS::ObjectState CreateWindowsCommand::Execute (const GS::ObjectState& parameters
             // PrepareWindowOrDoorDefaults first and applying the favorite
             // after leaves the marker pointing at the previous libpart,
             // causing CreateExt to fail with -2130313110.
+            Int32 libraryPartIndex = 0;
             GSErrCode err = ApplyWindowOrDoorFavoriteToDefaults (data, API_WindowID);
             if (err == NoError) {
-                err = ApplyWindowOrDoorLibraryPartToDefaults (data, API_WindowID);
+                err = ApplyWindowOrDoorLibraryPartToDefaults (data, API_WindowID, libraryPartIndex);
                 if (err != NoError) {
                     elements.Push (CreateErrorResponse (err, "Failed to resolve `libraryPartName`: no window library part with that name."));
                     continue;
@@ -4305,6 +4467,11 @@ GS::ObjectState CreateWindowsCommand::Execute (const GS::ObjectState& parameters
             err = PrepareWindowOrDoorDefaults (API_WindowID, element, memo, marker);
             if (err != NoError) {
                 elements.Push (CreateErrorResponse (err, "Failed to prepare window defaults."));
+                continue;
+            }
+            err = ApplyLibPartParamsToOpening (libraryPartIndex, element, memo);
+            if (err != NoError) {
+                elements.Push (CreateErrorResponse (err, "Failed to read the parameters of the `libraryPartName` library part."));
                 continue;
             }
 
@@ -4336,6 +4503,7 @@ GS::ObjectState CreateWindowsCommand::Execute (const GS::ObjectState& parameters
             if (data.Get ("oSide", oSide)) {
                 element.window.openingBase.oSide = oSide;
             }
+            ApplyRevealDepthToOpening (data, element);
 
             err = ACAPI_Element_CreateExt (&element, &memo, 1UL, &marker);
             if (err != NoError) {
@@ -4349,6 +4517,7 @@ GS::ObjectState CreateWindowsCommand::Execute (const GS::ObjectState& parameters
                 elements.Push (CreateErrorResponse (err, errorMessage));
                 continue;
             }
+            FixLibPartParamsOfCreatedOpening (element.header.guid, API_WindowID, libraryPartIndex);
             elements.Push (CreateElementIdObjectState (element.header.guid));
         }
     });
@@ -4382,6 +4551,8 @@ GS::Optional<GS::UniString> CreateDoorsCommand::GetInputParametersSchema () cons
                         "reflected": { "type": "boolean" },
                         "refSide": { "type": "boolean" },
                         "oSide": { "type": "boolean" },
+                        "revealDepthOffset": { "type": "number", "description": "Optional. Inset of the frame from the line given by revealDepthLocation." },
+                        "revealDepthLocation": { "type": "string", "enum": ["Side", "Core"], "description": "Optional. Where revealDepthOffset is measured from: Side = the clicked side of the wall, Core = the core skin of a composite wall on that side." },
                         "libraryPartName": {
                             "type": "string",
                             "description": "Optional. Localized library part name (docu_UName) to place instead of the tool default/favorite, e.g. a shutter part that has no favorite. It has to be a door library part. Applied to the tool defaults before cloning."
@@ -4470,9 +4641,10 @@ GS::ObjectState CreateDoorsCommand::Execute (const GS::ObjectState& parameters, 
             // PrepareWindowOrDoorDefaults first and applying the favorite
             // after leaves the marker pointing at the previous libpart,
             // causing CreateExt to fail with -2130313110.
+            Int32 libraryPartIndex = 0;
             GSErrCode err = ApplyWindowOrDoorFavoriteToDefaults (data, API_DoorID);
             if (err == NoError) {
-                err = ApplyWindowOrDoorLibraryPartToDefaults (data, API_DoorID);
+                err = ApplyWindowOrDoorLibraryPartToDefaults (data, API_DoorID, libraryPartIndex);
                 if (err != NoError) {
                     elements.Push (CreateErrorResponse (err, "Failed to resolve `libraryPartName`: no door library part with that name."));
                     continue;
@@ -4486,6 +4658,11 @@ GS::ObjectState CreateDoorsCommand::Execute (const GS::ObjectState& parameters, 
             err = PrepareWindowOrDoorDefaults (API_DoorID, element, memo, marker);
             if (err != NoError) {
                 elements.Push (CreateErrorResponse (err, "Failed to prepare door defaults."));
+                continue;
+            }
+            err = ApplyLibPartParamsToOpening (libraryPartIndex, element, memo);
+            if (err != NoError) {
+                elements.Push (CreateErrorResponse (err, "Failed to read the parameters of the `libraryPartName` library part."));
                 continue;
             }
 
@@ -4517,6 +4694,7 @@ GS::ObjectState CreateDoorsCommand::Execute (const GS::ObjectState& parameters, 
             if (data.Get ("oSide", oSide)) {
                 element.window.openingBase.oSide = oSide;
             }
+            ApplyRevealDepthToOpening (data, element);
 
             err = ACAPI_Element_CreateExt (&element, &memo, 1UL, &marker);
             if (err != NoError) {
@@ -4528,6 +4706,7 @@ GS::ObjectState CreateDoorsCommand::Execute (const GS::ObjectState& parameters, 
                 elements.Push (CreateErrorResponse (err, errorMessage));
                 continue;
             }
+            FixLibPartParamsOfCreatedOpening (element.header.guid, API_DoorID, libraryPartIndex);
             elements.Push (CreateElementIdObjectState (element.header.guid));
         }
     });
@@ -6568,7 +6747,8 @@ GS::Optional<GS::UniString> ModifyWindowsCommand::GetInputParametersSchema () co
                         "refSide": { "type": "boolean" },
                         "oSide": { "type": "boolean" },
                         "reveal": { "type": "boolean", "description": "Turn the reveal on or off." },
-                        "revealDepthOffset": { "type": "number", "description": "Distance the frame plane is moved across the wall thickness, along the wall normal." }
+                        "revealDepthOffset": { "type": "number", "description": "Distance the frame plane is moved across the wall thickness, along the wall normal." },
+                        "revealDepthLocation": { "type": "string", "enum": ["Side", "Core"], "description": "Where revealDepthOffset is measured from: Side = the clicked side of the wall, Core = the core skin of a composite wall on that side." }
                     },
                     "additionalProperties": false,
                     "required": ["elementId"]
@@ -6650,7 +6830,8 @@ GS::Optional<GS::UniString> ModifyDoorsCommand::GetInputParametersSchema () cons
                         "refSide": { "type": "boolean" },
                         "oSide": { "type": "boolean" },
                         "reveal": { "type": "boolean", "description": "Turn the reveal on or off." },
-                        "revealDepthOffset": { "type": "number", "description": "Distance the frame plane is moved across the wall thickness, along the wall normal." }
+                        "revealDepthOffset": { "type": "number", "description": "Distance the frame plane is moved across the wall thickness, along the wall normal." },
+                        "revealDepthLocation": { "type": "string", "enum": ["Side", "Core"], "description": "Where revealDepthOffset is measured from: Side = the clicked side of the wall, Core = the core skin of a composite wall on that side." }
                     },
                     "additionalProperties": false,
                     "required": ["elementId"]

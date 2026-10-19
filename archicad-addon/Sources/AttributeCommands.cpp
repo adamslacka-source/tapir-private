@@ -1567,7 +1567,9 @@ static void BuildHatchPolygonGeometry (const GS::Array<GS::ObjectState>& contour
 // topologically-correct vector size but simply never let edgeOverrides write to these two
 // structurally-inert bridge slots - not a silent-data-loss workaround, since nothing user-visible is
 // ever lost by skipping them.
-static bool BuildHatchFromSkinDefinition (const GS::ObjectState& skinDef, HatchObject& outHatch)
+// edgeTemplate (optional) is the starting value of every edge of the new skin, e.g. the edge surface
+// CreateProfilesFromPolygons gives all edges; edgeOverrides are applied on top of it.
+static bool BuildHatchFromSkinDefinition (const GS::ObjectState& skinDef, HatchObject& outHatch, const ProfileEdgeData* edgeTemplate = nullptr)
 {
     GS::Array<GS::ObjectState> contours;
     if (!skinDef.Get ("contours", contours) || contours.IsEmpty ()) {
@@ -1659,7 +1661,7 @@ static bool BuildHatchFromSkinDefinition (const GS::ObjectState& skinDef, HatchO
     // One edge slot per coords entry (see investigation note above) - matches what real
     // Archicad-authored profiles report via GetProfiles.
     USize edgeCount = coords.GetSize ();
-    std::vector<ProfileEdgeData> edges (edgeCount);
+    std::vector<ProfileEdgeData> edges (edgeCount, edgeTemplate != nullptr ? *edgeTemplate : ProfileEdgeData ());
     for (ProfileEdgeData& edge : edges) {
         edge.SetVisibleLine (true);
     }
@@ -5047,6 +5049,392 @@ GS::ObjectState CreateProfilesCommand::Execute (const GS::ObjectState& parameter
             ACAPI_DisposeAttrDefsHdlsExt (&sourceDefs);
         }
     }
+
+    return response;
+}
+
+CreateProfilesFromPolygonsCommand::CreateProfilesFromPolygonsCommand () :
+    CommandBase (CommonSchema::Used)
+{
+}
+
+GS::String CreateProfilesFromPolygonsCommand::GetName () const
+{
+    return "CreateProfilesFromPolygons";
+}
+
+GS::Optional<GS::UniString> CreateProfilesFromPolygonsCommand::GetInputParametersSchema () const
+{
+    return R"({
+        "type": "object",
+        "properties": {
+            "profiles": {
+                "type": "array",
+                "description": "The Profiles to create (or overwrite). Available from Archicad 27.",
+                "items": {
+                    "type": "object",
+                    "description": "One Profile (complex profile) built from cross-section polygons. Coordinates are in meters in the Profile's own plane: for a wall profile x runs across the wall (positive = outwards from the reference line) and y up; for a beam or column the Profile Editor's own axes.",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Name of the Profile."
+                        },
+                        "polygons": {
+                            "type": "array",
+                            "description": "Cross-section parts. Each polygon becomes one skin of the Profile, with its own building material.",
+                            "minItems": 1,
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "outer": {
+                                        "$ref": "#/ProfileSkinContour",
+                                        "description": "Outer boundary. Closed automatically - do not repeat the first vertex. Arcs are optional."
+                                    },
+                                    "holes": {
+                                        "type": "array",
+                                        "description": "Optional holes cut out of the outer boundary.",
+                                        "items": {
+                                            "$ref": "#/ProfileSkinContour"
+                                        }
+                                    },
+                                    "buildingMaterialId": {
+                                        "$ref": "#/AttributeIdArrayItem",
+                                        "description": "Building material of this skin. Overrides the Profile's buildingMaterialId/buildingMaterialName."
+                                    },
+                                    "buildingMaterialName": {
+                                        "type": "string",
+                                        "description": "Building material of this skin, by name. Overrides the Profile's buildingMaterialId/buildingMaterialName."
+                                    },
+                                    "edgeSurfaceId": {
+                                        "$ref": "#/AttributeIdArrayItem",
+                                        "description": "Surface of every edge of this skin. Without it (and without edgeSurfaceName) the edges take the surface of the building material."
+                                    },
+                                    "edgeSurfaceName": {
+                                        "type": "string",
+                                        "description": "Surface of every edge of this skin, by name."
+                                    },
+                                    "isCore": {
+                                        "type": "boolean",
+                                        "description": "The skin is a core skin. The default is true."
+                                    },
+                                    "contourPen": {
+                                        "type": "integer",
+                                        "description": "Pen of the skin contour. The default is 1."
+                                    }
+                                },
+                                "additionalProperties": false,
+                                "required": ["outer"]
+                            }
+                        },
+                        "buildingMaterialId": {
+                            "$ref": "#/AttributeIdArrayItem",
+                            "description": "Building material of every polygon that has none of its own."
+                        },
+                        "buildingMaterialName": {
+                            "type": "string",
+                            "description": "Building material of every polygon that has none of its own, by name."
+                        },
+                        "edgeSurfaceId": {
+                            "$ref": "#/AttributeIdArrayItem",
+                            "description": "Surface of the edges of every polygon that has none of its own."
+                        },
+                        "edgeSurfaceName": {
+                            "type": "string",
+                            "description": "Surface of the edges of every polygon that has none of its own, by name."
+                        },
+                        "useWith": {
+                            "type": "object",
+                            "description": "Which tools can use the Profile. Omitted flags: wall, beam and column true, handrail and otherGDLObject false.",
+                            "properties": {
+                                "wall": { "type": "boolean" },
+                                "beam": { "type": "boolean" },
+                                "column": { "type": "boolean" },
+                                "handrail": { "type": "boolean" },
+                                "otherGDLObject": { "type": "boolean" }
+                            },
+                            "additionalProperties": false
+                        },
+                        "overwriteExisting": {
+                            "type": "boolean",
+                            "description": "When a Profile with this name exists, replace its geometry and flags (it keeps its index and guid) instead of returning an error. The default is false."
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": ["name", "polygons"]
+                }
+            }
+        },
+        "additionalProperties": false,
+        "required": ["profiles"]
+    })";
+}
+
+GS::Optional<GS::UniString> CreateProfilesFromPolygonsCommand::GetRawResponseSchema () const
+{
+    return R"({
+        "type": "object",
+        "properties": {
+            "attributes": {
+                "type": "array",
+                "description": "One item per input Profile, in the same order.",
+                "items": {
+                    "oneOf": [
+                        {
+                            "type": "object",
+                            "properties": {
+                                "attributeId": {
+                                    "$ref": "#/AttributeId"
+                                },
+                                "index": {
+                                    "type": "integer"
+                                },
+                                "name": {
+                                    "type": "string"
+                                },
+                                "created": {
+                                    "type": "boolean",
+                                    "description": "true for a new Profile, false for an overwritten one."
+                                }
+                            },
+                            "additionalProperties": false,
+                            "required": ["attributeId", "index", "name", "created"]
+                        },
+                        {
+                            "$ref": "#/ErrorItem"
+                        }
+                    ]
+                }
+            }
+        },
+        "additionalProperties": false,
+        "required": ["attributes"]
+    })";
+}
+
+#ifdef ServerMainVers_2700
+// Resolves an attribute given either by id ({"attributeId": {"guid"}} under idField) or by name
+// (nameField). Returns false with an error message when one was given but not found; leaves
+// `found` false when neither was given.
+static bool ResolveAttributeByIdOrName (const GS::ObjectState& os, const char* idField, const char* nameField, API_AttrTypeID typeId,
+                                        API_AttributeIndex& index, bool& found, GS::UniString& errorMessage)
+{
+    found = false;
+    GS::ObjectState attributeId;
+    if (os.Get (idField, attributeId)) {
+        if (!GetAttributeIndexFromAttributeId (attributeId, typeId, index)) {
+            errorMessage = GS::UniString::Printf ("The attribute given in '%s' does not exist.", idField);
+            return false;
+        }
+        found = true;
+        return true;
+    }
+    GS::UniString name;
+    if (os.Get (nameField, name)) {
+        API_Attribute attribute = {};
+        attribute.header.typeID = typeId;
+        attribute.header.uniStringNamePtr = &name;
+        if (ACAPI_Attribute_Get (&attribute) != NoError) {
+            errorMessage = GS::UniString::Printf ("No attribute named '%T' (%s).", name.ToPrintf (), nameField);
+            return false;
+        }
+        index = attribute.header.index;
+        found = true;
+    }
+    return true;
+}
+
+// Turns one polygon of CreateProfilesFromPolygons into the skin definition BuildHatchFromSkinDefinition
+// takes (the newSkins item format of CreateProfiles), so both commands build skins the same way.
+static GS::ObjectState PolygonToSkinDefinition (const GS::ObjectState& polygon, const GS::Optional<API_AttributeIndex>& buildingMaterial)
+{
+    GS::ObjectState skinDef;
+    const auto& contours = skinDef.AddList<GS::ObjectState> ("contours");
+    GS::ObjectState outer;
+    if (polygon.Get ("outer", outer)) {
+        contours (outer);
+    }
+    GS::Array<GS::ObjectState> holes;
+    if (polygon.Get ("holes", holes)) {
+        for (const GS::ObjectState& hole : holes) {
+            contours (hole);
+        }
+    }
+    if (buildingMaterial.HasValue ()) {
+        API_Attribute attribute = {};
+        attribute.header.typeID = API_BuildingMaterialID;
+        attribute.header.index = buildingMaterial.Get ();
+        if (ACAPI_Attribute_Get (&attribute) == NoError) {
+            skinDef.Add ("buildingMaterialId", CreateAttributeIdObjectState (attribute.header.guid));
+        }
+    }
+    bool isCore = true;
+    polygon.Get ("isCore", isCore);
+    skinDef.Add ("isCore", isCore);
+    skinDef.Add ("isFinish", !isCore);
+    Int32 contourPen = 1;
+    polygon.Get ("contourPen", contourPen);
+    skinDef.Add ("contourPen", contourPen);
+    return skinDef;
+}
+#endif
+
+// Builds a Profile attribute (complex profile) from cross-section polygons: one skin (hatch with a
+// ProfileItem) per polygon, through the same BuildHatchFromSkinDefinition as CreateProfiles'
+// newSkins, so no existing Profile has to be copied. Edges take the building material's surface
+// unless an edge surface is given. With overwriteExisting an existing Profile of the same name
+// keeps its index/guid and gets the new geometry (its profile modifiers are dropped, they belong
+// to the old geometry - see the replaceSkins note in CreateProfilesCommand::Execute).
+GS::ObjectState CreateProfilesFromPolygonsCommand::Execute (const GS::ObjectState& parameters, GS::ProcessControl& /*processControl*/) const
+{
+    GS::Array<GS::ObjectState> profileItems;
+    parameters.Get ("profiles", profileItems);
+
+    GS::ObjectState response;
+    const auto& results = response.AddList<GS::ObjectState> ("attributes");
+
+#ifndef ServerMainVers_2700
+    for (UIndex ii = 0; ii < profileItems.GetSize (); ++ii) {
+        results (CreateErrorResponse (APIERR_BADPARS, "CreateProfilesFromPolygons requires Archicad 27 or later."));
+    }
+#else
+    ACAPI_CallUndoableCommand ("CreateProfilesFromPolygons", [&]() -> GSErrCode {
+        for (const GS::ObjectState& profileItem : profileItems) {
+            GS::UniString name;
+            if (!profileItem.Get ("name", name) || name.IsEmpty ()) {
+                results (CreateErrorResponse (APIERR_BADNAME, "Missing or empty 'name'."));
+                continue;
+            }
+            GS::Array<GS::ObjectState> polygons;
+            profileItem.Get ("polygons", polygons);
+            if (polygons.IsEmpty ()) {
+                results (CreateErrorResponse (APIERR_BADPARS, "'polygons' is empty."));
+                continue;
+            }
+            bool overwriteExisting = false;
+            profileItem.Get ("overwriteExisting", overwriteExisting);
+
+            API_Attribute profile = {};
+            profile.header.typeID = API_ProfileID;
+            GS::UniString lookupName = name;
+            profile.header.uniStringNamePtr = &lookupName;
+            const bool exists = (ACAPI_Attribute_Get (&profile) == NoError);
+            if (exists && !overwriteExisting) {
+                results (CreateErrorResponse (APIERR_ATTREXIST, "A Profile with this name already exists."));
+                continue;
+            }
+            if (!exists) {
+                profile = {};
+                profile.header.typeID = API_ProfileID;
+            }
+            profile.header.uniStringNamePtr = &name;
+
+            GS::UniString errorMessage;
+            API_AttributeIndex defaultBuildingMaterial;
+            bool hasDefaultBuildingMaterial = false;
+            if (!ResolveAttributeByIdOrName (profileItem, "buildingMaterialId", "buildingMaterialName", API_BuildingMaterialID,
+                                             defaultBuildingMaterial, hasDefaultBuildingMaterial, errorMessage)) {
+                results (CreateErrorResponse (APIERR_BADID, errorMessage));
+                continue;
+            }
+            API_AttributeIndex defaultEdgeSurface;
+            bool hasDefaultEdgeSurface = false;
+            if (!ResolveAttributeByIdOrName (profileItem, "edgeSurfaceId", "edgeSurfaceName", API_MaterialID,
+                                             defaultEdgeSurface, hasDefaultEdgeSurface, errorMessage)) {
+                results (CreateErrorResponse (APIERR_BADID, errorMessage));
+                continue;
+            }
+
+            ProfileVectorImage image;
+            GS::HashTable<PVI::ProfileParameterId, GS::UniString> emptyParameterNames;
+            bool polygonsOk = true;
+            for (UIndex ii = 0; ii < polygons.GetSize () && polygonsOk; ++ii) {
+                const GS::ObjectState& polygon = polygons[ii];
+
+                API_AttributeIndex buildingMaterial;
+                bool hasBuildingMaterial = false;
+                if (!ResolveAttributeByIdOrName (polygon, "buildingMaterialId", "buildingMaterialName", API_BuildingMaterialID,
+                                                 buildingMaterial, hasBuildingMaterial, errorMessage)) {
+                    polygonsOk = false;
+                    break;
+                }
+                if (!hasBuildingMaterial && hasDefaultBuildingMaterial) {
+                    buildingMaterial = defaultBuildingMaterial;
+                    hasBuildingMaterial = true;
+                }
+                API_AttributeIndex edgeSurface;
+                bool hasEdgeSurface = false;
+                if (!ResolveAttributeByIdOrName (polygon, "edgeSurfaceId", "edgeSurfaceName", API_MaterialID,
+                                                 edgeSurface, hasEdgeSurface, errorMessage)) {
+                    polygonsOk = false;
+                    break;
+                }
+                if (!hasEdgeSurface && hasDefaultEdgeSurface) {
+                    edgeSurface = defaultEdgeSurface;
+                    hasEdgeSurface = true;
+                }
+
+                ProfileEdgeData edgeTemplate;
+                edgeTemplate.SetVisibleLine (true);
+                if (hasEdgeSurface) {
+                    edgeTemplate.SetMaterial (FromPlainAttrIndex (GetAttributeIndex (edgeSurface)));
+                    edgeTemplate.SetSurfaceFromBuildMat (false);
+                } else {
+                    edgeTemplate.SetSurfaceFromBuildMat (true);
+                }
+
+                const GS::ObjectState skinDef = PolygonToSkinDefinition (polygon,
+                    hasBuildingMaterial ? GS::Optional<API_AttributeIndex> (buildingMaterial) : GS::Optional<API_AttributeIndex> ());
+                HatchObject hatch;
+                if (!BuildHatchFromSkinDefinition (skinDef, hatch, &edgeTemplate)) {
+                    errorMessage = GS::UniString::Printf ("Polygon %u has no usable outer boundary (at least 3 vertices).", (unsigned) ii);
+                    polygonsOk = false;
+                    break;
+                }
+                Sy_HatchType hatchRef;
+                image.AddHatch (hatchRef, hatch);
+            }
+            if (!polygonsOk) {
+                results (CreateErrorResponse (APIERR_BADPARS, errorMessage));
+                continue;
+            }
+
+            GS::ObjectState useWith;
+            profileItem.Get ("useWith", useWith);
+            bool wall = true, beam = true, column = true, handrail = false, otherGDLObject = false;
+            useWith.Get ("wall", wall);
+            useWith.Get ("beam", beam);
+            useWith.Get ("column", column);
+            useWith.Get ("handrail", handrail);
+            useWith.Get ("otherGDLObject", otherGDLObject);
+            profile.profile.wallType = wall;
+            profile.profile.beamType = beam;
+            profile.profile.coluType = column;
+            profile.profile.handrailType = handrail;
+            profile.profile.otherGDLObjectType = otherGDLObject;
+
+            API_AttributeDefExt profileDefs = {};
+            profileDefs.profile_vectorImageItems = &image;
+            // An empty but real table: nullptr would keep the modifiers of an overwritten Profile,
+            // which then refer to geometry that no longer exists (crash, see CreateProfilesCommand).
+            profileDefs.profile_vectorImageParameterNames = &emptyParameterNames;
+
+            const GSErrCode err = exists
+                ? ACAPI_Attribute_ModifyExt (&profile, &profileDefs)
+                : ACAPI_Attribute_CreateExt (&profile, &profileDefs);
+            if (err != NoError) {
+                results (CreateErrorResponse (err, exists ? "Failed to overwrite the Profile." : "Failed to create the Profile."));
+                continue;
+            }
+
+            GS::ObjectState result = CreateAttributeIdObjectState (profile.header.guid);
+            result.Add ("index", GetAttributeIndex (profile.header.index));
+            result.Add ("name", name);
+            result.Add ("created", !exists);
+            results (result);
+        }
+        return NoError;
+    });
+#endif
 
     return response;
 }

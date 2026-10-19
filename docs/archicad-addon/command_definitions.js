@@ -2962,6 +2962,8 @@ var gCommands = [{
                         "reflected": { "type": "boolean" },
                         "refSide": { "type": "boolean" },
                         "oSide": { "type": "boolean" },
+                        "revealDepthOffset": { "type": "number", "description": "Optional. Inset of the frame from the line given by revealDepthLocation." },
+                        "revealDepthLocation": { "type": "string", "enum": ["Side", "Core"], "description": "Optional. Where revealDepthOffset is measured from: Side = the clicked side of the wall, Core = the core skin of a composite wall on that side." },
                         "libraryPartName": {
                             "type": "string",
                             "description": "Optional. Localized library part name (docu_UName) to place instead of the tool default/favorite, e.g. a shutter part that has no favorite. It has to be a window library part. Applied to the tool defaults before cloning."
@@ -3009,6 +3011,8 @@ var gCommands = [{
                         "reflected": { "type": "boolean" },
                         "refSide": { "type": "boolean" },
                         "oSide": { "type": "boolean" },
+                        "revealDepthOffset": { "type": "number", "description": "Optional. Inset of the frame from the line given by revealDepthLocation." },
+                        "revealDepthLocation": { "type": "string", "enum": ["Side", "Core"], "description": "Optional. Where revealDepthOffset is measured from: Side = the clicked side of the wall, Core = the core skin of a composite wall on that side." },
                         "libraryPartName": {
                             "type": "string",
                             "description": "Optional. Localized library part name (docu_UName) to place instead of the tool default/favorite, e.g. a shutter part that has no favorite. It has to be a door library part. Applied to the tool defaults before cloning."
@@ -5144,7 +5148,8 @@ var gCommands = [{
                         "refSide": { "type": "boolean" },
                         "oSide": { "type": "boolean" },
                         "reveal": { "type": "boolean", "description": "Turn the reveal on or off." },
-                        "revealDepthOffset": { "type": "number", "description": "Distance the frame plane is moved across the wall thickness, along the wall normal." }
+                        "revealDepthOffset": { "type": "number", "description": "Distance the frame plane is moved across the wall thickness, along the wall normal." },
+                        "revealDepthLocation": { "type": "string", "enum": ["Side", "Core"], "description": "Where revealDepthOffset is measured from: Side = the clicked side of the wall, Core = the core skin of a composite wall on that side." }
                     },
                     "additionalProperties": false,
                     "required": ["elementId"]
@@ -5176,7 +5181,8 @@ var gCommands = [{
                         "refSide": { "type": "boolean" },
                         "oSide": { "type": "boolean" },
                         "reveal": { "type": "boolean", "description": "Turn the reveal on or off." },
-                        "revealDepthOffset": { "type": "number", "description": "Distance the frame plane is moved across the wall thickness, along the wall normal." }
+                        "revealDepthOffset": { "type": "number", "description": "Distance the frame plane is moved across the wall thickness, along the wall normal." },
+                        "revealDepthLocation": { "type": "string", "enum": ["Side", "Core"], "description": "Where revealDepthOffset is measured from: Side = the clicked side of the wall, Core = the core skin of a composite wall on that side." }
                     },
                     "additionalProperties": false,
                     "required": ["elementId"]
@@ -6054,6 +6060,84 @@ var gCommands = [{
         "additionalProperties": false,
         "required": [
             "executionResults"
+        ]
+    }
+            },{
+                "name": "CreateFavoritesFromDefaults",
+                "version": "1.7.2",
+                "description": "Saves the current defaults of a tool (element type) as a named Favorite, including the GDL parameters of library part based tools; an existing Favorite of the same name is overwritten only when asked.",
+                "inputScheme": {
+        "type": "object",
+        "properties": {
+            "favorites": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "description": "One Favorite to save from the current defaults of a tool.",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Name of the Favorite."
+                        },
+                        "elementType": {
+                            "$ref": "#/ElementType",
+                            "description": "The tool whose current defaults are saved, e.g. Beam, Wall, Door. Set the defaults first, e.g. with ApplyFavoritesToElementDefaults or CreateWindows/CreateDoors with libraryPartName."
+                        },
+                        "folder": {
+                            "type": "array",
+                            "description": "Optional folder hierarchy in the Favorites palette to place the new Favorite under. Empty/omitted = root.",
+                            "items": { "type": "string" }
+                        },
+                        "overwriteExisting": {
+                            "type": "boolean",
+                            "description": "Optional. When a Favorite with this name exists, overwrite it with the defaults instead of returning an error. The default is false."
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                        "name",
+                        "elementType"
+                    ]
+                }
+            }
+        },
+        "additionalProperties": false,
+        "required": [
+            "favorites"
+        ]
+    },
+                "outputScheme": {
+        "type": "object",
+        "properties": {
+            "favorites": {
+                "type": "array",
+                "description": "One item per input Favorite, in the same order.",
+                "items": {
+                    "oneOf": [
+                        {
+                            "type": "object",
+                            "properties": {
+                                "name": {
+                                    "type": "string"
+                                },
+                                "result": {
+                                    "type": "string",
+                                    "enum": ["created", "overwritten"]
+                                }
+                            },
+                            "additionalProperties": false,
+                            "required": ["name", "result"]
+                        },
+                        {
+                            "$ref": "#/ErrorItem"
+                        }
+                    ]
+                }
+            }
+        },
+        "additionalProperties": false,
+        "required": [
+            "favorites"
         ]
     }
             },{
@@ -7673,6 +7757,150 @@ var gCommands = [{
         "required": [
             "attributeIds"
         ]
+    }
+            },{
+                "name": "CreateProfilesFromPolygons",
+                "version": "1.7.2",
+                "description": "Creates or overwrites Profile attributes (complex profiles) from cross-section polygons in meters, with holes and optional arcs: one skin per polygon with its building material and edge surface, usable with the tools given in useWith. Returns the attribute id and index of each Profile. Available from Archicad 27.",
+                "inputScheme": {
+        "type": "object",
+        "properties": {
+            "profiles": {
+                "type": "array",
+                "description": "The Profiles to create (or overwrite). Available from Archicad 27.",
+                "items": {
+                    "type": "object",
+                    "description": "One Profile (complex profile) built from cross-section polygons. Coordinates are in meters in the Profile's own plane: for a wall profile x runs across the wall (positive = outwards from the reference line) and y up; for a beam or column the Profile Editor's own axes.",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Name of the Profile."
+                        },
+                        "polygons": {
+                            "type": "array",
+                            "description": "Cross-section parts. Each polygon becomes one skin of the Profile, with its own building material.",
+                            "minItems": 1,
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "outer": {
+                                        "$ref": "#/ProfileSkinContour",
+                                        "description": "Outer boundary. Closed automatically - do not repeat the first vertex. Arcs are optional."
+                                    },
+                                    "holes": {
+                                        "type": "array",
+                                        "description": "Optional holes cut out of the outer boundary.",
+                                        "items": {
+                                            "$ref": "#/ProfileSkinContour"
+                                        }
+                                    },
+                                    "buildingMaterialId": {
+                                        "$ref": "#/AttributeIdArrayItem",
+                                        "description": "Building material of this skin. Overrides the Profile's buildingMaterialId/buildingMaterialName."
+                                    },
+                                    "buildingMaterialName": {
+                                        "type": "string",
+                                        "description": "Building material of this skin, by name. Overrides the Profile's buildingMaterialId/buildingMaterialName."
+                                    },
+                                    "edgeSurfaceId": {
+                                        "$ref": "#/AttributeIdArrayItem",
+                                        "description": "Surface of every edge of this skin. Without it (and without edgeSurfaceName) the edges take the surface of the building material."
+                                    },
+                                    "edgeSurfaceName": {
+                                        "type": "string",
+                                        "description": "Surface of every edge of this skin, by name."
+                                    },
+                                    "isCore": {
+                                        "type": "boolean",
+                                        "description": "The skin is a core skin. The default is true."
+                                    },
+                                    "contourPen": {
+                                        "type": "integer",
+                                        "description": "Pen of the skin contour. The default is 1."
+                                    }
+                                },
+                                "additionalProperties": false,
+                                "required": ["outer"]
+                            }
+                        },
+                        "buildingMaterialId": {
+                            "$ref": "#/AttributeIdArrayItem",
+                            "description": "Building material of every polygon that has none of its own."
+                        },
+                        "buildingMaterialName": {
+                            "type": "string",
+                            "description": "Building material of every polygon that has none of its own, by name."
+                        },
+                        "edgeSurfaceId": {
+                            "$ref": "#/AttributeIdArrayItem",
+                            "description": "Surface of the edges of every polygon that has none of its own."
+                        },
+                        "edgeSurfaceName": {
+                            "type": "string",
+                            "description": "Surface of the edges of every polygon that has none of its own, by name."
+                        },
+                        "useWith": {
+                            "type": "object",
+                            "description": "Which tools can use the Profile. Omitted flags: wall, beam and column true, handrail and otherGDLObject false.",
+                            "properties": {
+                                "wall": { "type": "boolean" },
+                                "beam": { "type": "boolean" },
+                                "column": { "type": "boolean" },
+                                "handrail": { "type": "boolean" },
+                                "otherGDLObject": { "type": "boolean" }
+                            },
+                            "additionalProperties": false
+                        },
+                        "overwriteExisting": {
+                            "type": "boolean",
+                            "description": "When a Profile with this name exists, replace its geometry and flags (it keeps its index and guid) instead of returning an error. The default is false."
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": ["name", "polygons"]
+                }
+            }
+        },
+        "additionalProperties": false,
+        "required": ["profiles"]
+    },
+                "outputScheme": {
+        "type": "object",
+        "properties": {
+            "attributes": {
+                "type": "array",
+                "description": "One item per input Profile, in the same order.",
+                "items": {
+                    "oneOf": [
+                        {
+                            "type": "object",
+                            "properties": {
+                                "attributeId": {
+                                    "$ref": "#/AttributeId"
+                                },
+                                "index": {
+                                    "type": "integer"
+                                },
+                                "name": {
+                                    "type": "string"
+                                },
+                                "created": {
+                                    "type": "boolean",
+                                    "description": "true for a new Profile, false for an overwritten one."
+                                }
+                            },
+                            "additionalProperties": false,
+                            "required": ["attributeId", "index", "name", "created"]
+                        },
+                        {
+                            "$ref": "#/ErrorItem"
+                        }
+                    ]
+                }
+            }
+        },
+        "additionalProperties": false,
+        "required": ["attributes"]
     }
             },{
                 "name": "CreateBuildingMaterials",

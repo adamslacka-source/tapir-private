@@ -1191,6 +1191,9 @@ GS::ObjectState GetDetailsOfElementsCommand::Execute (const GS::ObjectState& par
                 typeSpecificDetails.Add ("reflected", elem.window.openingBase.reflected);
                 typeSpecificDetails.Add ("refSide", elem.window.openingBase.refSide);
                 typeSpecificDetails.Add ("oSide", elem.window.openingBase.oSide);
+                typeSpecificDetails.Add ("reveal", elem.window.reveal);
+                typeSpecificDetails.Add ("revealDepthOffset", elem.window.revealDepthOffset);
+                typeSpecificDetails.Add ("revealDepthLocation", elem.window.revealDepthLocation == APIWDRevealDepth_Core ? "Core" : "Side");
                 break;
 
             case API_LabelID: {

@@ -698,6 +698,11 @@ GSErrCode Initialize (void)
             favoritesCommands, "1.1.2",
             "Create favorites from the given elements."
         );
+        err |= RegisterCommand<CreateFavoritesFromDefaultsCommand> (
+            favoritesCommands, "1.7.2",
+            "Saves the current defaults of a tool (element type) as a named Favorite, including the GDL parameters of "
+            "library part based tools; an existing Favorite of the same name is overwritten only when asked."
+        );
         err |= RegisterCommand<ImportFavoritesCommand> (
             favoritesCommands, "1.5.0",
             "Import Favorites from a .prefs file or folder into the current project."
@@ -866,6 +871,12 @@ GSErrCode Initialize (void)
         err |= RegisterCommand<CreateProfilesCommand> (
             attributeCommands, "1.5.4",
             "Creates or overwrites Profile attributes as a copy of an existing Profile's geometry, based on the given parameters."
+        );
+        err |= RegisterCommand<CreateProfilesFromPolygonsCommand> (
+            attributeCommands, "1.7.2",
+            "Creates or overwrites Profile attributes (complex profiles) from cross-section polygons in meters, with holes and optional arcs: "
+            "one skin per polygon with its building material and edge surface, usable with the tools given in useWith. "
+            "Returns the attribute id and index of each Profile. Available from Archicad 27."
         );
         err |= RegisterCommand<CreateBuildingMaterialsCommand> (
             attributeCommands, "1.0.1",
