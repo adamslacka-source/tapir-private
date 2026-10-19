@@ -1,0 +1,91 @@
+Command: DeleteElements
+Parameters:
+{
+    "elements": [
+        {
+            "elementId": {
+                "guid": "<GUID>"
+            }
+        },
+        {
+            "elementId": {
+                "guid": "<GUID>"
+            }
+        },
+        {
+            "elementId": {
+                "guid": "<GUID>"
+            }
+        },
+        {
+            "elementId": {
+                "guid": "<GUID>"
+            }
+        },
+        {
+            "elementId": {
+                "guid": "<GUID>"
+            }
+        },
+        {
+            "elementId": {
+                "guid": "<GUID>"
+            }
+        },
+        {
+            "elementId": {
+                "guid": "<GUID>"
+            }
+        },
+        {
+            "elementId": {
+                "guid": "<GUID>"
+            }
+        },
+        {
+            "elementId": {
+                "guid": "<GUID>"
+            }
+        },
+        {
+            "elementId": {
+                "guid": "<GUID>"
+            }
+        }
+    ]
+}
+Response:
+{
+    "executionResults": [
+        {
+            "success": true
+        },
+        {
+            "success": true
+        },
+        {
+            "success": true
+        },
+        {
+            "success": true
+        },
+        {
+            "success": true
+        },
+        {
+            "success": true
+        },
+        {
+            "success": true
+        },
+        {
+            "success": true
+        },
+        {
+            "success": true
+        },
+        {
+            "success": true
+        }
+    ]
+}

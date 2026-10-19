@@ -1,0 +1,9 @@
+Command: GenerateDocumentation
+Parameters:
+{
+    "destinationFolder": "<PATH>archicad-addon"
+}
+Response:
+{
+    "success": true
+}

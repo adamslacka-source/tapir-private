@@ -1,0 +1,24 @@
+Command: GetCurrentWindowType
+Parameters:
+{}
+Response:
+{
+    "currentWindowType": "FloorPlan"
+}
+Command: GetView2DTransformations
+Parameters:
+{}
+Response:
+{
+    "transformations": [
+        {
+            "zoom": {
+                "xMin": -6.561246782,
+                "yMin": -2.229590565,
+                "xMax": 13.251828249,
+                "yMax": 6.750747981
+            },
+            "rotation": 0
+        }
+    ]
+}
