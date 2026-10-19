@@ -1424,7 +1424,7 @@ var gCommands = [{
                             "properties": {
                                 "bodies": {
                                     "type": "array",
-                                    "description": "The solid bodies of the element's 3D model, including those of its subelements for a Stair, Railing or Curtain Wall. Empty when the element has no solid 3D model (for example a 2D element, or one filtered out of the 3D view).",
+                                    "description": "The solid bodies of the element's 3D model, including those of its subelements for a Stair, Railing or Curtain Wall, and those of its segments for a Beam or Column. Empty when the element has no solid 3D model (for example a 2D element, or one filtered out of the 3D view).",
                                     "items": {
                                         "$ref": "#/Body3D"
                                     }
@@ -3317,7 +3317,7 @@ var gCommands = [{
             },{
                 "name": "CreateRailings",
                 "version": "1.7.2",
-                "description": "Creates Railing elements along a reference polyline. The posts, rails, panels, balusters and their distribution come from the favorite or from the Railing tool defaults; every point of the reference line becomes a node and every pair of consecutive points a segment.",
+                "description": "Creates Railing elements along a reference polyline. The posts, rails, panels, balusters and their distribution come from the favorite or from the Railing tool defaults, optionally with another segment height and post spacing; every point of the reference line becomes a node and every pair of consecutive points a segment.",
                 "inputScheme": {
     "type": "object",
     "properties": {
@@ -3345,6 +3345,21 @@ var gCommands = [{
                     "floorIndex": {
                         "type": "integer",
                         "description": "Optional home story of the railing. Without zCoordinate the railing keeps the base offset of the favorite or of the tool defaults on this story."
+                    },
+                    "height": {
+                        "type": "number",
+                        "description": "Optional height of the railing segments. Without it the height of the favorite (or of the tool defaults) is kept. ModifyRailingDetails changes it, and more, on an existing railing.",
+                        "exclusiveMinimum": 0.0
+                    },
+                    "postSpacing": {
+                        "type": "number",
+                        "description": "Optional length of the railing pattern - the distance between the posts, as in ModifyRailingDetails. Without it the pattern of the favorite (or of the tool defaults) is kept.",
+                        "exclusiveMinimum": 0.0
+                    },
+                    "postDistribution": {
+                        "type": "string",
+                        "enum": ["FixedLength", "BestDivision"],
+                        "description": "Optional way the pattern is laid along a segment, as in ModifyRailingDetails."
                     }
                 },
                 "additionalProperties": false,
@@ -3366,6 +3381,489 @@ var gCommands = [{
         "required": [
             "elements"
         ]
+    }
+            },{
+                "name": "SetCurtainWallSystemDefaults",
+                "version": "1.7.2",
+                "description": "Defines the frame and panel classes, the boundary and corner frames and optionally the pattern of the Curtain Wall tool defaults (profile width, depth and offset, frame or panel object, thickness, building material, surfaces), reads them back and reports what Archicad did not keep; optionally saves them as a Favorite. CreateCurtainWalls then uses the classes.",
+                "inputScheme": {
+        "type": "object",
+        "properties": {
+            "frameClasses": {
+                "type": "array",
+                "description": "Frame classes of the Curtain Wall tool defaults to create or change, by name. A class with the given name is changed; otherwise a new class is added after the existing ones, copied from basedOn (or from the first frame class). Only the given fields are written.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "Name of the frame class." },
+                        "basedOn": { "type": "string", "description": "Optional name of an existing frame class a new class is copied from, with its frame object, profile and surfaces. Ignored when the class exists." },
+                "width": {
+                    "type": "number",
+                    "description": "Visible (face) width of the frame profile, a1 + a2 in the API (split evenly).",
+                    "exclusiveMinimum": 0.0
+                },
+                "depth": {
+                    "type": "number",
+                    "description": "Depth of the frame profile perpendicular to the curtain wall, b1 + b2 in the API.",
+                    "exclusiveMinimum": 0.0
+                },
+                "offset": {
+                    "type": "number",
+                    "description": "The part of the depth on the outer side of the panels (b2); the rest (depth - offset) is on the inner side (b1). Without it the current outer part is kept (at most the depth).",
+                    "minimum": 0.0
+                },
+                "panelConnectionHole": {
+                    "type": "object",
+                    "description": "The slot the panels sit in.",
+                    "properties": {
+                        "depth": { "type": "number", "minimum": 0.0, "description": "Depth of the slot (d)." },
+                        "width": { "type": "number", "minimum": 0.0, "description": "Width of the slot (w)." }
+                    },
+                    "additionalProperties": false
+                },
+                "libraryPartName": {
+                    "type": "string",
+                    "description": "The frame object (library part) of the frame, e.g. one of the curtain wall frame objects of the loaded library. Makes the frame library part based."
+                },
+                "invisible": {
+                    "type": "boolean",
+                    "description": "true makes the frame Invisible (no geometry). false turns an invisible frame back to its library part."
+                },
+                "buildingMaterialId": {
+                    "$ref": "#/AttributeIdArrayItem",
+                    "description": "Building material of the frame."
+                },
+                "buildingMaterialName": {
+                    "type": "string",
+                    "description": "Building material of the frame, by name (when buildingMaterialId is not given)."
+                },
+                "surfaceId": {
+                    "$ref": "#/AttributeIdArrayItem",
+                    "description": "Surface of the frame. The frame then uses its own surface instead of the one of its library part."
+                },
+                "surfaceName": {
+                    "type": "string",
+                    "description": "Surface of the frame, by name (when surfaceId is not given)."
+                }
+                    },
+                    "additionalProperties": false,
+                    "required": ["name"]
+                }
+            },
+            "panelClasses": {
+                "type": "array",
+                "description": "Panel classes of the Curtain Wall tool defaults to create or change, by name. A class with the given name is changed; otherwise a new class is added after the existing ones, copied from basedOn (or from the first panel class). Only the given fields are written.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "Name of the panel class." },
+                        "basedOn": { "type": "string", "description": "Optional name of an existing panel class a new class is copied from. Ignored when the class exists." },
+                "thickness": {
+                    "type": "number",
+                    "description": "Thickness of the panel.",
+                    "exclusiveMinimum": 0.0
+                },
+                "libraryPartName": {
+                    "type": "string",
+                    "description": "The panel object (library part) of the panel class. Makes the panel library part based."
+                },
+                "generic": {
+                    "type": "boolean",
+                    "description": "true makes the panel a generic (plain) panel instead of a library part based one."
+                },
+                "buildingMaterialId": {
+                    "$ref": "#/AttributeIdArrayItem",
+                    "description": "Building material of the panel. Glass or opaque is a matter of the building material and surfaces: the API has no glazing flag for a panel class."
+                },
+                "buildingMaterialName": {
+                    "type": "string",
+                    "description": "Building material of the panel, by name (when buildingMaterialId is not given)."
+                },
+                "surfaceId": {
+                    "$ref": "#/AttributeIdArrayItem",
+                    "description": "Surface of all faces of the panel (outer, inner and edge), overriding the building material's surface."
+                },
+                "surfaceName": {
+                    "type": "string",
+                    "description": "Surface of all faces of the panel, by name."
+                },
+                "outerSurfaceId": { "$ref": "#/AttributeIdArrayItem", "description": "Surface of the outer face of the panel." },
+                "outerSurfaceName": { "type": "string", "description": "Surface of the outer face of the panel, by name." },
+                "innerSurfaceId": { "$ref": "#/AttributeIdArrayItem", "description": "Surface of the inner face of the panel." },
+                "innerSurfaceName": { "type": "string", "description": "Surface of the inner face of the panel, by name." },
+                "edgeSurfaceId": { "$ref": "#/AttributeIdArrayItem", "description": "Surface of the edges of the panel." },
+                "edgeSurfaceName": { "type": "string", "description": "Surface of the edges of the panel, by name." }
+                    },
+                    "additionalProperties": false,
+                    "required": ["name"]
+                }
+            },
+            "boundaryFrame": {
+                "type": "object",
+                "description": "Settings of the boundary frames (the frames around the curtain wall).",
+                "properties": {
+                "width": {
+                    "type": "number",
+                    "description": "Visible (face) width of the frame profile, a1 + a2 in the API (split evenly).",
+                    "exclusiveMinimum": 0.0
+                },
+                "depth": {
+                    "type": "number",
+                    "description": "Depth of the frame profile perpendicular to the curtain wall, b1 + b2 in the API.",
+                    "exclusiveMinimum": 0.0
+                },
+                "offset": {
+                    "type": "number",
+                    "description": "The part of the depth on the outer side of the panels (b2); the rest (depth - offset) is on the inner side (b1). Without it the current outer part is kept (at most the depth).",
+                    "minimum": 0.0
+                },
+                "panelConnectionHole": {
+                    "type": "object",
+                    "description": "The slot the panels sit in.",
+                    "properties": {
+                        "depth": { "type": "number", "minimum": 0.0, "description": "Depth of the slot (d)." },
+                        "width": { "type": "number", "minimum": 0.0, "description": "Width of the slot (w)." }
+                    },
+                    "additionalProperties": false
+                },
+                "libraryPartName": {
+                    "type": "string",
+                    "description": "The frame object (library part) of the frame, e.g. one of the curtain wall frame objects of the loaded library. Makes the frame library part based."
+                },
+                "invisible": {
+                    "type": "boolean",
+                    "description": "true makes the frame Invisible (no geometry). false turns an invisible frame back to its library part."
+                },
+                "buildingMaterialId": {
+                    "$ref": "#/AttributeIdArrayItem",
+                    "description": "Building material of the frame."
+                },
+                "buildingMaterialName": {
+                    "type": "string",
+                    "description": "Building material of the frame, by name (when buildingMaterialId is not given)."
+                },
+                "surfaceId": {
+                    "$ref": "#/AttributeIdArrayItem",
+                    "description": "Surface of the frame. The frame then uses its own surface instead of the one of its library part."
+                },
+                "surfaceName": {
+                    "type": "string",
+                    "description": "Surface of the frame, by name (when surfaceId is not given)."
+                }
+                },
+                "additionalProperties": false
+            },
+            "cornerFrame": {
+                "type": "object",
+                "description": "Settings of the corner frames (between two segments).",
+                "properties": {
+                "width": {
+                    "type": "number",
+                    "description": "Visible (face) width of the frame profile, a1 + a2 in the API (split evenly).",
+                    "exclusiveMinimum": 0.0
+                },
+                "depth": {
+                    "type": "number",
+                    "description": "Depth of the frame profile perpendicular to the curtain wall, b1 + b2 in the API.",
+                    "exclusiveMinimum": 0.0
+                },
+                "offset": {
+                    "type": "number",
+                    "description": "The part of the depth on the outer side of the panels (b2); the rest (depth - offset) is on the inner side (b1). Without it the current outer part is kept (at most the depth).",
+                    "minimum": 0.0
+                },
+                "panelConnectionHole": {
+                    "type": "object",
+                    "description": "The slot the panels sit in.",
+                    "properties": {
+                        "depth": { "type": "number", "minimum": 0.0, "description": "Depth of the slot (d)." },
+                        "width": { "type": "number", "minimum": 0.0, "description": "Width of the slot (w)." }
+                    },
+                    "additionalProperties": false
+                },
+                "libraryPartName": {
+                    "type": "string",
+                    "description": "The frame object (library part) of the frame, e.g. one of the curtain wall frame objects of the loaded library. Makes the frame library part based."
+                },
+                "invisible": {
+                    "type": "boolean",
+                    "description": "true makes the frame Invisible (no geometry). false turns an invisible frame back to its library part."
+                },
+                "buildingMaterialId": {
+                    "$ref": "#/AttributeIdArrayItem",
+                    "description": "Building material of the frame."
+                },
+                "buildingMaterialName": {
+                    "type": "string",
+                    "description": "Building material of the frame, by name (when buildingMaterialId is not given)."
+                },
+                "surfaceId": {
+                    "$ref": "#/AttributeIdArrayItem",
+                    "description": "Surface of the frame. The frame then uses its own surface instead of the one of its library part."
+                },
+                "surfaceName": {
+                    "type": "string",
+                    "description": "Surface of the frame, by name (when surfaceId is not given)."
+                }
+                },
+                "additionalProperties": false
+            },
+            "boundaryFramePosition": {
+                "type": "string",
+                "enum": ["Outside", "Center", "Inside"],
+                "description": "Position of the boundary frames relative to the reference line."
+            },
+            "primaryPattern": {
+                "$ref": "#/CurtainWallPattern",
+                "description": "Optional column pattern of the defaults, as in CreateCurtainWalls."
+            },
+            "secondaryPattern": {
+                "$ref": "#/CurtainWallPattern",
+                "description": "Optional row pattern of the defaults, as in CreateCurtainWalls."
+            },
+            "cells": {
+                "type": "array",
+                "description": "Optional assignment of panel and frame classes to the cells of the pattern unit of the defaults, as in CreateCurtainWalls. The class indices count the classes after this command's changes (the classIndex values of the response).",
+                "items": { "$ref": "#/CurtainWallPatternCell" }
+            },
+            "favorite": {
+                "type": "object",
+                "description": "Optional Favorite saved from the Curtain Wall defaults after the change, as CreateFavoritesFromDefaults does.",
+                "properties": {
+                    "name": { "type": "string", "description": "Name of the Favorite." },
+                    "folder": { "type": "array", "items": { "type": "string" }, "description": "Optional folder hierarchy in the Favorites palette." },
+                    "overwriteExisting": { "type": "boolean", "description": "Overwrite a Favorite of the same name. The default is false." }
+                },
+                "additionalProperties": false,
+                "required": ["name"]
+            },
+            "restoreDefaults": {
+                "type": "boolean",
+                "description": "Put the Curtain Wall tool defaults back as they were at the end, e.g. when only the favorite is wanted. The default is false (the defaults keep the change)."
+            }
+        },
+        "additionalProperties": false
+    },
+                "outputScheme": {
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "frameClasses": {
+                        "type": "array",
+                        "description": "One item per input frame class, in the same order.",
+                        "items": { "oneOf": [ {
+                                "type": "object",
+                                "description": "The class as it is in the Curtain Wall defaults after the change.",
+                                "properties": {
+                                    "name": { "type": "string" },
+                                    "classIndex": { "type": "integer", "description": "The index CreateCurtainWalls cells (and the cells of this command) refer to the class by: frame classes from 4, panel classes from 1." },
+                                    "result": { "type": "string", "enum": ["created", "modified"] },
+                                    "notKept": { "type": "array", "items": { "type": "string" }, "description": "Input fields whose value Archicad did not keep (read back from the defaults). Absent when everything was kept." }
+                                },
+                                "additionalProperties": false,
+                                "required": ["name", "classIndex", "result"]
+                            }, { "$ref": "#/ErrorItem" } ] }
+                    },
+                    "panelClasses": {
+                        "type": "array",
+                        "description": "One item per input panel class, in the same order.",
+                        "items": { "oneOf": [ {
+                                "type": "object",
+                                "description": "The class as it is in the Curtain Wall defaults after the change.",
+                                "properties": {
+                                    "name": { "type": "string" },
+                                    "classIndex": { "type": "integer", "description": "The index CreateCurtainWalls cells (and the cells of this command) refer to the class by: frame classes from 4, panel classes from 1." },
+                                    "result": { "type": "string", "enum": ["created", "modified"] },
+                                    "notKept": { "type": "array", "items": { "type": "string" }, "description": "Input fields whose value Archicad did not keep (read back from the defaults). Absent when everything was kept." }
+                                },
+                                "additionalProperties": false,
+                                "required": ["name", "classIndex", "result"]
+                            }, { "$ref": "#/ErrorItem" } ] }
+                    },
+                    "boundaryFrame": { "oneOf": [ {
+                                "type": "object",
+                                "properties": {
+                                    "result": { "type": "string", "enum": ["modified"] },
+                                    "notKept": { "type": "array", "items": { "type": "string" }, "description": "Input fields whose value Archicad did not keep. Absent when everything was kept." }
+                                },
+                                "additionalProperties": false,
+                                "required": ["result"]
+                            }, { "$ref": "#/ErrorItem" } ] },
+                    "cornerFrame": { "oneOf": [ {
+                                "type": "object",
+                                "properties": {
+                                    "result": { "type": "string", "enum": ["modified"] },
+                                    "notKept": { "type": "array", "items": { "type": "string" }, "description": "Input fields whose value Archicad did not keep. Absent when everything was kept." }
+                                },
+                                "additionalProperties": false,
+                                "required": ["result"]
+                            }, { "$ref": "#/ErrorItem" } ] },
+                    "favorite": {
+                        "oneOf": [
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "name": { "type": "string" },
+                                    "result": { "type": "string", "enum": ["created", "overwritten"] }
+                                },
+                                "additionalProperties": false,
+                                "required": ["name", "result"]
+                            },
+                            { "$ref": "#/ErrorItem" }
+                        ]
+                    },
+                    "defaultsRestored": {
+                        "type": "boolean",
+                        "description": "Present when restoreDefaults was asked: whether the defaults were put back."
+                    }
+                },
+                "additionalProperties": false,
+                "required": ["frameClasses", "panelClasses"]
+            },
+            { "$ref": "#/ErrorItem" }
+        ]
+    }
+            },{
+                "name": "ModifyRailingDetails",
+                "version": "1.7.2",
+                "description": "Changes the details of existing Railings: segment height, post spacing (pattern length and distribution), top rail, handrails, rails, infill panel visibility and baluster spacing. The result is read back from the subelements and reported per field, with the post, panel and baluster counts.",
+                "inputScheme": {
+        "type": "object",
+        "properties": {
+            "railings": {
+                "type": "array",
+                "description": "The Railings to change, each with the fields to change. Omitted fields are left as they are. Every field is applied to all segments of the railing.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "elementId": { "$ref": "#/ElementId" },
+                        "height": {
+                            "type": "number",
+                            "description": "Height of the railing segments (the top rail runs at this height).",
+                            "exclusiveMinimum": 0.0
+                        },
+                        "postSpacing": {
+                            "type": "number",
+                            "description": "Length of the railing pattern, which places one set of inner posts per pattern: the distance between the posts.",
+                            "exclusiveMinimum": 0.0
+                        },
+                        "postDistribution": {
+                            "type": "string",
+                            "enum": ["FixedLength", "BestDivision"],
+                            "description": "How the pattern is laid along a segment: FixedLength repeats postSpacing exactly (the last field is shorter), BestDivision divides the segment into equal fields of at most postSpacing. When omitted, the current way is kept, except that a pattern divided into a fixed number of fields becomes BestDivision."
+                        },
+                        "toprail": {
+                            "type": "object",
+                            "properties": {
+                                "visible": { "type": "boolean", "description": "Whether the railing has a top rail." }
+                            },
+                            "additionalProperties": false
+                        },
+                        "handrail": {
+                            "type": "object",
+                            "description": "Applied to every handrail of the railing.",
+                            "properties": {
+                                "visible": { "type": "boolean" },
+                                "height": { "type": "number", "exclusiveMinimum": 0.0, "description": "Height of the handrail." },
+                                "horizontalOffset": { "type": "number", "description": "Horizontal offset of the handrail from the segment." },
+                                "bothSides": { "type": "boolean", "description": "Handrail on both sides of the railing." }
+                            },
+                            "additionalProperties": false
+                        },
+                        "rail": {
+                            "type": "object",
+                            "description": "Applied to every rail of the railing.",
+                            "properties": {
+                                "visible": { "type": "boolean" },
+                                "height": { "type": "number", "exclusiveMinimum": 0.0, "description": "Height of the rail." },
+                                "horizontalOffset": { "type": "number", "description": "Horizontal offset of the rail from the segment." }
+                            },
+                            "additionalProperties": false
+                        },
+                        "panel": {
+                            "type": "object",
+                            "description": "The infill panels of the pattern.",
+                            "properties": {
+                                "visible": { "type": "boolean", "description": "Whether the pattern has its infill panel. Turning panels on works only where the pattern has a panel (shown or hidden); balusters cannot be added or removed by the API." }
+                            },
+                            "additionalProperties": false
+                        },
+                        "balusterSpacing": {
+                            "type": "number",
+                            "description": "Distance between the balusters of the baluster sets of the pattern.",
+                            "exclusiveMinimum": 0.0
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": ["elementId"]
+                }
+            }
+        },
+        "additionalProperties": false,
+        "required": ["railings"]
+    },
+                "outputScheme": {
+        "type": "object",
+        "properties": {
+            "results": {
+                "type": "array",
+                "description": "One item per input railing, in the same order.",
+                "items": {
+                    "oneOf": [
+                        {
+                            "type": "object",
+                            "properties": {
+                                "elementId": { "$ref": "#/ElementId" },
+                                "changed": {
+                                    "type": "array",
+                                    "description": "The input fields Archicad kept on every subelement (read back after the change).",
+                                    "items": { "type": "string" }
+                                },
+                                "notChanged": {
+                                    "type": "array",
+                                    "description": "The input fields Archicad did not keep, with the reason. Absent when everything was kept.",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "field": { "type": "string" },
+                                            "reason": { "type": "string" }
+                                        },
+                                        "additionalProperties": false,
+                                        "required": ["field", "reason"]
+                                    }
+                                },
+                                "state": {
+                                    "type": "object",
+                                    "description": "The railing read back after the change.",
+                                    "properties": {
+                                        "segmentHeights": { "type": "array", "items": { "type": "number" } },
+                                        "postSpacings": { "type": "array", "items": { "type": "number" }, "description": "The pattern length of each pattern." },
+                                        "postDistributions": { "type": "array", "items": { "type": "string" } },
+                                        "posts": { "type": "integer", "description": "Number of posts (at the nodes)." },
+                                        "innerPosts": { "type": "integer", "description": "Number of inner posts (in the patterns)." },
+                                        "panels": { "type": "integer" },
+                                        "visiblePanels": { "type": "integer" },
+                                        "balusterSets": { "type": "integer" },
+                                        "balusters": { "type": "integer" },
+                                        "toprails": { "type": "integer" },
+                                        "visibleToprails": { "type": "integer" },
+                                        "handrailHeights": { "type": "array", "items": { "type": "number" } },
+                                        "railHeights": { "type": "array", "items": { "type": "number" } }
+                                    },
+                                    "additionalProperties": false
+                                }
+                            },
+                            "additionalProperties": false,
+                            "required": ["elementId", "changed", "state"]
+                        },
+                        { "$ref": "#/ErrorItem" }
+                    ]
+                }
+            }
+        },
+        "additionalProperties": false,
+        "required": ["results"]
     }
             },{
                 "name": "CreateAssociativeDimensions",

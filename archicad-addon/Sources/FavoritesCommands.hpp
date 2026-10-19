@@ -111,3 +111,8 @@ public:
     virtual GS::Optional<GS::UniString> GetRawResponseSchema () const override;
     virtual GS::ObjectState Execute (const GS::ObjectState& parameters, GS::ProcessControl& processControl) const override;
 };
+
+// Saves the current defaults of a tool as a Favorite (the core of CreateFavoritesFromDefaults), for
+// commands that set tool defaults and save them in one step. Call it inside an undoable command.
+// Returns {name, result: created/overwritten} or an error item.
+GS::ObjectState SaveToolDefaultsAsFavorite (const GS::UniString& name, API_ElemTypeID typeId, const GS::Array<GS::UniString>& folderParts, bool overwriteExisting);

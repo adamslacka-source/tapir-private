@@ -40,3 +40,19 @@ railing = response['elements'][0]
 print (aclib.RunTapirCommand ('GetSubelementsOfHierarchicalElements', {
     'elements': [railing]
 }))
+
+# --- 4. a 1.10 m high railing with posts every 1.5 m -----------------------------
+# ModifyRailingDetails changes these (and the handrail, rails, panels) on an existing railing.
+aclib.RunTapirCommand ('CreateRailings', {
+    'railingsData': [
+        {
+            'coordinates': [
+                { 'x': 0.0, 'y': 10.0 },
+                { 'x': 6.0, 'y': 10.0 }
+            ],
+            'height': 1.1,
+            'postSpacing': 1.5,
+            'postDistribution': 'BestDivision'
+        }
+    ]
+})

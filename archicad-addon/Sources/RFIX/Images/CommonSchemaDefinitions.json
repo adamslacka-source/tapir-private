@@ -7750,6 +7750,10 @@
             "className": {
                 "type": "string"
             },
+            "thickness": {
+                "type": "number",
+                "description": "The thickness of the panel."
+            },
             "frames": {
                 "type": "array",
                 "description": "The surrounding frames.",

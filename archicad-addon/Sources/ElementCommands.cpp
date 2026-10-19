@@ -1472,6 +1472,7 @@ GS::ObjectState GetDetailsOfElementsCommand::Execute (const GS::ObjectState& par
                 typeSpecificDetails.Add ("isHidden", elem.cwPanel.hidden);
                 typeSpecificDetails.Add ("segmentIndex", elem.cwPanel.segmentID);
                 typeSpecificDetails.Add ("className", GS::UniString (elem.cwPanel.className));
+                typeSpecificDetails.Add ("thickness", elem.cwPanel.thickness);
             } break;
 
             case API_CurtainWallFrameID: {
@@ -4571,11 +4572,30 @@ static void CollectSubelementBodies (APIElemType* subelemArray, GS::Array<GS::Ob
 }
 
 // A Stair carries its 3D geometry in its subelements (see CalculateStairBounds above), and so do
-// a Railing and a Curtain Wall, so their subelements' bodies are collected too. Returns whether
-// the element is one of those.
-static bool CollectBodiesOfSubelements (const API_Elem_Head& elemHead, GS::Array<GS::ObjectState>& bodies)
+// a Railing and a Curtain Wall, so their subelements' bodies are collected too. A Beam and a
+// Column have their bodies on their segments (BeamSegment, ColumnSegment): the hierarchical
+// element itself answers with no body, so the segments' bodies are collected when the element
+// gave none of its own (`hasOwnBodies`), never twice. Returns whether the element is one of those.
+static bool CollectBodiesOfSubelements (const API_Elem_Head& elemHead, bool hasOwnBodies, GS::Array<GS::ObjectState>& bodies)
 {
     const API_ElemTypeID typeID = GetElemTypeId (elemHead);
+    if (typeID == API_BeamID || typeID == API_ColumnID) {
+        if (hasOwnBodies) {
+            return true;
+        }
+        API_ElementMemo memo = {};
+        const GS::OnExit guard ([&memo] () { ACAPI_DisposeElemMemoHdls (&memo); });
+        const GSErrCode err = ACAPI_Element_GetMemo (elemHead.guid, &memo, typeID == API_BeamID ? APIMemoMask_BeamSegment : APIMemoMask_ColumnSegment);
+        if (err != NoError) {
+            return true;
+        }
+        if (typeID == API_BeamID) {
+            CollectSubelementBodies (memo.beamSegments, bodies);
+        } else {
+            CollectSubelementBodies (memo.columnSegments, bodies);
+        }
+        return true;
+    }
     if (typeID != API_StairID && typeID != API_RailingID && typeID != API_CurtainWallID) {
         return false;
     }
@@ -4653,7 +4673,7 @@ GS::Optional<GS::UniString> Get3DGeometryOfElementsCommand::GetRawResponseSchema
                             "properties": {
                                 "bodies": {
                                     "type": "array",
-                                    "description": "The solid bodies of the element's 3D model, including those of its subelements for a Stair, Railing or Curtain Wall. Empty when the element has no solid 3D model (for example a 2D element, or one filtered out of the 3D view).",
+                                    "description": "The solid bodies of the element's 3D model, including those of its subelements for a Stair, Railing or Curtain Wall, and those of its segments for a Beam or Column. Empty when the element has no solid 3D model (for example a 2D element, or one filtered out of the 3D view).",
                                     "items": {
                                         "$ref": "#/Body3D"
                                     }
@@ -4703,7 +4723,7 @@ GS::ObjectState Get3DGeometryOfElementsCommand::Execute (const GS::ObjectState& 
 
         GS::Array<GS::ObjectState> bodies;
         err = CollectSolidBodies (elemHead, bodies);
-        if (CollectBodiesOfSubelements (elemHead, bodies)) {
+        if (CollectBodiesOfSubelements (elemHead, err == NoError && !bodies.IsEmpty (), bodies)) {
             // A hierarchical element may have no 3D model of its own (a Stair answers Get3DInfo
             // with nothing, see CalculateStairBounds); its subelements' bodies are the answer.
             err = NoError;

@@ -1233,6 +1233,75 @@ static GS::ObjectState CreateFavoriteResult (const GS::UniString& name, const ch
 // keeps its GDL parameters (memo.params) and a profiled beam or column its profile; a tool whose
 // defaults Archicad does not give with a memo is read again without one. Classifications and
 // properties of the tool defaults are not part of the Favorite.
+GS::ObjectState SaveToolDefaultsAsFavorite (const GS::UniString& name, API_ElemTypeID typeId, const GS::Array<GS::UniString>& folderParts, bool overwriteExisting)
+{
+    if (name.IsEmpty ()) {
+        return CreateErrorResponse (APIERR_BADNAME, "Missing or empty 'name'.");
+    }
+
+    const bool exists = DoesFavoriteExist (name);
+    if (exists && !overwriteExisting) {
+        return CreateErrorResponse (APIERR_NAMEALREADYUSED, "A Favorite with this name already exists.");
+    }
+
+    API_Favorite favorite (name);
+    favorite.memo.New ();
+#ifdef ServerMainVers_2600
+    favorite.element.header.type = typeId;
+#else
+    favorite.element.header.typeID = typeId;
+#endif
+    GSErrCode err = ACAPI_Element_GetDefaults (&favorite.element, favorite.memo.GetPtr ());
+    if (err != NoError) {
+        ACAPI_DisposeElemMemoHdls (favorite.memo.GetPtr ());
+        favorite.memo.Clear ();
+        favorite.element = {};
+#ifdef ServerMainVers_2600
+        favorite.element.header.type = typeId;
+#else
+        favorite.element.header.typeID = typeId;
+#endif
+        err = ACAPI_Element_GetDefaults (&favorite.element, nullptr);
+    }
+    const GS::OnExit cleanup ([&]() {
+        if (favorite.memo.HasValue ()) {
+            ACAPI_DisposeElemMemoHdls (favorite.memo.GetPtr ());
+        }
+    });
+    if (err != NoError) {
+        return CreateErrorResponse (err, "Failed to read the defaults of the tool.");
+    }
+
+    if (!folderParts.IsEmpty ()) {
+        favorite.folder.New ();
+        for (const GS::UniString& part : folderParts) {
+            favorite.folder->Push (part);
+        }
+    }
+
+    if (exists) {
+        // Change keeps the place of the Favorite in the palette. It refuses a Favorite of
+        // another element type, which is then replaced by a new one.
+        err = ACAPI_Favorite_Change (favorite);
+        if (err != NoError) {
+            err = ACAPI_Favorite_Delete (name);
+            if (err == NoError) {
+                err = ACAPI_Favorite_Create (favorite);
+            }
+        }
+        if (err != NoError) {
+            return CreateErrorResponse (err, "Failed to overwrite the Favorite.");
+        }
+        return CreateFavoriteResult (name, "overwritten");
+    }
+
+    err = ACAPI_Favorite_Create (favorite);
+    if (err != NoError) {
+        return CreateErrorResponse (err, "Failed to create the Favorite.");
+    }
+    return CreateFavoriteResult (name, "created");
+}
+
 GS::ObjectState CreateFavoritesFromDefaultsCommand::Execute (const GS::ObjectState& parameters, GS::ProcessControl& /*processControl*/) const
 {
     GS::Array<GS::ObjectState> favoriteItems;
@@ -1258,74 +1327,10 @@ GS::ObjectState CreateFavoritesFromDefaultsCommand::Execute (const GS::ObjectSta
             }
             bool overwriteExisting = false;
             item.Get ("overwriteExisting", overwriteExisting);
-
-            const bool exists = DoesFavoriteExist (name);
-            if (exists && !overwriteExisting) {
-                results (CreateErrorResponse (APIERR_NAMEALREADYUSED, "A Favorite with this name already exists."));
-                continue;
-            }
-
-            API_Favorite favorite (name);
-            favorite.memo.New ();
-#ifdef ServerMainVers_2600
-            favorite.element.header.type = typeId;
-#else
-            favorite.element.header.typeID = typeId;
-#endif
-            GSErrCode err = ACAPI_Element_GetDefaults (&favorite.element, favorite.memo.GetPtr ());
-            if (err != NoError) {
-                ACAPI_DisposeElemMemoHdls (favorite.memo.GetPtr ());
-                favorite.memo.Clear ();
-                favorite.element = {};
-#ifdef ServerMainVers_2600
-                favorite.element.header.type = typeId;
-#else
-                favorite.element.header.typeID = typeId;
-#endif
-                err = ACAPI_Element_GetDefaults (&favorite.element, nullptr);
-            }
-            const GS::OnExit cleanup ([&]() {
-                if (favorite.memo.HasValue ()) {
-                    ACAPI_DisposeElemMemoHdls (favorite.memo.GetPtr ());
-                }
-            });
-            if (err != NoError) {
-                results (CreateErrorResponse (err, "Failed to read the defaults of the tool."));
-                continue;
-            }
-
             GS::Array<GS::UniString> folderParts;
-            if (item.Get ("folder", folderParts) && !folderParts.IsEmpty ()) {
-                favorite.folder.New ();
-                for (const GS::UniString& part : folderParts) {
-                    favorite.folder->Push (part);
-                }
-            }
+            item.Get ("folder", folderParts);
 
-            if (exists) {
-                // Change keeps the place of the Favorite in the palette. It refuses a Favorite of
-                // another element type, which is then replaced by a new one.
-                err = ACAPI_Favorite_Change (favorite);
-                if (err != NoError) {
-                    err = ACAPI_Favorite_Delete (name);
-                    if (err == NoError) {
-                        err = ACAPI_Favorite_Create (favorite);
-                    }
-                }
-                if (err != NoError) {
-                    results (CreateErrorResponse (err, "Failed to overwrite the Favorite."));
-                    continue;
-                }
-                results (CreateFavoriteResult (name, "overwritten"));
-                continue;
-            }
-
-            err = ACAPI_Favorite_Create (favorite);
-            if (err != NoError) {
-                results (CreateErrorResponse (err, "Failed to create the Favorite."));
-                continue;
-            }
-            results (CreateFavoriteResult (name, "created"));
+            results (SaveToolDefaultsAsFavorite (name, typeId, folderParts, overwriteExisting));
         }
 
         return NoError;

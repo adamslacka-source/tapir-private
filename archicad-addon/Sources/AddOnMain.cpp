@@ -498,7 +498,18 @@ GSErrCode Initialize (void)
         );
         err |= RegisterCommand<CreateRailingsCommand> (
             elementCommands, "1.7.2",
-            "Creates Railing elements along a reference polyline. The posts, rails, panels, balusters and their distribution come from the favorite or from the Railing tool defaults; every point of the reference line becomes a node and every pair of consecutive points a segment."
+            "Creates Railing elements along a reference polyline. The posts, rails, panels, balusters and their distribution come from the favorite or from the Railing tool defaults, optionally with another segment height and post spacing; every point of the reference line becomes a node and every pair of consecutive points a segment."
+        );
+        err |= RegisterCommand<SetCurtainWallSystemDefaultsCommand> (
+            elementCommands, "1.7.2",
+            "Defines the frame and panel classes, the boundary and corner frames and optionally the pattern of the Curtain Wall tool defaults "
+            "(profile width, depth and offset, frame or panel object, thickness, building material, surfaces), reads them back and reports what Archicad did not keep; "
+            "optionally saves them as a Favorite. CreateCurtainWalls then uses the classes."
+        );
+        err |= RegisterCommand<ModifyRailingDetailsCommand> (
+            elementCommands, "1.7.2",
+            "Changes the details of existing Railings: segment height, post spacing (pattern length and distribution), top rail, handrails, rails, "
+            "infill panel visibility and baluster spacing. The result is read back from the subelements and reported per field, with the post, panel and baluster counts."
         );
         err |= RegisterCommand<CreateAssociativeDimensionsCommand> (
             elementCommands, "1.4.0",

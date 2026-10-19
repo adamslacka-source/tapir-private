@@ -3,8 +3,12 @@
 #include "ObjectState.hpp"
 #include "MigrationHelper.hpp"
 #include "NotificationCommands.hpp"
+#include "FavoritesCommands.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <functional>
+#include <string>
 #include <vector>
 
 CreateElementsCommandBase::CreateElementsCommandBase (const GS::String& commandNameIn, API_ElemTypeID elemTypeIDIn, const GS::String& arrayFieldNameIn)
@@ -1753,7 +1757,7 @@ static void SetParamValueBool (API_AddParType&        addPar,
 {
 	bool value;
 	parameterDetails.Get (ParameterValueFieldName, value);
-	addPar.value.real = (value ? 0 : 1);
+	addPar.value.real = (value ? 1 : 0);
 }
 
 static void SetParamValueString (API_AddParType&        addPar,
@@ -3257,6 +3261,1768 @@ GS::Optional<GS::ObjectState> CreateCurtainWallsCommand::SetTypeSpecificParamete
     return {};
 }
 
+// ============================================================================
+// SetCurtainWallSystemDefaults - defines the frame and panel classes, the boundary and corner
+// frames and optionally the pattern of the Curtain Wall tool defaults, so that CreateCurtainWalls
+// and CreateFavoritesFromDefaults (or the favorite saved by this command) use them.
+// ============================================================================
+
+static constexpr double CurtainWallDefaultsEps = 1e-6;
+
+static GS::UniString GetCWClassName (const GS::uchar_t* className)
+{
+    return GS::UniString (className);
+}
+
+static void SetCWClassName (GS::uchar_t* className, const GS::UniString& name)
+{
+    const GS::UniString truncated = name.GetSubstring (0, GS::Min (name.GetLength (), static_cast<USize> (255)));
+    GS::ucscpy (className, truncated.ToUStr ().Get ());
+}
+
+// Resolves an attribute given by "<idField>" (an AttributeIdArrayItem) or by "<nameField>" (its
+// name), as CreateProfilesFromPolygons does. `found` tells whether either field was given.
+static GS::Optional<GS::UniString> ResolveCWAttribute (const GS::ObjectState& os, const char* idField, const char* nameField, API_AttrTypeID typeId,
+                                                       API_AttributeIndex& index, bool& found)
+{
+    found = false;
+    GS::ObjectState attributeId;
+    if (os.Get (idField, attributeId)) {
+        API_Attribute attribute = {};
+        attribute.header.typeID = typeId;
+        attribute.header.guid = GetGuidFromAttributesArrayItem (attributeId);
+        if (ACAPI_Attribute_Get (&attribute) != NoError) {
+            return GS::UniString::Printf ("The attribute given in '%s' does not exist.", idField);
+        }
+        index = attribute.header.index;
+        found = true;
+        return {};
+    }
+    GS::UniString name;
+    if (os.Get (nameField, name)) {
+        API_Attribute attribute = {};
+        attribute.header.typeID = typeId;
+        attribute.header.uniStringNamePtr = &name;
+        if (ACAPI_Attribute_Get (&attribute) != NoError) {
+            return GS::UniString::Printf ("No attribute named '%T' (%s).", name.ToPrintf (), nameField);
+        }
+        index = attribute.header.index;
+        found = true;
+    }
+    return {};
+}
+
+// The library part of a frame or panel class: its index and the guid in its own unique id
+// ("{main guid}-{revision guid}"), which the subelement keeps in symbolID.
+static GS::Optional<GS::UniString> ResolveCWLibraryPart (const GS::UniString& name, Int32& libInd, API_Guid& symbolGuid)
+{
+    API_LibPart libPart = {};
+    GS::ucscpy (libPart.docu_UName, name.ToUStr ());
+    const GSErrCode err = ACAPI_LibraryPart_Search (&libPart, false, true);
+    delete libPart.location;
+    if (err != NoError) {
+        return GS::UniString::Printf ("No library part named '%T' is loaded.", name.ToPrintf ());
+    }
+    libInd = libPart.index;
+    symbolGuid = APINULLGuid;
+    const std::string ownUnID (libPart.ownUnID);
+    if (ownUnID.size () >= 38 && ownUnID[0] == '{') {
+        symbolGuid = APIGuidFromString (ownUnID.substr (1, 36).c_str ());
+    }
+    return {};
+}
+
+static void SetCWOverriddenSurface (API_OverriddenAttribute& attr, API_AttributeIndex index)
+{
+#ifdef ServerMainVers_2700
+    attr.hasValue = true;
+    attr.value = index;
+#else
+    attr.overridden = true;
+    attr.attributeIndex = index;
+#endif
+}
+
+static bool GetCWOverriddenSurface (const API_OverriddenAttribute& attr, API_AttributeIndex& index)
+{
+#ifdef ServerMainVers_2700
+    index = attr.value;
+    return attr.hasValue;
+#else
+    index = attr.attributeIndex;
+    return attr.overridden;
+#endif
+}
+
+// What a frame item asks for, kept to check after the change that Archicad kept it.
+struct CWFrameRequest {
+    GS::Optional<double> width;
+    GS::Optional<double> depth;
+    GS::Optional<double> offset;
+    GS::Optional<double> holeDepth;
+    GS::Optional<double> holeWidth;
+    GS::Optional<Int32> libInd;
+    GS::Optional<bool> invisible;
+    GS::Optional<API_AttributeIndex> buildingMaterial;
+    GS::Optional<API_AttributeIndex> surface;
+};
+
+struct CWPanelRequest {
+    GS::Optional<double> thickness;
+    GS::Optional<Int32> libInd;
+    GS::Optional<bool> generic;
+    GS::Optional<API_AttributeIndex> buildingMaterial;
+    GS::Optional<API_AttributeIndex> outerSurface;
+    GS::Optional<API_AttributeIndex> innerSurface;
+    GS::Optional<API_AttributeIndex> edgeSurface;
+};
+
+// Writes the fields of a frame item into `frame`. The width of the profile is a1 + a2 (split
+// evenly, as the Frame Settings dialog does), the depth b1 + b2, and the offset b2 - the part of
+// the depth on the outer side of the panels; b1 is the rest.
+static GS::Optional<GS::UniString> ApplyCWFrameSettings (const GS::ObjectState& os, const GS::UniString& path, API_CWFrameType& frame, CWFrameRequest& request)
+{
+    double value = 0.0;
+    if (os.Get ("width", value)) {
+        if (value <= 0.0) {
+            return path + ".width must be positive.";
+        }
+        frame.a1 = value / 2.0;
+        frame.a2 = value / 2.0;
+        request.width = value;
+    }
+
+    const bool hasDepth = os.Get ("depth", value);
+    const double depth = hasDepth ? value : frame.b1 + frame.b2;
+    if (hasDepth && depth <= 0.0) {
+        return path + ".depth must be positive.";
+    }
+    double offset = frame.b2;
+    const bool hasOffset = os.Get ("offset", offset);
+    if (hasOffset && (offset < 0.0 || offset > depth + CurtainWallDefaultsEps)) {
+        return path + GS::UniString::Printf (".offset must be between 0 and the depth of the frame (%.4f).", depth);
+    }
+    if (!hasOffset && offset > depth) {
+        offset = depth;
+    }
+    if (hasDepth || hasOffset) {
+        frame.b2 = offset;
+        frame.b1 = depth - offset;
+        request.depth = depth;
+        request.offset = offset;
+    }
+
+    GS::ObjectState hole;
+    if (os.Get ("panelConnectionHole", hole)) {
+        if (hole.Get ("depth", value)) {
+            if (value < 0.0) {
+                return path + ".panelConnectionHole.depth must not be negative.";
+            }
+            frame.d = value;
+            request.holeDepth = value;
+        }
+        if (hole.Get ("width", value)) {
+            if (value < 0.0) {
+                return path + ".panelConnectionHole.width must not be negative.";
+            }
+            frame.w = value;
+            request.holeWidth = value;
+        }
+    }
+
+    bool invisible = false;
+    const bool hasInvisible = os.Get ("invisible", invisible);
+    GS::UniString libraryPartName;
+    if (os.Get ("libraryPartName", libraryPartName)) {
+        if (hasInvisible && invisible) {
+            return path + ": libraryPartName and invisible: true exclude each other.";
+        }
+        Int32 libInd = 0;
+        API_Guid symbolGuid = APINULLGuid;
+        const auto error = ResolveCWLibraryPart (libraryPartName, libInd, symbolGuid);
+        if (error.HasValue ()) {
+            return path + ".libraryPartName: " + error.Get ();
+        }
+        frame.objectType = APICWFrObjectType_GDL;
+        frame.hasSymbol = true;
+        frame.libInd = libInd;
+        if (symbolGuid != APINULLGuid) {
+            frame.symbolID = symbolGuid;
+        }
+        request.libInd = libInd;
+        request.invisible = false;
+    } else if (hasInvisible) {
+        if (invisible) {
+            frame.objectType = APICWFrObjectType_Invisible;
+        } else if (frame.objectType != APICWFrObjectType_GDL) {
+            if (frame.libInd <= 0) {
+                return path + ": invisible: false needs libraryPartName, because the frame class has no library part to show.";
+            }
+            frame.objectType = APICWFrObjectType_GDL;
+        }
+        request.invisible = invisible;
+    }
+
+    API_AttributeIndex index = {};
+    bool found = false;
+    auto error = ResolveCWAttribute (os, "buildingMaterialId", "buildingMaterialName", API_BuildingMaterialID, index, found);
+    if (error.HasValue ()) {
+        return path + ": " + error.Get ();
+    }
+    if (found) {
+        frame.buildingMaterial = index;
+        request.buildingMaterial = index;
+    }
+    error = ResolveCWAttribute (os, "surfaceId", "surfaceName", API_MaterialID, index, found);
+    if (error.HasValue ()) {
+        return path + ": " + error.Get ();
+    }
+    if (found) {
+        frame.material = index;
+        frame.useOwnMaterial = true;
+        request.surface = index;
+    }
+    return {};
+}
+
+static GS::Optional<GS::UniString> ApplyCWPanelSettings (const GS::ObjectState& os, const GS::UniString& path, API_CWPanelType& panel, CWPanelRequest& request)
+{
+    double value = 0.0;
+    if (os.Get ("thickness", value)) {
+        if (value <= 0.0) {
+            return path + ".thickness must be positive.";
+        }
+        panel.thickness = value;
+        request.thickness = value;
+    }
+
+    bool generic = false;
+    const bool hasGeneric = os.Get ("generic", generic);
+    GS::UniString libraryPartName;
+    if (os.Get ("libraryPartName", libraryPartName)) {
+        if (hasGeneric && generic) {
+            return path + ": libraryPartName and generic: true exclude each other.";
+        }
+        Int32 libInd = 0;
+        API_Guid symbolGuid = APINULLGuid;
+        const auto error = ResolveCWLibraryPart (libraryPartName, libInd, symbolGuid);
+        if (error.HasValue ()) {
+            return path + ".libraryPartName: " + error.Get ();
+        }
+        panel.objectType = APICWPaObjectType_GDL;
+        panel.hasSymbol = true;
+        panel.libInd = libInd;
+        if (symbolGuid != APINULLGuid) {
+            panel.symbolID = symbolGuid;
+        }
+        request.libInd = libInd;
+        request.generic = false;
+    } else if (hasGeneric) {
+        if (generic) {
+            panel.objectType = APICWPaObjectType_Generic;
+            panel.hasSymbol = false;
+        } else if (panel.objectType != APICWPaObjectType_GDL) {
+            return path + ": generic: false needs libraryPartName.";
+        }
+        request.generic = generic;
+    }
+
+    API_AttributeIndex index = {};
+    bool found = false;
+    auto error = ResolveCWAttribute (os, "buildingMaterialId", "buildingMaterialName", API_BuildingMaterialID, index, found);
+    if (error.HasValue ()) {
+        return path + ": " + error.Get ();
+    }
+    if (found) {
+        panel.buildingMaterial = index;
+        request.buildingMaterial = index;
+    }
+
+    error = ResolveCWAttribute (os, "surfaceId", "surfaceName", API_MaterialID, index, found);
+    if (error.HasValue ()) {
+        return path + ": " + error.Get ();
+    }
+    if (found) {
+        SetCWOverriddenSurface (panel.outerSurfaceMaterial, index);
+        SetCWOverriddenSurface (panel.innerSurfaceMaterial, index);
+        SetCWOverriddenSurface (panel.cutSurfaceMaterial, index);
+        request.outerSurface = index;
+        request.innerSurface = index;
+        request.edgeSurface = index;
+    }
+    error = ResolveCWAttribute (os, "outerSurfaceId", "outerSurfaceName", API_MaterialID, index, found);
+    if (error.HasValue ()) {
+        return path + ": " + error.Get ();
+    }
+    if (found) {
+        SetCWOverriddenSurface (panel.outerSurfaceMaterial, index);
+        request.outerSurface = index;
+    }
+    error = ResolveCWAttribute (os, "innerSurfaceId", "innerSurfaceName", API_MaterialID, index, found);
+    if (error.HasValue ()) {
+        return path + ": " + error.Get ();
+    }
+    if (found) {
+        SetCWOverriddenSurface (panel.innerSurfaceMaterial, index);
+        request.innerSurface = index;
+    }
+    error = ResolveCWAttribute (os, "edgeSurfaceId", "edgeSurfaceName", API_MaterialID, index, found);
+    if (error.HasValue ()) {
+        return path + ": " + error.Get ();
+    }
+    if (found) {
+        SetCWOverriddenSurface (panel.cutSurfaceMaterial, index);
+        request.edgeSurface = index;
+    }
+    return {};
+}
+
+static bool IsSameCWValue (double a, double b)
+{
+    return std::abs (a - b) <= CurtainWallDefaultsEps;
+}
+
+// The fields of `request` that the frame read back from the defaults does not have.
+static GS::Array<GS::UniString> GetNotKeptCWFrameFields (const API_CWFrameType& frame, const CWFrameRequest& request)
+{
+    GS::Array<GS::UniString> notKept;
+    if (request.width.HasValue () && !IsSameCWValue (frame.a1 + frame.a2, request.width.Get ())) {
+        notKept.Push ("width");
+    }
+    if (request.depth.HasValue () && !IsSameCWValue (frame.b1 + frame.b2, request.depth.Get ())) {
+        notKept.Push ("depth");
+    }
+    if (request.offset.HasValue () && !IsSameCWValue (frame.b2, request.offset.Get ())) {
+        notKept.Push ("offset");
+    }
+    if (request.holeDepth.HasValue () && !IsSameCWValue (frame.d, request.holeDepth.Get ())) {
+        notKept.Push ("panelConnectionHole.depth");
+    }
+    if (request.holeWidth.HasValue () && !IsSameCWValue (frame.w, request.holeWidth.Get ())) {
+        notKept.Push ("panelConnectionHole.width");
+    }
+    if (request.libInd.HasValue () && (frame.libInd != request.libInd.Get () || frame.objectType != APICWFrObjectType_GDL)) {
+        notKept.Push ("libraryPartName");
+    }
+    if (request.invisible.HasValue () && (frame.objectType == APICWFrObjectType_Invisible) != request.invisible.Get ()) {
+        notKept.Push ("invisible");
+    }
+    if (request.buildingMaterial.HasValue () && !(frame.buildingMaterial == request.buildingMaterial.Get ())) {
+        notKept.Push ("buildingMaterial");
+    }
+    if (request.surface.HasValue () && (!frame.useOwnMaterial || !(frame.material == request.surface.Get ()))) {
+        notKept.Push ("surface");
+    }
+    return notKept;
+}
+
+static GS::Array<GS::UniString> GetNotKeptCWPanelFields (const API_CWPanelType& panel, const CWPanelRequest& request)
+{
+    GS::Array<GS::UniString> notKept;
+    if (request.thickness.HasValue () && !IsSameCWValue (panel.thickness, request.thickness.Get ())) {
+        notKept.Push ("thickness");
+    }
+    if (request.libInd.HasValue () && (panel.libInd != request.libInd.Get () || panel.objectType != APICWPaObjectType_GDL)) {
+        notKept.Push ("libraryPartName");
+    }
+    if (request.generic.HasValue () && (panel.objectType == APICWPaObjectType_Generic) != request.generic.Get ()) {
+        notKept.Push ("generic");
+    }
+    if (request.buildingMaterial.HasValue () && !(panel.buildingMaterial == request.buildingMaterial.Get ())) {
+        notKept.Push ("buildingMaterial");
+    }
+    const auto checkSurface = [&] (const API_OverriddenAttribute& attr, const GS::Optional<API_AttributeIndex>& requested, const char* field) {
+        if (!requested.HasValue ()) {
+            return;
+        }
+        API_AttributeIndex index = {};
+        if (!GetCWOverriddenSurface (attr, index) || !(index == requested.Get ())) {
+            notKept.Push (field);
+        }
+    };
+    checkSurface (panel.outerSurfaceMaterial, request.outerSurface, "outerSurface");
+    checkSurface (panel.innerSurfaceMaterial, request.innerSurface, "innerSurface");
+    checkSurface (panel.cutSurfaceMaterial, request.edgeSurface, "edgeSurface");
+    return notKept;
+}
+
+template <typename T>
+static GS::Array<T> GetCWClassArray (const T* classes)
+{
+    GS::Array<T> result;
+    if (classes == nullptr) {
+        return result;
+    }
+    const UInt32 n = static_cast<UInt32> (BMpGetSize (reinterpret_cast<GSPtr> (const_cast<T*> (classes))) / sizeof (T));
+    for (UInt32 i = 0; i < n; ++i) {
+        result.Push (classes[i]);
+    }
+    return result;
+}
+
+template <typename T>
+static void SetCWClassArray (T*& classes, const GS::Array<T>& values)
+{
+    if (classes != nullptr) {
+        BMpKill (reinterpret_cast<GSPtr*> (&classes));
+    }
+    classes = reinterpret_cast<T*> (BMpAll (values.GetSize () * sizeof (T)));
+    for (UIndex i = 0; i < values.GetSize (); ++i) {
+        classes[i] = values[i];
+    }
+}
+
+template <typename T>
+static GS::Optional<UIndex> FindCWClassByName (const GS::Array<T>& classes, const GS::UniString& name)
+{
+    for (UIndex i = 0; i < classes.GetSize (); ++i) {
+        if (GetCWClassName (classes[i].className) == name) {
+            return i;
+        }
+    }
+    return {};
+}
+
+static GS::ObjectState CreateCWClassResult (const GS::UniString& name, Int32 classIndex, const char* result, const GS::Array<GS::UniString>& notKept)
+{
+    GS::ObjectState os;
+    os.Add ("name", name);
+    os.Add ("classIndex", classIndex);
+    os.Add ("result", result);
+    if (!notKept.IsEmpty ()) {
+        const auto& notKeptList = os.AddList<GS::UniString> ("notKept");
+        for (const GS::UniString& field : notKept) {
+            notKeptList (field);
+        }
+    }
+    return os;
+}
+
+static GS::ObjectState CreateCWFrameResult (const GS::Array<GS::UniString>& notKept)
+{
+    GS::ObjectState os;
+    os.Add ("result", "modified");
+    if (!notKept.IsEmpty ()) {
+        const auto& notKeptList = os.AddList<GS::UniString> ("notKept");
+        for (const GS::UniString& field : notKept) {
+            notKeptList (field);
+        }
+    }
+    return os;
+}
+
+SetCurtainWallSystemDefaultsCommand::SetCurtainWallSystemDefaultsCommand () :
+    CommandBase (CommonSchema::Used)
+{
+}
+
+GS::String SetCurtainWallSystemDefaultsCommand::GetName () const
+{
+    return "SetCurtainWallSystemDefaults";
+}
+
+static const char* CWFrameSettingsProperties = R"(
+                "width": {
+                    "type": "number",
+                    "description": "Visible (face) width of the frame profile, a1 + a2 in the API (split evenly).",
+                    "exclusiveMinimum": 0.0
+                },
+                "depth": {
+                    "type": "number",
+                    "description": "Depth of the frame profile perpendicular to the curtain wall, b1 + b2 in the API.",
+                    "exclusiveMinimum": 0.0
+                },
+                "offset": {
+                    "type": "number",
+                    "description": "The part of the depth on the outer side of the panels (b2); the rest (depth - offset) is on the inner side (b1). Without it the current outer part is kept (at most the depth).",
+                    "minimum": 0.0
+                },
+                "panelConnectionHole": {
+                    "type": "object",
+                    "description": "The slot the panels sit in.",
+                    "properties": {
+                        "depth": { "type": "number", "minimum": 0.0, "description": "Depth of the slot (d)." },
+                        "width": { "type": "number", "minimum": 0.0, "description": "Width of the slot (w)." }
+                    },
+                    "additionalProperties": false
+                },
+                "libraryPartName": {
+                    "type": "string",
+                    "description": "The frame object (library part) of the frame, e.g. one of the curtain wall frame objects of the loaded library. Makes the frame library part based."
+                },
+                "invisible": {
+                    "type": "boolean",
+                    "description": "true makes the frame Invisible (no geometry). false turns an invisible frame back to its library part."
+                },
+                "buildingMaterialId": {
+                    "$ref": "#/AttributeIdArrayItem",
+                    "description": "Building material of the frame."
+                },
+                "buildingMaterialName": {
+                    "type": "string",
+                    "description": "Building material of the frame, by name (when buildingMaterialId is not given)."
+                },
+                "surfaceId": {
+                    "$ref": "#/AttributeIdArrayItem",
+                    "description": "Surface of the frame. The frame then uses its own surface instead of the one of its library part."
+                },
+                "surfaceName": {
+                    "type": "string",
+                    "description": "Surface of the frame, by name (when surfaceId is not given)."
+                })";
+
+static const char* CWPanelSettingsProperties = R"(
+                "thickness": {
+                    "type": "number",
+                    "description": "Thickness of the panel.",
+                    "exclusiveMinimum": 0.0
+                },
+                "libraryPartName": {
+                    "type": "string",
+                    "description": "The panel object (library part) of the panel class. Makes the panel library part based."
+                },
+                "generic": {
+                    "type": "boolean",
+                    "description": "true makes the panel a generic (plain) panel instead of a library part based one."
+                },
+                "buildingMaterialId": {
+                    "$ref": "#/AttributeIdArrayItem",
+                    "description": "Building material of the panel. Glass or opaque is a matter of the building material and surfaces: the API has no glazing flag for a panel class."
+                },
+                "buildingMaterialName": {
+                    "type": "string",
+                    "description": "Building material of the panel, by name (when buildingMaterialId is not given)."
+                },
+                "surfaceId": {
+                    "$ref": "#/AttributeIdArrayItem",
+                    "description": "Surface of all faces of the panel (outer, inner and edge), overriding the building material's surface."
+                },
+                "surfaceName": {
+                    "type": "string",
+                    "description": "Surface of all faces of the panel, by name."
+                },
+                "outerSurfaceId": { "$ref": "#/AttributeIdArrayItem", "description": "Surface of the outer face of the panel." },
+                "outerSurfaceName": { "type": "string", "description": "Surface of the outer face of the panel, by name." },
+                "innerSurfaceId": { "$ref": "#/AttributeIdArrayItem", "description": "Surface of the inner face of the panel." },
+                "innerSurfaceName": { "type": "string", "description": "Surface of the inner face of the panel, by name." },
+                "edgeSurfaceId": { "$ref": "#/AttributeIdArrayItem", "description": "Surface of the edges of the panel." },
+                "edgeSurfaceName": { "type": "string", "description": "Surface of the edges of the panel, by name." })";
+
+GS::Optional<GS::UniString> SetCurtainWallSystemDefaultsCommand::GetInputParametersSchema () const
+{
+    GS::UniString schema = R"({
+        "type": "object",
+        "properties": {
+            "frameClasses": {
+                "type": "array",
+                "description": "Frame classes of the Curtain Wall tool defaults to create or change, by name. A class with the given name is changed; otherwise a new class is added after the existing ones, copied from basedOn (or from the first frame class). Only the given fields are written.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "Name of the frame class." },
+                        "basedOn": { "type": "string", "description": "Optional name of an existing frame class a new class is copied from, with its frame object, profile and surfaces. Ignored when the class exists." },)";
+    schema += CWFrameSettingsProperties;
+    schema += R"(
+                    },
+                    "additionalProperties": false,
+                    "required": ["name"]
+                }
+            },
+            "panelClasses": {
+                "type": "array",
+                "description": "Panel classes of the Curtain Wall tool defaults to create or change, by name. A class with the given name is changed; otherwise a new class is added after the existing ones, copied from basedOn (or from the first panel class). Only the given fields are written.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "Name of the panel class." },
+                        "basedOn": { "type": "string", "description": "Optional name of an existing panel class a new class is copied from. Ignored when the class exists." },)";
+    schema += CWPanelSettingsProperties;
+    schema += R"(
+                    },
+                    "additionalProperties": false,
+                    "required": ["name"]
+                }
+            },
+            "boundaryFrame": {
+                "type": "object",
+                "description": "Settings of the boundary frames (the frames around the curtain wall).",
+                "properties": {)";
+    schema += CWFrameSettingsProperties;
+    schema += R"(
+                },
+                "additionalProperties": false
+            },
+            "cornerFrame": {
+                "type": "object",
+                "description": "Settings of the corner frames (between two segments).",
+                "properties": {)";
+    schema += CWFrameSettingsProperties;
+    schema += R"(
+                },
+                "additionalProperties": false
+            },
+            "boundaryFramePosition": {
+                "type": "string",
+                "enum": ["Outside", "Center", "Inside"],
+                "description": "Position of the boundary frames relative to the reference line."
+            },
+            "primaryPattern": {
+                "$ref": "#/CurtainWallPattern",
+                "description": "Optional column pattern of the defaults, as in CreateCurtainWalls."
+            },
+            "secondaryPattern": {
+                "$ref": "#/CurtainWallPattern",
+                "description": "Optional row pattern of the defaults, as in CreateCurtainWalls."
+            },
+            "cells": {
+                "type": "array",
+                "description": "Optional assignment of panel and frame classes to the cells of the pattern unit of the defaults, as in CreateCurtainWalls. The class indices count the classes after this command's changes (the classIndex values of the response).",
+                "items": { "$ref": "#/CurtainWallPatternCell" }
+            },
+            "favorite": {
+                "type": "object",
+                "description": "Optional Favorite saved from the Curtain Wall defaults after the change, as CreateFavoritesFromDefaults does.",
+                "properties": {
+                    "name": { "type": "string", "description": "Name of the Favorite." },
+                    "folder": { "type": "array", "items": { "type": "string" }, "description": "Optional folder hierarchy in the Favorites palette." },
+                    "overwriteExisting": { "type": "boolean", "description": "Overwrite a Favorite of the same name. The default is false." }
+                },
+                "additionalProperties": false,
+                "required": ["name"]
+            },
+            "restoreDefaults": {
+                "type": "boolean",
+                "description": "Put the Curtain Wall tool defaults back as they were at the end, e.g. when only the favorite is wanted. The default is false (the defaults keep the change)."
+            }
+        },
+        "additionalProperties": false
+    })";
+    return schema;
+}
+
+GS::Optional<GS::UniString> SetCurtainWallSystemDefaultsCommand::GetRawResponseSchema () const
+{
+    return R"({
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "frameClasses": {
+                        "type": "array",
+                        "description": "One item per input frame class, in the same order.",
+                        "items": { "oneOf": [ {
+                                "type": "object",
+                                "description": "The class as it is in the Curtain Wall defaults after the change.",
+                                "properties": {
+                                    "name": { "type": "string" },
+                                    "classIndex": { "type": "integer", "description": "The index CreateCurtainWalls cells (and the cells of this command) refer to the class by: frame classes from 4, panel classes from 1." },
+                                    "result": { "type": "string", "enum": ["created", "modified"] },
+                                    "notKept": { "type": "array", "items": { "type": "string" }, "description": "Input fields whose value Archicad did not keep (read back from the defaults). Absent when everything was kept." }
+                                },
+                                "additionalProperties": false,
+                                "required": ["name", "classIndex", "result"]
+                            }, { "$ref": "#/ErrorItem" } ] }
+                    },
+                    "panelClasses": {
+                        "type": "array",
+                        "description": "One item per input panel class, in the same order.",
+                        "items": { "oneOf": [ {
+                                "type": "object",
+                                "description": "The class as it is in the Curtain Wall defaults after the change.",
+                                "properties": {
+                                    "name": { "type": "string" },
+                                    "classIndex": { "type": "integer", "description": "The index CreateCurtainWalls cells (and the cells of this command) refer to the class by: frame classes from 4, panel classes from 1." },
+                                    "result": { "type": "string", "enum": ["created", "modified"] },
+                                    "notKept": { "type": "array", "items": { "type": "string" }, "description": "Input fields whose value Archicad did not keep (read back from the defaults). Absent when everything was kept." }
+                                },
+                                "additionalProperties": false,
+                                "required": ["name", "classIndex", "result"]
+                            }, { "$ref": "#/ErrorItem" } ] }
+                    },
+                    "boundaryFrame": { "oneOf": [ {
+                                "type": "object",
+                                "properties": {
+                                    "result": { "type": "string", "enum": ["modified"] },
+                                    "notKept": { "type": "array", "items": { "type": "string" }, "description": "Input fields whose value Archicad did not keep. Absent when everything was kept." }
+                                },
+                                "additionalProperties": false,
+                                "required": ["result"]
+                            }, { "$ref": "#/ErrorItem" } ] },
+                    "cornerFrame": { "oneOf": [ {
+                                "type": "object",
+                                "properties": {
+                                    "result": { "type": "string", "enum": ["modified"] },
+                                    "notKept": { "type": "array", "items": { "type": "string" }, "description": "Input fields whose value Archicad did not keep. Absent when everything was kept." }
+                                },
+                                "additionalProperties": false,
+                                "required": ["result"]
+                            }, { "$ref": "#/ErrorItem" } ] },
+                    "favorite": {
+                        "oneOf": [
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "name": { "type": "string" },
+                                    "result": { "type": "string", "enum": ["created", "overwritten"] }
+                                },
+                                "additionalProperties": false,
+                                "required": ["name", "result"]
+                            },
+                            { "$ref": "#/ErrorItem" }
+                        ]
+                    },
+                    "defaultsRestored": {
+                        "type": "boolean",
+                        "description": "Present when restoreDefaults was asked: whether the defaults were put back."
+                    }
+                },
+                "additionalProperties": false,
+                "required": ["frameClasses", "panelClasses"]
+            },
+            { "$ref": "#/ErrorItem" }
+        ]
+    })";
+}
+
+GS::ObjectState SetCurtainWallSystemDefaultsCommand::Execute (const GS::ObjectState& parameters, GS::ProcessControl& /*processControl*/) const
+{
+    GS::Array<GS::ObjectState> frameItems;
+    GS::Array<GS::ObjectState> panelItems;
+    parameters.Get ("frameClasses", frameItems);
+    parameters.Get ("panelClasses", panelItems);
+    bool restoreDefaults = false;
+    parameters.Get ("restoreDefaults", restoreDefaults);
+
+    GS::ObjectState response;
+
+    ACAPI_CallUndoableCommand ("SetCurtainWallSystemDefaults", [&] () -> GSErrCode {
+        API_Element element = {};
+        API_ElementMemo memo = {};
+        const GS::OnExit memoGuard ([&memo] () { ACAPI_DisposeElemMemoHdls (&memo); });
+#ifdef ServerMainVers_2600
+        element.header.type = API_CurtainWallID;
+#else
+        element.header.typeID = API_CurtainWallID;
+#endif
+        GSErrCode err = ACAPI_Element_GetDefaultsExt (&element, &memo, 0, nullptr);
+        if (err != NoError) {
+            response = CreateErrorResponse (err, "Failed to read the Curtain Wall tool defaults.");
+            return NoError;
+        }
+
+        // The defaults as they were, for restoreDefaults. Read and written back with the Ext
+        // functions, which the API documents for the Curtain Wall and its subelement defaults.
+        API_Element snapshot = element;
+        API_ElementMemo snapshotMemo = {};
+        const GS::OnExit snapshotGuard ([&] () { ACAPI_DisposeElemMemoHdls (&snapshotMemo); });
+        if (restoreDefaults) {
+            ACAPI_Element_GetDefaultsExt (&snapshot, &snapshotMemo, 0, nullptr);
+        }
+
+        GS::Array<API_CWFrameType> frameClasses = GetCWClassArray (memo.cWallFrameDefaults);
+        GS::Array<API_CWPanelType> panelClasses = GetCWClassArray (memo.cWallPanelDefaults);
+
+        // Per input item: its index in the new class list and what it asked for, or its error.
+        struct FrameItemState { GS::UniString name; UIndex index = 0; bool created = false; CWFrameRequest request; GS::Optional<GS::ObjectState> error; };
+        struct PanelItemState { GS::UniString name; UIndex index = 0; bool created = false; CWPanelRequest request; GS::Optional<GS::ObjectState> error; };
+        GS::Array<FrameItemState> frameStates;
+        GS::Array<PanelItemState> panelStates;
+
+        for (UIndex i = 0; i < frameItems.GetSize (); ++i) {
+            const GS::ObjectState& item = frameItems[i];
+            FrameItemState state;
+            const GS::UniString path = GS::UniString::Printf ("frameClasses[%u]", i);
+            if (!item.Get ("name", state.name) || state.name.IsEmpty ()) {
+                state.error = CreateErrorResponse (APIERR_BADNAME, path + ": missing or empty name.");
+                frameStates.Push (state);
+                continue;
+            }
+            const GS::Optional<UIndex> existing = FindCWClassByName (frameClasses, state.name);
+            API_CWFrameType frame = {};
+            if (existing.HasValue ()) {
+                frame = frameClasses[existing.Get ()];
+            } else {
+                GS::UniString basedOn;
+                if (item.Get ("basedOn", basedOn)) {
+                    const GS::Optional<UIndex> source = FindCWClassByName (frameClasses, basedOn);
+                    if (!source.HasValue ()) {
+                        state.error = CreateErrorResponse (APIERR_BADNAME, path + GS::UniString::Printf (": no frame class named '%T' to copy (basedOn).", basedOn.ToPrintf ()));
+                        frameStates.Push (state);
+                        continue;
+                    }
+                    frame = frameClasses[source.Get ()];
+                } else if (!frameClasses.IsEmpty ()) {
+                    frame = frameClasses[0];
+                } else {
+                    frame = element.curtainWall.boundaryFrameData;
+                }
+                frame.defaultSubElem = false;
+                SetCWClassName (frame.className, state.name);
+            }
+            const auto error = ApplyCWFrameSettings (item, path, frame, state.request);
+            if (error.HasValue ()) {
+                state.error = CreateErrorResponse (APIERR_BADPARS, error.Get ());
+                frameStates.Push (state);
+                continue;
+            }
+            if (existing.HasValue ()) {
+                state.index = existing.Get ();
+                frameClasses[state.index] = frame;
+            } else {
+                state.index = frameClasses.GetSize ();
+                state.created = true;
+                frameClasses.Push (frame);
+            }
+            frameStates.Push (state);
+        }
+
+        for (UIndex i = 0; i < panelItems.GetSize (); ++i) {
+            const GS::ObjectState& item = panelItems[i];
+            PanelItemState state;
+            const GS::UniString path = GS::UniString::Printf ("panelClasses[%u]", i);
+            if (!item.Get ("name", state.name) || state.name.IsEmpty ()) {
+                state.error = CreateErrorResponse (APIERR_BADNAME, path + ": missing or empty name.");
+                panelStates.Push (state);
+                continue;
+            }
+            const GS::Optional<UIndex> existing = FindCWClassByName (panelClasses, state.name);
+            API_CWPanelType panel = {};
+            if (existing.HasValue ()) {
+                panel = panelClasses[existing.Get ()];
+            } else {
+                GS::UniString basedOn;
+                GS::Optional<UIndex> source;
+                if (item.Get ("basedOn", basedOn)) {
+                    source = FindCWClassByName (panelClasses, basedOn);
+                    if (!source.HasValue ()) {
+                        state.error = CreateErrorResponse (APIERR_BADNAME, path + GS::UniString::Printf (": no panel class named '%T' to copy (basedOn).", basedOn.ToPrintf ()));
+                        panelStates.Push (state);
+                        continue;
+                    }
+                } else if (!panelClasses.IsEmpty ()) {
+                    source = 0;
+                } else {
+                    state.error = CreateErrorResponse (APIERR_GENERAL, path + ": the Curtain Wall defaults have no panel class to copy a new one from.");
+                    panelStates.Push (state);
+                    continue;
+                }
+                panel = panelClasses[source.Get ()];
+                panel.defaultSubElem = false;
+                SetCWClassName (panel.className, state.name);
+            }
+            const auto error = ApplyCWPanelSettings (item, path, panel, state.request);
+            if (error.HasValue ()) {
+                state.error = CreateErrorResponse (APIERR_BADPARS, error.Get ());
+                panelStates.Push (state);
+                continue;
+            }
+            if (existing.HasValue ()) {
+                state.index = existing.Get ();
+                panelClasses[state.index] = panel;
+            } else {
+                state.index = panelClasses.GetSize ();
+                state.created = true;
+                panelClasses.Push (panel);
+            }
+            panelStates.Push (state);
+        }
+
+        // The element comes from the defaults themselves, so a full mask writes back only what is
+        // changed here. A partial mask would not do: ACAPI_ELEMENT_MASK_SET marks a single field
+        // (its first byte), not every field of the boundary and corner frame structures.
+        API_Element mask;
+        ACAPI_ELEMENT_MASK_SETFULL (mask);
+
+        // The boundary and the corner frames are part of the element, not of the class lists.
+        GS::Optional<GS::ObjectState> boundaryError;
+        GS::Optional<GS::ObjectState> cornerError;
+        CWFrameRequest boundaryRequest;
+        CWFrameRequest cornerRequest;
+        const GS::ObjectState* boundaryOS = parameters.Get ("boundaryFrame");
+        if (boundaryOS != nullptr) {
+            API_CWFrameType frame = element.curtainWall.boundaryFrameData;
+            const auto error = ApplyCWFrameSettings (*boundaryOS, "boundaryFrame", frame, boundaryRequest);
+            if (error.HasValue ()) {
+                boundaryError = CreateErrorResponse (APIERR_BADPARS, error.Get ());
+            } else {
+                element.curtainWall.boundaryFrameData = frame;
+            }
+        }
+        const GS::ObjectState* cornerOS = parameters.Get ("cornerFrame");
+        if (cornerOS != nullptr) {
+            API_CWFrameType frame = element.curtainWall.cornerFrameData;
+            const auto error = ApplyCWFrameSettings (*cornerOS, "cornerFrame", frame, cornerRequest);
+            if (error.HasValue ()) {
+                cornerError = CreateErrorResponse (APIERR_BADPARS, error.Get ());
+            } else {
+                element.curtainWall.cornerFrameData = frame;
+            }
+        }
+
+        GS::UniString boundaryFramePosition;
+        if (parameters.Get ("boundaryFramePosition", boundaryFramePosition)) {
+            if (boundaryFramePosition == "Outside") {
+                element.curtainWall.boundaryFramePosition = APICW_Boundary_OutSide;
+            } else if (boundaryFramePosition == "Center") {
+                element.curtainWall.boundaryFramePosition = APICW_Boundary_Center;
+            } else if (boundaryFramePosition == "Inside") {
+                element.curtainWall.boundaryFramePosition = APICW_Boundary_Inside;
+            } else {
+                response = CreateErrorResponse (APIERR_BADPARS, "boundaryFramePosition must be 'Outside', 'Center' or 'Inside'.");
+                return NoError;
+            }
+        }
+
+        SetCWClassArray (memo.cWallFrameDefaults, frameClasses);
+        SetCWClassArray (memo.cWallPanelDefaults, panelClasses);
+        element.curtainWall.nFrameDefaults = frameClasses.GetSize ();
+        element.curtainWall.nPanelDefaults = panelClasses.GetSize ();
+
+        // The pattern of the defaults: an invalid pattern refuses the whole command, because the
+        // cells refer to it and to the classes as a whole.
+        bool patternChanged = false;
+        const GS::ObjectState* primaryPattern = parameters.Get ("primaryPattern");
+        if (primaryPattern != nullptr) {
+            const auto error = ApplyCurtainWallPattern (*primaryPattern, "primaryPattern", memo.cWSegPrimaryPattern);
+            if (error.HasValue ()) {
+                response = CreateErrorResponse (APIERR_BADPARS, error.Get ());
+                return NoError;
+            }
+            patternChanged = true;
+        }
+        const GS::ObjectState* secondaryPattern = parameters.Get ("secondaryPattern");
+        if (secondaryPattern != nullptr) {
+            const auto error = ApplyCurtainWallPattern (*secondaryPattern, "secondaryPattern", memo.cWSegSecondaryPattern);
+            if (error.HasValue ()) {
+                response = CreateErrorResponse (APIERR_BADPARS, error.Get ());
+                return NoError;
+            }
+            patternChanged = true;
+        }
+        GS::Array<GS::ObjectState> cells;
+        parameters.Get ("cells", cells);
+        const auto cellsError = ApplyCurtainWallPatternCells (cells, element, memo, patternChanged);
+        if (cellsError.HasValue ()) {
+            response = CreateErrorResponse (APIERR_BADPARS, cellsError.Get ());
+            return NoError;
+        }
+
+        err = ACAPI_Element_ChangeDefaultsExt (&element, &memo, &mask, 0, nullptr);
+        if (err != NoError) {
+            response = CreateErrorResponse (err, "Archicad refused to change the Curtain Wall tool defaults (ACAPI_Element_ChangeDefaultsExt).");
+            return NoError;
+        }
+
+        // Read the defaults back the way CreateCurtainWalls and CreateFavoritesFromDefaults read
+        // them, and report every asked field that did not arrive there.
+        API_Element check = {};
+        API_ElementMemo checkMemo = {};
+        const GS::OnExit checkGuard ([&checkMemo] () { ACAPI_DisposeElemMemoHdls (&checkMemo); });
+#ifdef ServerMainVers_2600
+        check.header.type = API_CurtainWallID;
+#else
+        check.header.typeID = API_CurtainWallID;
+#endif
+        const auto restore = [&] () -> GSErrCode {
+            API_Element restoreMask;
+            ACAPI_ELEMENT_MASK_SETFULL (restoreMask);
+            return ACAPI_Element_ChangeDefaultsExt (&snapshot, &snapshotMemo, &restoreMask, 0, nullptr);
+        };
+        err = ACAPI_Element_GetDefaults (&check, &checkMemo);
+        if (err != NoError) {
+            if (restoreDefaults) {
+                restore ();
+            }
+            response = CreateErrorResponse (err, "The Curtain Wall tool defaults were changed, but reading them back failed.");
+            return NoError;
+        }
+        const GS::Array<API_CWFrameType> keptFrames = GetCWClassArray (checkMemo.cWallFrameDefaults);
+        const GS::Array<API_CWPanelType> keptPanels = GetCWClassArray (checkMemo.cWallPanelDefaults);
+
+        const auto& frameResults = response.AddList<GS::ObjectState> ("frameClasses");
+        for (const FrameItemState& state : frameStates) {
+            if (state.error.HasValue ()) {
+                frameResults (state.error.Get ());
+                continue;
+            }
+            const GS::Optional<UIndex> kept = FindCWClassByName (keptFrames, state.name);
+            if (!kept.HasValue ()) {
+                frameResults (CreateErrorResponse (APIERR_GENERAL, GS::UniString::Printf ("Archicad did not keep the frame class '%T' in the Curtain Wall defaults.", state.name.ToPrintf ())));
+                continue;
+            }
+            frameResults (CreateCWClassResult (state.name, APICWFrameClass_FirstCustomClass + static_cast<Int32> (kept.Get ()),
+                state.created ? "created" : "modified", GetNotKeptCWFrameFields (keptFrames[kept.Get ()], state.request)));
+        }
+
+        const auto& panelResults = response.AddList<GS::ObjectState> ("panelClasses");
+        for (const PanelItemState& state : panelStates) {
+            if (state.error.HasValue ()) {
+                panelResults (state.error.Get ());
+                continue;
+            }
+            const GS::Optional<UIndex> kept = FindCWClassByName (keptPanels, state.name);
+            if (!kept.HasValue ()) {
+                panelResults (CreateErrorResponse (APIERR_GENERAL, GS::UniString::Printf ("Archicad did not keep the panel class '%T' in the Curtain Wall defaults.", state.name.ToPrintf ())));
+                continue;
+            }
+            panelResults (CreateCWClassResult (state.name, APICWPanelClass_FirstCustomClass + static_cast<Int32> (kept.Get ()),
+                state.created ? "created" : "modified", GetNotKeptCWPanelFields (keptPanels[kept.Get ()], state.request)));
+        }
+
+        if (boundaryOS != nullptr) {
+            response.Add ("boundaryFrame", boundaryError.HasValue () ? boundaryError.Get ()
+                : CreateCWFrameResult (GetNotKeptCWFrameFields (check.curtainWall.boundaryFrameData, boundaryRequest)));
+        }
+        if (cornerOS != nullptr) {
+            response.Add ("cornerFrame", cornerError.HasValue () ? cornerError.Get ()
+                : CreateCWFrameResult (GetNotKeptCWFrameFields (check.curtainWall.cornerFrameData, cornerRequest)));
+        }
+
+        const GS::ObjectState* favoriteOS = parameters.Get ("favorite");
+        if (favoriteOS != nullptr) {
+            GS::UniString favoriteName;
+            favoriteOS->Get ("name", favoriteName);
+            GS::Array<GS::UniString> folderParts;
+            favoriteOS->Get ("folder", folderParts);
+            bool overwriteExisting = false;
+            favoriteOS->Get ("overwriteExisting", overwriteExisting);
+            response.Add ("favorite", SaveToolDefaultsAsFavorite (favoriteName, API_CurtainWallID, folderParts, overwriteExisting));
+        }
+
+        if (restoreDefaults) {
+            response.Add ("defaultsRestored", restore () == NoError);
+        }
+
+        return NoError;
+    });
+
+    return response;
+}
+
+// ============================================================================
+// ModifyRailingDetails - changes the segment height, the post spacing (the length of the railing
+// pattern), the top rail, handrails, rails, panels and baluster spacing of existing Railings.
+//
+// Every change is written twice, as the Element_Test example of the API DevKit does it: on the
+// Railing itself (its defSegment, which Archicad regenerates the segments from - Do_Railing_Edit)
+// and on each existing subelement of that kind (ACAPI_Element_Change on the subelement -
+// Do_Railing_Elevate_Node). The result is then read back from the subelements, so the response
+// says per field whether Archicad kept it, with the error codes of the calls when it did not.
+// ============================================================================
+
+template <typename T>
+static UInt32 GetRailingSubelementCount (const T* subelements)
+{
+    return subelements == nullptr ? 0 : static_cast<UInt32> (BMGetPtrSize (reinterpret_cast<GSPtr> (const_cast<T*> (subelements))) / sizeof (T));
+}
+
+template <typename T>
+static GS::Array<API_Guid> GetRailingSubelementGuids (const T* subelements)
+{
+    GS::Array<API_Guid> guids;
+    const UInt32 n = GetRailingSubelementCount (subelements);
+    for (UInt32 i = 0; i < n; ++i) {
+        guids.Push (subelements[i].head.guid);
+    }
+    return guids;
+}
+
+// The requested changes of one railing.
+struct RailingDetailsRequest {
+    GS::Optional<double> height;
+    GS::Optional<double> postSpacing;
+    GS::Optional<API_DistribTypeID> postDistribution;
+    GS::Optional<bool> toprailVisible;
+    GS::Optional<bool> handrailVisible;
+    GS::Optional<double> handrailHeight;
+    GS::Optional<double> handrailOffset;
+    GS::Optional<bool> handrailDouble;
+    GS::Optional<bool> railVisible;
+    GS::Optional<double> railHeight;
+    GS::Optional<double> railOffset;
+    GS::Optional<bool> panelVisible;
+    GS::Optional<double> balusterSpacing;
+
+    bool ChangesSegment () const { return height.HasValue (); }
+    bool ChangesPattern () const { return postSpacing.HasValue () || postDistribution.HasValue (); }
+    bool ChangesHandrail () const { return handrailVisible.HasValue () || handrailHeight.HasValue () || handrailOffset.HasValue () || handrailDouble.HasValue (); }
+    bool ChangesRail () const { return railVisible.HasValue () || railHeight.HasValue () || railOffset.HasValue (); }
+};
+
+static GS::Optional<GS::UniString> ParseRailingDetailsRequest (const GS::ObjectState& item, RailingDetailsRequest& request)
+{
+    double value = 0.0;
+    bool flag = false;
+    if (item.Get ("height", value)) {
+        if (value <= 0.0) {
+            return GS::UniString ("height must be positive.");
+        }
+        request.height = value;
+    }
+    if (item.Get ("postSpacing", value)) {
+        if (value <= 0.0) {
+            return GS::UniString ("postSpacing must be positive.");
+        }
+        request.postSpacing = value;
+    }
+    GS::UniString distribution;
+    if (item.Get ("postDistribution", distribution)) {
+        if (distribution == "FixedLength") {
+            request.postDistribution = APIDT_PatternLength;
+        } else if (distribution == "BestDivision") {
+            request.postDistribution = APIDT_BestDivisionByLength;
+        } else {
+            return GS::UniString ("postDistribution must be 'FixedLength' or 'BestDivision'.");
+        }
+    }
+    const GS::ObjectState* toprail = item.Get ("toprail");
+    if (toprail != nullptr && toprail->Get ("visible", flag)) {
+        request.toprailVisible = flag;
+    }
+    const GS::ObjectState* handrail = item.Get ("handrail");
+    if (handrail != nullptr) {
+        if (handrail->Get ("visible", flag)) {
+            request.handrailVisible = flag;
+        }
+        if (handrail->Get ("height", value)) {
+            if (value <= 0.0) {
+                return GS::UniString ("handrail.height must be positive.");
+            }
+            request.handrailHeight = value;
+        }
+        if (handrail->Get ("horizontalOffset", value)) {
+            request.handrailOffset = value;
+        }
+        if (handrail->Get ("bothSides", flag)) {
+            request.handrailDouble = flag;
+        }
+    }
+    const GS::ObjectState* rail = item.Get ("rail");
+    if (rail != nullptr) {
+        if (rail->Get ("visible", flag)) {
+            request.railVisible = flag;
+        }
+        if (rail->Get ("height", value)) {
+            if (value <= 0.0) {
+                return GS::UniString ("rail.height must be positive.");
+            }
+            request.railHeight = value;
+        }
+        if (rail->Get ("horizontalOffset", value)) {
+            request.railOffset = value;
+        }
+    }
+    const GS::ObjectState* panel = item.Get ("panel");
+    if (panel != nullptr && panel->Get ("visible", flag)) {
+        request.panelVisible = flag;
+    }
+    if (item.Get ("balusterSpacing", value)) {
+        if (value <= 0.0) {
+            return GS::UniString ("balusterSpacing must be positive.");
+        }
+        request.balusterSpacing = value;
+    }
+    return {};
+}
+
+// The distribution type a post spacing is written with: the asked one, or the current one when it
+// uses a length, or the best division by length when the pattern is divided into a fixed number.
+static API_DistribTypeID GetRailingPostDistribution (const RailingDetailsRequest& request, API_DistribTypeID current)
+{
+    if (request.postDistribution.HasValue ()) {
+        return request.postDistribution.Get ();
+    }
+    return current == APIDT_Divisions ? APIDT_BestDivisionByLength : current;
+}
+
+static void ApplyRailingSegmentRequest (API_RailingSegmentType& segment, const RailingDetailsRequest& request, API_Element& mask, bool onRailing)
+{
+    if (request.height.HasValue ()) {
+        segment.height = request.height.Get ();
+        if (onRailing) {
+            ACAPI_ELEMENT_MASK_SET (mask, API_RailingType, defSegment.height);
+        } else {
+            ACAPI_ELEMENT_MASK_SET (mask, API_RailingSegmentType, height);
+        }
+    }
+}
+
+static void ApplyRailingPatternRequest (API_RailingPatternType& pattern, const RailingDetailsRequest& request, API_Element& mask, bool onRailing)
+{
+    if (request.ChangesPattern ()) {
+        pattern.distribution.type = GetRailingPostDistribution (request, pattern.distribution.type);
+        if (request.postSpacing.HasValue ()) {
+            pattern.distribution.length = request.postSpacing.Get ();
+        }
+        if (onRailing) {
+            ACAPI_ELEMENT_MASK_SET (mask, API_RailingType, defSegment.defPattern.distribution.type);
+            ACAPI_ELEMENT_MASK_SET (mask, API_RailingType, defSegment.defPattern.distribution.length);
+        } else {
+            ACAPI_ELEMENT_MASK_SET (mask, API_RailingPatternType, distribution.type);
+            ACAPI_ELEMENT_MASK_SET (mask, API_RailingPatternType, distribution.length);
+        }
+    }
+    if (request.panelVisible.HasValue ()) {
+        pattern.defPanel.visible = request.panelVisible.Get ();
+        if (onRailing) {
+            ACAPI_ELEMENT_MASK_SET (mask, API_RailingType, defSegment.defPattern.defPanel.visible);
+        } else {
+            ACAPI_ELEMENT_MASK_SET (mask, API_RailingPatternType, defPanel.visible);
+        }
+    }
+    if (request.balusterSpacing.HasValue ()) {
+        pattern.defBalusterSet.distribution.length = request.balusterSpacing.Get ();
+        if (pattern.defBalusterSet.distribution.type == APIDT_Divisions) {
+            pattern.defBalusterSet.distribution.type = APIDT_BestDivisionByLength;
+        }
+        if (onRailing) {
+            ACAPI_ELEMENT_MASK_SET (mask, API_RailingType, defSegment.defPattern.defBalusterSet.distribution.type);
+            ACAPI_ELEMENT_MASK_SET (mask, API_RailingType, defSegment.defPattern.defBalusterSet.distribution.length);
+        } else {
+            ACAPI_ELEMENT_MASK_SET (mask, API_RailingPatternType, defBalusterSet.distribution.type);
+            ACAPI_ELEMENT_MASK_SET (mask, API_RailingPatternType, defBalusterSet.distribution.length);
+        }
+    }
+}
+
+static void ApplyRailingHandrailRequest (API_RailingHandrailType& handrail, const RailingDetailsRequest& request)
+{
+    if (request.handrailVisible.HasValue ()) {
+        handrail.visible = request.handrailVisible.Get ();
+    }
+    if (request.handrailHeight.HasValue ()) {
+        handrail.height = request.handrailHeight.Get ();
+    }
+    if (request.handrailOffset.HasValue ()) {
+        handrail.horizontalOffset = request.handrailOffset.Get ();
+    }
+    if (request.handrailDouble.HasValue ()) {
+        handrail.doubleHandrail = request.handrailDouble.Get ();
+    }
+}
+
+static void ApplyRailingRailRequest (API_RailingRailType& rail, const RailingDetailsRequest& request)
+{
+    if (request.railVisible.HasValue ()) {
+        rail.visible = request.railVisible.Get ();
+    }
+    if (request.railHeight.HasValue ()) {
+        rail.height = request.railHeight.Get ();
+    }
+    if (request.railOffset.HasValue ()) {
+        rail.horizontalOffset = request.railOffset.Get ();
+    }
+}
+
+// Changes every subelement in `guids` with `apply`, which edits the element and its mask. A
+// subelement that cannot be read any more (Archicad may give the subelements new guids when it
+// regenerates the railing after a change) is looked up again by its index in a fresh memo.
+// Returns the first error, or NoError.
+static GSErrCode ChangeRailingSubelements (const API_Guid& railingGuid, UInt64 memoMask,
+                                           const std::function<GS::Array<API_Guid> (const API_ElementMemo&)>& getGuids,
+                                           const std::function<void (API_Element&, API_Element&)>& apply)
+{
+    API_ElementMemo memo = {};
+    GSErrCode err = ACAPI_Element_GetMemo (railingGuid, &memo, memoMask);
+    GS::Array<API_Guid> guids = err == NoError ? getGuids (memo) : GS::Array<API_Guid> ();
+    ACAPI_DisposeElemMemoHdls (&memo);
+    if (err != NoError) {
+        return err;
+    }
+
+    GSErrCode firstError = NoError;
+    for (UIndex i = 0; i < guids.GetSize (); ++i) {
+        API_Element subelement = {};
+        subelement.header.guid = guids[i];
+        err = ACAPI_Element_Get (&subelement);
+        if (err != NoError) {
+            API_ElementMemo freshMemo = {};
+            if (ACAPI_Element_GetMemo (railingGuid, &freshMemo, memoMask) == NoError) {
+                const GS::Array<API_Guid> freshGuids = getGuids (freshMemo);
+                if (i < freshGuids.GetSize ()) {
+                    subelement = {};
+                    subelement.header.guid = freshGuids[i];
+                    err = ACAPI_Element_Get (&subelement);
+                }
+            }
+            ACAPI_DisposeElemMemoHdls (&freshMemo);
+        }
+        if (err == NoError) {
+            API_Element mask;
+            ACAPI_ELEMENT_MASK_CLEAR (mask);
+            apply (subelement, mask);
+            err = ACAPI_Element_Change (&subelement, &mask, nullptr, 0, true);
+        }
+        if (err != NoError && firstError == NoError) {
+            firstError = err;
+        }
+    }
+    return firstError;
+}
+
+static GS::UniString GetRailingCallError (const GS::UniString& call, GSErrCode err)
+{
+    return call + GS::UniString::Printf (" returned error %d", static_cast<int> (err));
+}
+
+ModifyRailingDetailsCommand::ModifyRailingDetailsCommand () :
+    CommandBase (CommonSchema::Used)
+{
+}
+
+GS::String ModifyRailingDetailsCommand::GetName () const
+{
+    return "ModifyRailingDetails";
+}
+
+GS::Optional<GS::UniString> ModifyRailingDetailsCommand::GetInputParametersSchema () const
+{
+    return R"({
+        "type": "object",
+        "properties": {
+            "railings": {
+                "type": "array",
+                "description": "The Railings to change, each with the fields to change. Omitted fields are left as they are. Every field is applied to all segments of the railing.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "elementId": { "$ref": "#/ElementId" },
+                        "height": {
+                            "type": "number",
+                            "description": "Height of the railing segments (the top rail runs at this height).",
+                            "exclusiveMinimum": 0.0
+                        },
+                        "postSpacing": {
+                            "type": "number",
+                            "description": "Length of the railing pattern, which places one set of inner posts per pattern: the distance between the posts.",
+                            "exclusiveMinimum": 0.0
+                        },
+                        "postDistribution": {
+                            "type": "string",
+                            "enum": ["FixedLength", "BestDivision"],
+                            "description": "How the pattern is laid along a segment: FixedLength repeats postSpacing exactly (the last field is shorter), BestDivision divides the segment into equal fields of at most postSpacing. When omitted, the current way is kept, except that a pattern divided into a fixed number of fields becomes BestDivision."
+                        },
+                        "toprail": {
+                            "type": "object",
+                            "properties": {
+                                "visible": { "type": "boolean", "description": "Whether the railing has a top rail." }
+                            },
+                            "additionalProperties": false
+                        },
+                        "handrail": {
+                            "type": "object",
+                            "description": "Applied to every handrail of the railing.",
+                            "properties": {
+                                "visible": { "type": "boolean" },
+                                "height": { "type": "number", "exclusiveMinimum": 0.0, "description": "Height of the handrail." },
+                                "horizontalOffset": { "type": "number", "description": "Horizontal offset of the handrail from the segment." },
+                                "bothSides": { "type": "boolean", "description": "Handrail on both sides of the railing." }
+                            },
+                            "additionalProperties": false
+                        },
+                        "rail": {
+                            "type": "object",
+                            "description": "Applied to every rail of the railing.",
+                            "properties": {
+                                "visible": { "type": "boolean" },
+                                "height": { "type": "number", "exclusiveMinimum": 0.0, "description": "Height of the rail." },
+                                "horizontalOffset": { "type": "number", "description": "Horizontal offset of the rail from the segment." }
+                            },
+                            "additionalProperties": false
+                        },
+                        "panel": {
+                            "type": "object",
+                            "description": "The infill panels of the pattern.",
+                            "properties": {
+                                "visible": { "type": "boolean", "description": "Whether the pattern has its infill panel. Turning panels on works only where the pattern has a panel (shown or hidden); balusters cannot be added or removed by the API." }
+                            },
+                            "additionalProperties": false
+                        },
+                        "balusterSpacing": {
+                            "type": "number",
+                            "description": "Distance between the balusters of the baluster sets of the pattern.",
+                            "exclusiveMinimum": 0.0
+                        }
+                    },
+                    "additionalProperties": false,
+                    "required": ["elementId"]
+                }
+            }
+        },
+        "additionalProperties": false,
+        "required": ["railings"]
+    })";
+}
+
+GS::Optional<GS::UniString> ModifyRailingDetailsCommand::GetRawResponseSchema () const
+{
+    return R"({
+        "type": "object",
+        "properties": {
+            "results": {
+                "type": "array",
+                "description": "One item per input railing, in the same order.",
+                "items": {
+                    "oneOf": [
+                        {
+                            "type": "object",
+                            "properties": {
+                                "elementId": { "$ref": "#/ElementId" },
+                                "changed": {
+                                    "type": "array",
+                                    "description": "The input fields Archicad kept on every subelement (read back after the change).",
+                                    "items": { "type": "string" }
+                                },
+                                "notChanged": {
+                                    "type": "array",
+                                    "description": "The input fields Archicad did not keep, with the reason. Absent when everything was kept.",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "field": { "type": "string" },
+                                            "reason": { "type": "string" }
+                                        },
+                                        "additionalProperties": false,
+                                        "required": ["field", "reason"]
+                                    }
+                                },
+                                "state": {
+                                    "type": "object",
+                                    "description": "The railing read back after the change.",
+                                    "properties": {
+                                        "segmentHeights": { "type": "array", "items": { "type": "number" } },
+                                        "postSpacings": { "type": "array", "items": { "type": "number" }, "description": "The pattern length of each pattern." },
+                                        "postDistributions": { "type": "array", "items": { "type": "string" } },
+                                        "posts": { "type": "integer", "description": "Number of posts (at the nodes)." },
+                                        "innerPosts": { "type": "integer", "description": "Number of inner posts (in the patterns)." },
+                                        "panels": { "type": "integer" },
+                                        "visiblePanels": { "type": "integer" },
+                                        "balusterSets": { "type": "integer" },
+                                        "balusters": { "type": "integer" },
+                                        "toprails": { "type": "integer" },
+                                        "visibleToprails": { "type": "integer" },
+                                        "handrailHeights": { "type": "array", "items": { "type": "number" } },
+                                        "railHeights": { "type": "array", "items": { "type": "number" } }
+                                    },
+                                    "additionalProperties": false
+                                }
+                            },
+                            "additionalProperties": false,
+                            "required": ["elementId", "changed", "state"]
+                        },
+                        { "$ref": "#/ErrorItem" }
+                    ]
+                }
+            }
+        },
+        "additionalProperties": false,
+        "required": ["results"]
+    })";
+}
+
+static const char* GetRailingDistributionName (API_DistribTypeID type)
+{
+    switch (type) {
+        case APIDT_Divisions:            return "Divisions";
+        case APIDT_PatternLength:        return "FixedLength";
+        case APIDT_BestDivisionByLength: return "BestDivision";
+        default:                         return "Unknown";
+    }
+}
+
+static GS::ObjectState ModifyRailingDetails (const API_Guid& railingGuid, const RailingDetailsRequest& request)
+{
+    API_Element railing = {};
+    railing.header.guid = railingGuid;
+    GSErrCode err = ACAPI_Element_Get (&railing);
+    if (err != NoError) {
+        return CreateErrorResponse (err, "Failed to find the element.");
+    }
+    if (GetElemTypeId (railing.header) != API_RailingID) {
+        return CreateErrorResponse (APIERR_BADPARS, "The element is not a Railing.");
+    }
+
+    // 1. The railing's own defaults of its segments (Do_Railing_Edit).
+    API_Element mask;
+    ACAPI_ELEMENT_MASK_CLEAR (mask);
+    ApplyRailingSegmentRequest (railing.railing.defSegment, request, mask, true);
+    ApplyRailingPatternRequest (railing.railing.defSegment.defPattern, request, mask, true);
+    if (request.toprailVisible.HasValue ()) {
+        railing.railing.defSegment.defToprail.visible = request.toprailVisible.Get ();
+        ACAPI_ELEMENT_MASK_SET (mask, API_RailingType, defSegment.defToprail.visible);
+    }
+    if (request.ChangesHandrail ()) {
+        ApplyRailingHandrailRequest (railing.railing.defSegment.defDefaultHandrail, request);
+        ApplyRailingHandrailRequest (railing.railing.defSegment.defHandrails, request);
+        // The mask macro marks one field (its first byte), so every field of the structs is marked.
+        ACAPI_ELEMENT_MASK_SET (mask, API_RailingType, defSegment.defDefaultHandrail.visible);
+        ACAPI_ELEMENT_MASK_SET (mask, API_RailingType, defSegment.defDefaultHandrail.doubleHandrail);
+        ACAPI_ELEMENT_MASK_SET (mask, API_RailingType, defSegment.defDefaultHandrail.horizontalOffset);
+        ACAPI_ELEMENT_MASK_SET (mask, API_RailingType, defSegment.defDefaultHandrail.height);
+        ACAPI_ELEMENT_MASK_SET (mask, API_RailingType, defSegment.defHandrails.visible);
+        ACAPI_ELEMENT_MASK_SET (mask, API_RailingType, defSegment.defHandrails.doubleHandrail);
+        ACAPI_ELEMENT_MASK_SET (mask, API_RailingType, defSegment.defHandrails.horizontalOffset);
+        ACAPI_ELEMENT_MASK_SET (mask, API_RailingType, defSegment.defHandrails.height);
+    }
+    if (request.ChangesRail ()) {
+        ApplyRailingRailRequest (railing.railing.defSegment.defDefaultRail, request);
+        ApplyRailingRailRequest (railing.railing.defSegment.defRails, request);
+        ACAPI_ELEMENT_MASK_SET (mask, API_RailingType, defSegment.defDefaultRail.visible);
+        ACAPI_ELEMENT_MASK_SET (mask, API_RailingType, defSegment.defDefaultRail.horizontalOffset);
+        ACAPI_ELEMENT_MASK_SET (mask, API_RailingType, defSegment.defDefaultRail.height);
+        ACAPI_ELEMENT_MASK_SET (mask, API_RailingType, defSegment.defRails.visible);
+        ACAPI_ELEMENT_MASK_SET (mask, API_RailingType, defSegment.defRails.horizontalOffset);
+        ACAPI_ELEMENT_MASK_SET (mask, API_RailingType, defSegment.defRails.height);
+    }
+    const GSErrCode railingErr = ACAPI_Element_Change (&railing, &mask, nullptr, 0, true);
+
+    // 2. Each existing subelement (Do_Railing_Elevate_Node).
+    GSErrCode segmentErr = NoError;
+    GSErrCode patternErr = NoError;
+    GSErrCode toprailErr = NoError;
+    GSErrCode handrailErr = NoError;
+    GSErrCode railErr = NoError;
+    GSErrCode panelErr = NoError;
+    GSErrCode balusterSetErr = NoError;
+    if (request.ChangesSegment ()) {
+        segmentErr = ChangeRailingSubelements (railingGuid, APIMemoMask_RailingSegment,
+            [] (const API_ElementMemo& memo) { return GetRailingSubelementGuids (memo.railingSegments); },
+            [&] (API_Element& elem, API_Element& elemMask) { ApplyRailingSegmentRequest (elem.railingSegment, request, elemMask, false); });
+    }
+    if (request.ChangesPattern () || request.panelVisible.HasValue () || request.balusterSpacing.HasValue ()) {
+        patternErr = ChangeRailingSubelements (railingGuid, APIMemoMask_RailingPattern,
+            [] (const API_ElementMemo& memo) { return GetRailingSubelementGuids (memo.railingPatterns); },
+            [&] (API_Element& elem, API_Element& elemMask) { ApplyRailingPatternRequest (elem.railingPattern, request, elemMask, false); });
+    }
+    if (request.toprailVisible.HasValue ()) {
+        toprailErr = ChangeRailingSubelements (railingGuid, APIMemoMask_RailingToprail,
+            [] (const API_ElementMemo& memo) { return GetRailingSubelementGuids (memo.railingToprails); },
+            [&] (API_Element& elem, API_Element& elemMask) {
+                elem.railingToprail.visible = request.toprailVisible.Get ();
+                ACAPI_ELEMENT_MASK_SET (elemMask, API_RailingToprailType, visible);
+            });
+    }
+    if (request.ChangesHandrail ()) {
+        handrailErr = ChangeRailingSubelements (railingGuid, APIMemoMask_RailingHandrail,
+            [] (const API_ElementMemo& memo) { return GetRailingSubelementGuids (memo.railingHandrails); },
+            [&] (API_Element& elem, API_Element& elemMask) {
+                ApplyRailingHandrailRequest (elem.railingHandrail, request);
+                ACAPI_ELEMENT_MASK_SET (elemMask, API_RailingHandrailType, visible);
+                ACAPI_ELEMENT_MASK_SET (elemMask, API_RailingHandrailType, doubleHandrail);
+                ACAPI_ELEMENT_MASK_SET (elemMask, API_RailingHandrailType, horizontalOffset);
+                ACAPI_ELEMENT_MASK_SET (elemMask, API_RailingHandrailType, height);
+            });
+    }
+    if (request.ChangesRail ()) {
+        railErr = ChangeRailingSubelements (railingGuid, APIMemoMask_RailingRail,
+            [] (const API_ElementMemo& memo) { return GetRailingSubelementGuids (memo.railingRails); },
+            [&] (API_Element& elem, API_Element& elemMask) {
+                ApplyRailingRailRequest (elem.railingRail, request);
+                ACAPI_ELEMENT_MASK_SET (elemMask, API_RailingRailType, visible);
+                ACAPI_ELEMENT_MASK_SET (elemMask, API_RailingRailType, horizontalOffset);
+                ACAPI_ELEMENT_MASK_SET (elemMask, API_RailingRailType, height);
+            });
+    }
+    if (request.panelVisible.HasValue ()) {
+        panelErr = ChangeRailingSubelements (railingGuid, APIMemoMask_RailingPanel,
+            [] (const API_ElementMemo& memo) { return GetRailingSubelementGuids (memo.railingPanels); },
+            [&] (API_Element& elem, API_Element& elemMask) {
+                elem.railingPanel.visible = request.panelVisible.Get ();
+                ACAPI_ELEMENT_MASK_SET (elemMask, API_RailingPanelType, visible);
+            });
+    }
+    if (request.balusterSpacing.HasValue ()) {
+        balusterSetErr = ChangeRailingSubelements (railingGuid, APIMemoMask_RailingBalusterSet,
+            [] (const API_ElementMemo& memo) { return GetRailingSubelementGuids (memo.railingBalusterSets); },
+            [&] (API_Element& elem, API_Element& elemMask) {
+                elem.railingBalusterSet.distribution.length = request.balusterSpacing.Get ();
+                if (elem.railingBalusterSet.distribution.type == APIDT_Divisions) {
+                    elem.railingBalusterSet.distribution.type = APIDT_BestDivisionByLength;
+                }
+                ACAPI_ELEMENT_MASK_SET (elemMask, API_RailingBalusterSetType, distribution.type);
+                ACAPI_ELEMENT_MASK_SET (elemMask, API_RailingBalusterSetType, distribution.length);
+            });
+    }
+
+    // 3. Read the railing back.
+    API_ElementMemo memo = {};
+    const GS::OnExit memoGuard ([&memo] () { ACAPI_DisposeElemMemoHdls (&memo); });
+    err = ACAPI_Element_GetMemo (railingGuid, &memo,
+        APIMemoMask_RailingSegment | APIMemoMask_RailingPattern | APIMemoMask_RailingPost | APIMemoMask_RailingInnerPost |
+        APIMemoMask_RailingToprail | APIMemoMask_RailingHandrail | APIMemoMask_RailingRail | APIMemoMask_RailingPanel |
+        APIMemoMask_RailingBalusterSet | APIMemoMask_RailingBaluster);
+    if (err != NoError) {
+        return CreateErrorResponse (err, "The railing was changed, but reading it back failed.");
+    }
+
+    const UInt32 nSegments = GetRailingSubelementCount (memo.railingSegments);
+    const UInt32 nPatterns = GetRailingSubelementCount (memo.railingPatterns);
+    const UInt32 nToprails = GetRailingSubelementCount (memo.railingToprails);
+    const UInt32 nHandrails = GetRailingSubelementCount (memo.railingHandrails);
+    const UInt32 nRails = GetRailingSubelementCount (memo.railingRails);
+    const UInt32 nPanels = GetRailingSubelementCount (memo.railingPanels);
+    const UInt32 nBalusterSets = GetRailingSubelementCount (memo.railingBalusterSets);
+
+    GS::ObjectState state;
+    UInt32 visiblePanels = 0;
+    UInt32 visibleToprails = 0;
+    {
+        const auto& segmentHeights = state.AddList<double> ("segmentHeights");
+        for (UInt32 i = 0; i < nSegments; ++i) {
+            segmentHeights (memo.railingSegments[i].height);
+        }
+        const auto& postSpacings = state.AddList<double> ("postSpacings");
+        const auto& postDistributions = state.AddList<GS::UniString> ("postDistributions");
+        for (UInt32 i = 0; i < nPatterns; ++i) {
+            postSpacings (memo.railingPatterns[i].distribution.length);
+            postDistributions (GS::UniString (GetRailingDistributionName (memo.railingPatterns[i].distribution.type)));
+        }
+        const auto& handrailHeights = state.AddList<double> ("handrailHeights");
+        for (UInt32 i = 0; i < nHandrails; ++i) {
+            handrailHeights (memo.railingHandrails[i].height);
+        }
+        const auto& railHeights = state.AddList<double> ("railHeights");
+        for (UInt32 i = 0; i < nRails; ++i) {
+            railHeights (memo.railingRails[i].height);
+        }
+        for (UInt32 i = 0; i < nPanels; ++i) {
+            visiblePanels += memo.railingPanels[i].visible ? 1 : 0;
+        }
+        for (UInt32 i = 0; i < nToprails; ++i) {
+            visibleToprails += memo.railingToprails[i].visible ? 1 : 0;
+        }
+    }
+    state.Add ("posts", static_cast<Int32> (GetRailingSubelementCount (memo.railingPosts)));
+    state.Add ("innerPosts", static_cast<Int32> (GetRailingSubelementCount (memo.railingInnerPosts)));
+    state.Add ("panels", static_cast<Int32> (nPanels));
+    state.Add ("visiblePanels", static_cast<Int32> (visiblePanels));
+    state.Add ("balusterSets", static_cast<Int32> (nBalusterSets));
+    state.Add ("balusters", static_cast<Int32> (GetRailingSubelementCount (memo.railingBalusters)));
+    state.Add ("toprails", static_cast<Int32> (nToprails));
+    state.Add ("visibleToprails", static_cast<Int32> (visibleToprails));
+
+    // Per field: kept when every subelement of that kind has it (and there is at least one).
+    GS::Array<GS::UniString> changed;
+    GS::Array<GS::ObjectState> notChanged;
+    const auto report = [&] (const char* field, UInt32 count, const std::function<bool (UInt32)>& isKept, GSErrCode subelementErr, const char* subelementName) {
+        UInt32 kept = 0;
+        for (UInt32 i = 0; i < count; ++i) {
+            kept += isKept (i) ? 1 : 0;
+        }
+        if (count > 0 && kept == count) {
+            changed.Push (field);
+            return;
+        }
+        GS::UniString reason = count == 0
+            ? GS::UniString::Printf ("the railing has no %s subelement to carry it", subelementName)
+            : GS::UniString::Printf ("%u of %u %s subelements have it", kept, count, subelementName);
+        if (railingErr != NoError) {
+            reason += "; " + GetRailingCallError ("ACAPI_Element_Change (Railing)", railingErr);
+        }
+        if (subelementErr != NoError) {
+            reason += "; " + GetRailingCallError (GS::UniString ("ACAPI_Element_Change (") + subelementName + ")", subelementErr);
+        }
+        notChanged.Push (GS::ObjectState ("field", GS::UniString (field), "reason", reason));
+    };
+
+    if (request.height.HasValue ()) {
+        const double h = request.height.Get ();
+        report ("height", nSegments, [&] (UInt32 i) { return std::abs (memo.railingSegments[i].height - h) <= 1e-6; }, segmentErr, "RailingSegment");
+    }
+    if (request.postSpacing.HasValue ()) {
+        const double l = request.postSpacing.Get ();
+        report ("postSpacing", nPatterns, [&] (UInt32 i) { return std::abs (memo.railingPatterns[i].distribution.length - l) <= 1e-6; }, patternErr, "RailingPattern");
+    }
+    if (request.postDistribution.HasValue ()) {
+        const API_DistribTypeID t = request.postDistribution.Get ();
+        report ("postDistribution", nPatterns, [&] (UInt32 i) { return memo.railingPatterns[i].distribution.type == t; }, patternErr, "RailingPattern");
+    }
+    if (request.toprailVisible.HasValue ()) {
+        const bool v = request.toprailVisible.Get ();
+        report ("toprail.visible", nToprails, [&] (UInt32 i) { return memo.railingToprails[i].visible == v; }, toprailErr, "RailingToprail");
+    }
+    if (request.handrailVisible.HasValue ()) {
+        const bool v = request.handrailVisible.Get ();
+        report ("handrail.visible", nHandrails, [&] (UInt32 i) { return memo.railingHandrails[i].visible == v; }, handrailErr, "RailingHandrail");
+    }
+    if (request.handrailHeight.HasValue ()) {
+        const double h = request.handrailHeight.Get ();
+        report ("handrail.height", nHandrails, [&] (UInt32 i) { return std::abs (memo.railingHandrails[i].height - h) <= 1e-6; }, handrailErr, "RailingHandrail");
+    }
+    if (request.handrailOffset.HasValue ()) {
+        const double o = request.handrailOffset.Get ();
+        report ("handrail.horizontalOffset", nHandrails, [&] (UInt32 i) { return std::abs (memo.railingHandrails[i].horizontalOffset - o) <= 1e-6; }, handrailErr, "RailingHandrail");
+    }
+    if (request.handrailDouble.HasValue ()) {
+        const bool v = request.handrailDouble.Get ();
+        report ("handrail.bothSides", nHandrails, [&] (UInt32 i) { return memo.railingHandrails[i].doubleHandrail == v; }, handrailErr, "RailingHandrail");
+    }
+    if (request.railVisible.HasValue ()) {
+        const bool v = request.railVisible.Get ();
+        report ("rail.visible", nRails, [&] (UInt32 i) { return memo.railingRails[i].visible == v; }, railErr, "RailingRail");
+    }
+    if (request.railHeight.HasValue ()) {
+        const double h = request.railHeight.Get ();
+        report ("rail.height", nRails, [&] (UInt32 i) { return std::abs (memo.railingRails[i].height - h) <= 1e-6; }, railErr, "RailingRail");
+    }
+    if (request.railOffset.HasValue ()) {
+        const double o = request.railOffset.Get ();
+        report ("rail.horizontalOffset", nRails, [&] (UInt32 i) { return std::abs (memo.railingRails[i].horizontalOffset - o) <= 1e-6; }, railErr, "RailingRail");
+    }
+    if (request.panelVisible.HasValue ()) {
+        const bool v = request.panelVisible.Get ();
+        report ("panel.visible", nPanels, [&] (UInt32 i) { return memo.railingPanels[i].visible == v; }, panelErr, "RailingPanel");
+    }
+    if (request.balusterSpacing.HasValue ()) {
+        const double l = request.balusterSpacing.Get ();
+        report ("balusterSpacing", nBalusterSets, [&] (UInt32 i) { return std::abs (memo.railingBalusterSets[i].distribution.length - l) <= 1e-6; }, balusterSetErr, "RailingBalusterSet");
+    }
+
+    GS::ObjectState result;
+    result.Add ("elementId", CreateGuidObjectState (railingGuid));
+    const auto& changedList = result.AddList<GS::UniString> ("changed");
+    for (const GS::UniString& field : changed) {
+        changedList (field);
+    }
+    if (!notChanged.IsEmpty ()) {
+        const auto& notChangedList = result.AddList<GS::ObjectState> ("notChanged");
+        for (const GS::ObjectState& item : notChanged) {
+            notChangedList (item);
+        }
+    }
+    result.Add ("state", state);
+    return result;
+}
+
+GS::ObjectState ModifyRailingDetailsCommand::Execute (const GS::ObjectState& parameters, GS::ProcessControl& /*processControl*/) const
+{
+    GS::Array<GS::ObjectState> railings;
+    parameters.Get ("railings", railings);
+
+    GS::ObjectState response;
+    const auto& results = response.AddList<GS::ObjectState> ("results");
+
+    ACAPI_CallUndoableCommand ("ModifyRailingDetails", [&] () -> GSErrCode {
+        for (const GS::ObjectState& item : railings) {
+            const GS::ObjectState* elementId = item.Get ("elementId");
+            if (elementId == nullptr) {
+                results (CreateErrorResponse (APIERR_BADPARS, "elementId is missing."));
+                continue;
+            }
+            RailingDetailsRequest request;
+            const auto error = ParseRailingDetailsRequest (item, request);
+            if (error.HasValue ()) {
+                results (CreateErrorResponse (APIERR_BADPARS, error.Get ()));
+                continue;
+            }
+            results (ModifyRailingDetails (GetGuidFromObjectState (*elementId), request));
+        }
+        return NoError;
+    });
+
+    return response;
+}
+
 CreateRailingsCommand::CreateRailingsCommand () :
     CreateElementsCommandBase ("CreateRailings", API_RailingID, "railingsData")
 {
@@ -3291,6 +5057,21 @@ GS::Optional<GS::UniString> CreateRailingsCommand::GetInputParametersSchema () c
                     "floorIndex": {
                         "type": "integer",
                         "description": "Optional home story of the railing. Without zCoordinate the railing keeps the base offset of the favorite or of the tool defaults on this story."
+                    },
+                    "height": {
+                        "type": "number",
+                        "description": "Optional height of the railing segments. Without it the height of the favorite (or of the tool defaults) is kept. ModifyRailingDetails changes it, and more, on an existing railing.",
+                        "exclusiveMinimum": 0.0
+                    },
+                    "postSpacing": {
+                        "type": "number",
+                        "description": "Optional length of the railing pattern - the distance between the posts, as in ModifyRailingDetails. Without it the pattern of the favorite (or of the tool defaults) is kept.",
+                        "exclusiveMinimum": 0.0
+                    },
+                    "postDistribution": {
+                        "type": "string",
+                        "enum": ["FixedLength", "BestDivision"],
+                        "description": "Optional way the pattern is laid along a segment, as in ModifyRailingDetails."
                     }
                 },
                 "additionalProperties": false,
@@ -3350,6 +5131,31 @@ GS::Optional<GS::ObjectState> CreateRailingsCommand::SetTypeSpecificParameters (
     }
     memo.polyZCoords = reinterpret_cast<double**> (BMAllocateHandle ((nCoords + 1) * sizeof (double), ALLOCATE_CLEAR, 0));
     element.railing.nVertices = nCoords;
+
+    // The segments are generated from defSegment, so its height and pattern give every segment the
+    // asked height and post spacing (the fields ModifyRailingDetails writes on an existing railing).
+    RailingDetailsRequest request;
+    double value = 0.0;
+    if (parameters.Get ("height", value)) {
+        request.height = value;
+    }
+    if (parameters.Get ("postSpacing", value)) {
+        request.postSpacing = value;
+    }
+    GS::UniString distribution;
+    if (parameters.Get ("postDistribution", distribution)) {
+        if (distribution == "FixedLength") {
+            request.postDistribution = APIDT_PatternLength;
+        } else if (distribution == "BestDivision") {
+            request.postDistribution = APIDT_BestDivisionByLength;
+        } else {
+            return CreateErrorResponse (APIERR_BADPARS, "postDistribution must be 'FixedLength' or 'BestDivision'.");
+        }
+    }
+    API_Element unusedMask;
+    ACAPI_ELEMENT_MASK_CLEAR (unusedMask);
+    ApplyRailingSegmentRequest (element.railing.defSegment, request, unusedMask, true);
+    ApplyRailingPatternRequest (element.railing.defSegment.defPattern, request, unusedMask, true);
 
     return {};
 }
