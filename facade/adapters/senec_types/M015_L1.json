@@ -625,7 +625,8 @@
   "zones[Z2].thickness": "prijať 0,48 m (0,45 + obklad), vnútorné líce zarovnané so Z1",
   "systems[wall.obklad_tehla_480].composite.skins[Kamenný obklad].thickness": "prijať 30 mm",
   "systems[wall.obklad_tehla_480].composite.skins[Fasádní lepicí tmel].thickness": "prijať 20 mm (lôžko obkladu namiesto omietky)",
-  "objects[O5_sur].params.bandD": "prijať 0,03 m (plochá šambrána)"
+  "objects[O5_sur].params.bandD": "prijať 0,03 m (plochá šambrána)",
+  "cw_fields[O1].rect.top": "prijať 2,8211 ako dolnú hranicu (spodok tabule); vrch nadpražia dočítať po odstránení tabule alebo zameraním"
  },
  "simplifications": [
   {
@@ -680,8 +681,8 @@
   },
   {
    "ref": "openings[O1, O2, O3, O5, O6, O7] (hrany × fotka automaticky)",
-   "text": "Automatická kontrola hrán (informatívna): horné hrany parteru O1–O3 sú na fotke o 3,8–5,1 cm vyššie (pilot čítal rám pod podhľadom ostenia - rovnaká paralaxa ako pri 2.NP) a pravá hrana brány O2 o 3,8 cm vľavo; spodné hrany okien 2.NP zakrýva parapetný plech. I7 (2026-10-19): horné hrany O2, O3, O4 opravené z fotky na murovaný otvor (3,13 -> 3,18-3,19, facade/corrections/M015_L1.json c1-c4, priečka brány ostáva na mieste); O1 (tabuľa kvetinárstva nad otvorom), pravá hrana O2 (dve hrany 4,500 / 4,524), spodok O4 (nečitateľný) a spodky okien 2.NP ostávajú nejednoznačné - pozri report_G2.md.",
-   "proposal": "prijať opravy I7; vrch O1 (za tabuľou) a pravú hranu O2 dočítať z ďalšieho záberu alebo zamerania"
+   "text": "Automatická kontrola hrán (informatívna): horné hrany parteru O1–O3 boli na fotke o 3,8–5,1 cm vyššie (pilot čítal rám pod podhľadom ostenia) a pravá hrana brány O2 o 3,8 cm vľavo; spodné hrany okien 2.NP zakrýva parapetný plech. I7 (2026-10-19): horné hrany O2, O3, O4 opravené z fotky na murovaný otvor (3,13 -> 3,18-3,19, facade/corrections/M015_L1.json c1-c4, priečka brány ostáva na mieste). Opravné kolo G2 (2026-10-20): ľavé hrany O1 1,00 -> 0,9158 (c6), O2 3,42 -> 3,3229 (c5), O3 5,31 -> 5,2276 (c8) na murovanú hranu (paralaxa ostenia); ľavá hrana O2 má murovaný skok 7,7 < 12 - od kola 2 automaticky nejednoznačná, poloha potvrdená nezávislým odčítaním kontrolóra 3,32. Dočistenie (kolo 2): vrch O1 / O1b NIE JE meraný - nadpražie zakrýva tabuľa kvetinárstva, 2,8211 = spodok tabule ako dolná hranica, istota ODHAD (rect.edge_conf.top; c7 vrátená, c6 mení len ľavú hranu). Pravá hrana O1 (spoločné ostenie s O1b), pravá hrana O2 (dve hrany 4,500 / 4,524), spodok O4 (nečitateľný) a spodky okien 2.NP ostávajú nejednoznačné - pozri report_G2.md.",
+   "proposal": "prijať opravy I7 (c1-c6, c8); vrch O1 / O1b (za tabuľou, ODHAD) a pravú hranu O2 dočítať z ďalšieho záberu alebo zamerania"
   }
  ],
  "camera": {
@@ -955,11 +956,18 @@
       1.0,
       1.87,
       0.15,
-      2.76
+      2.8211
      ],
      "src": "S6",
      "conf": "meranie",
-     "note": "dverový stĺpec výkladu O1 (kvetinárstvo): ľavá hrana, spodok a vrch = O1 (I1); pravá = stĺpik medzi dverami a výkladom s = 1,87 (S6; stred lišty na fotke 1,90)"
+     "note": "dverový stĺpec výkladu O1 (kvetinárstvo): ľavá hrana, spodok a vrch = O1 (I1); pravá = stĺpik medzi dverami a výkladom s = 1,87 (S6; stred lišty na fotke 1,90); G2 kolo 2: vrch 2,76 -> 2,8211 ručne (predtým súčasť zlúčenej opravy I7 c6/c7), istota vrchu ODHAD (rect.edge_conf.top)",
+     "edge_conf": {
+      "top": {
+       "conf": "odhad",
+       "src": "S6",
+       "note": "vrch za tabuľou kvetinárstva - nadpražie na fotke nevidno (G2 kolo 2, N1 / č. 15): 2,8211 = spodok tabule (2,80-2,82 v rovine fotky) ako DOLNÁ hranica murovaného otvoru (rám je na 2,76, nad ním po tabuľu tmavý pás - podhľad alebo tieň); skutočný vrch dočítať z ďalšieho záberu alebo zamerania"
+      }
+     }
     },
     "v_axes": {
      "v": [
@@ -988,11 +996,18 @@
       1.87,
       2.47,
       0.78,
-      2.76
+      2.8211
      ],
      "src": "S6",
      "conf": "odhad",
-     "note": "výkladové pole O1 vpravo od dverí: spodok výkladu v = 0,78 (parapet čiastočne za kvetmi, ODHAD), vrch a pravá hrana = O1"
+     "note": "výkladové pole O1 vpravo od dverí: spodok výkladu v = 0,78 (parapet čiastočne za kvetmi, ODHAD), vrch a pravá hrana = O1; G2 kolo 2: vrch 2,76 -> 2,8211 ručne (predtým súčasť zlúčenej opravy I7 c6/c7), istota vrchu ODHAD (rect.edge_conf.top)",
+     "edge_conf": {
+      "top": {
+       "conf": "odhad",
+       "src": "S6",
+       "note": "vrch za tabuľou kvetinárstva - nadpražie na fotke nevidno (G2 kolo 2, N1 / č. 15): 2,8211 = spodok tabule (2,80-2,82 v rovine fotky) ako DOLNÁ hranica murovaného otvoru (rám je na 2,76, nad ním po tabuľu tmavý pás - podhľad alebo tieň); skutočný vrch dočítať z ďalšieho záberu alebo zamerania"
+      }
+     }
     },
     "v_axes": {
      "v": [

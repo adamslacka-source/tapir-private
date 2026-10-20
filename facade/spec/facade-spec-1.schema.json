@@ -374,6 +374,10 @@
             "minItems": 4,
             "maxItems": 4,
             "description": "rect of the pilot source when the spec corrects it (record)"
+          },
+          "transom_cols": {
+            "$ref": "#/$defs/value",
+            "description": "number of panes side by side in the transom above the leaf (1 = no vertical bar)"
           }
         }
       }
@@ -1415,6 +1419,89 @@
         },
         "note": {
           "type": "string"
+        },
+        "edge_conf": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "per-edge certainty overriding conf of the rect (G2 kolo 2, N1): an edge hidden on the photo (e.g. a lintel behind a shop sign) is 'odhad' with the reason in note - the automatic photo check reports it as 'zakrytá', the I7 loop never measures or corrects it",
+          "properties": {
+            "left": {
+              "type": "object",
+              "required": [
+                "conf",
+                "note"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "conf": {
+                  "$ref": "#/$defs/conf"
+                },
+                "note": {
+                  "type": "string"
+                },
+                "src": {
+                  "$ref": "#/$defs/src"
+                }
+              }
+            },
+            "right": {
+              "type": "object",
+              "required": [
+                "conf",
+                "note"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "conf": {
+                  "$ref": "#/$defs/conf"
+                },
+                "note": {
+                  "type": "string"
+                },
+                "src": {
+                  "$ref": "#/$defs/src"
+                }
+              }
+            },
+            "bottom": {
+              "type": "object",
+              "required": [
+                "conf",
+                "note"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "conf": {
+                  "$ref": "#/$defs/conf"
+                },
+                "note": {
+                  "type": "string"
+                },
+                "src": {
+                  "$ref": "#/$defs/src"
+                }
+              }
+            },
+            "top": {
+              "type": "object",
+              "required": [
+                "conf",
+                "note"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "conf": {
+                  "$ref": "#/$defs/conf"
+                },
+                "note": {
+                  "type": "string"
+                },
+                "src": {
+                  "$ref": "#/$defs/src"
+                }
+              }
+            }
+          }
         }
       }
     },

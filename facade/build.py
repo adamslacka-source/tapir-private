@@ -63,7 +63,7 @@ ELEMENT_ID_PROPERTY = {"type": "BuiltIn", "nonLocalizedName": "General_ElementID
 NOMINAL_WALLHOLE = {"name": "gs_nominal_size", "value": 1}      # Door 27 family: 1 = wall hole, 8 = egress (favorite default)
 EMPTY_OPENING = "Empty Window"          # library part of the hole of a curtain wall field (window type, no frame, no 3D body)
 ANGLE_PARAMS = ("lamAng",)              # Angle-type parameters of the FS GDL templates
-INSTANCE_KEYS = ("transom_h", "sidelight_w", "sidelight_sill", "transom_bars", "transom_bar_h", "bar_h", "shoulder_h")
+INSTANCE_KEYS = ("transom_h", "sidelight_w", "sidelight_sill", "transom_bars", "transom_cols", "transom_bar_h", "bar_h", "shoulder_h")
 
 
 def _hash(obj) -> str:

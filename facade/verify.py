@@ -44,8 +44,8 @@ sys.path.insert(0, str(HERE))
 import gdl_expect  # noqa: E402
 import systems as fs_systems  # noqa: E402
 from build import DEFAULT_OUT, DEFAULT_PROJECT, EMPTY_OPENING, gdl_params, opening_units, plan, state_path, unit_reveal  # noqa: E402
-from photo_measure import Photo, reveal_pair, visible_reveal  # noqa: E402
-from geom import REFERENCE_PLANE, frames_of, outside_of, zone_w  # noqa: E402
+from photo_measure import MIN_REVEAL_M, Photo, judge_reveal_edge, visible_reveal  # noqa: E402
+from geom import REFERENCE_PLANE, frames_of, hidden_edge, jamb_context, outside_of, zone_w  # noqa: E402
 from linear_verify import camera_of, geometry_of, photo_edge_any, to_photo, verify_linear  # noqa: E402
 from cw_verify import verify_balconies, verify_cw, verify_railings  # noqa: E402
 from spec_validate import TYPE_KEYS, fs_system, load_gdl_map, object_bbox, object_values, validate  # noqa: E402
@@ -55,10 +55,11 @@ FACE_TOL = 0.005          # m - a face lies in the outside plane
 PROTRUSION = 0.10         # m - allowed overhang of sills / boards / handles beyond a wall face
 AUTO_SEARCH = 0.05        # m - automatic photo check of opening edges
 AUTO_CONTRAST = 12.0      # minimum brightness step (0..255) of a readable edge
-AUTO_REVEAL_MIN = 0.03    # m - the automatic check applies the frame x masonry pair only when the visible reveal >= its tolerance
+AUTO_REVEAL_MIN = MIN_REVEAL_M  # m - the automatic check applies the frame x masonry pair only when the visible reveal >= 3 cm (= the loop)
 COLORS = {"wall": (230, 30, 30), "hole": (230, 30, 30), "window": (0, 200, 255), "door": (255, 0, 200), "linear": (60, 255, 60),
           "opening": (255, 255, 255), "cw": (0, 255, 255), "slab": (180, 255, 120), "railing": (255, 120, 255),
-          "object": (255, 160, 40), "spec": (255, 230, 0), "text": (255, 255, 255), "shadow": (0, 0, 0), "exc": (255, 140, 0)}
+          "object": (255, 160, 40), "spec": (255, 230, 0), "text": (255, 255, 255), "shadow": (0, 0, 0), "exc": (255, 140, 0),
+          "photo_over": (255, 60, 60), "photo_amb": (205, 150, 255)}
 HOLE_AREA = "hole area on outside face [m2]"
 
 
@@ -413,7 +414,9 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
     rect = src["rect"]
     cam = camera_of(spec)
     lum = np.asarray(Image.open(root / rect["image"]).convert("L"), dtype=float)
-    ph_lum = Photo.from_lum(lum, rect["S"], rect["u0"], rect["v1"])
+    # the parallax judgement uses the SAME photo object as the I7 loop (RGB mean, photo_measure.Photo) - one decision on the
+    # same pixels (G2 kolo 2, cause 4); the narrow checks keep the luma of PIL 'L' (contract of the named edges)
+    ph_lum = Photo(root / rect["image"], rect["S"], rect["u0"], rect["v1"])
 
     # ---- (e) linear elements (I3)
     lin = verify_linear(ac, spec, want["linear"], guids, details, frames, stories, sysinfo, lum if want["linear"] else None, row, trow, problems)
@@ -484,7 +487,10 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
                 mid = (0.5 * (s0 + s1), 0.5 * (v0 + v1))
                 rw = visible_reveal(cam, edge, s0 if edge == "left" else s1 if edge == "right" else mid[0],
                                     v1 if edge == "top" else v0 if edge == "bottom" else mid[1], zw, rev)
-                ae = auto_edge_check(lum, rect, ph_lum, edge, at, rng, rw)
+                jc = jamb_context(units, oid, edge)
+                rect_ph = [pp[0, 0], pp[1, 0], pp[0, 1], pp[1, 1]]
+                ae = auto_edge_check(lum, rect, ph_lum, edge, at, rng, rw, rect_ph=rect_ph, free=jc["free"], shared=jc["shared"],
+                                     hidden=hidden_edge(u["o"]["rect"], edge))
                 if ae is None:
                     continue
                 ae = dict(item=oid, **ae)
@@ -596,7 +602,7 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
     via_cam = bool(cam and cam.get("s") is not None)
     extra = [("cw", {k: v for k, v in cwr["proj"].items()}, False), ("slab", balr["proj"], via_cam), ("railing", railr["proj"], via_cam)]
     # G2 cause 4: 'Δ' in the overlay is model - spec; whether the element was checked against the PHOTO is stated apart
-    photo_status = photo_check_status(lin["photo"] + edges, auto_edges)
+    photo_status = photo_check_status(lin["photo"] + edges, auto_edges, load_verdicts(out_dir))
     overlay_png, model_png = draw(spec, src, root / rect["image"], proj, ref_walls, rows, trows, units, out_dir, lin["proj"], obj_proj, want, extra,
                                   photo_status)
     # I7: extent of every element of the reference plane on the photo (photo plane, through the camera) - the iteration
@@ -630,7 +636,8 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
         "i6": {"cw": len(want["cw"]), "slabs": len(want["slabs"]), "railings": len(want["railings"]), "cw_photo": cwr["photo"]},
         "objects": {"items": len(want["objects"]), "max_delta_cm": max([abs(r["delta_cm"]) for r in rows if r["item"] in {o["item"] for o in want["objects"]}
                                                                         and r["method"] in ("params", "3D") and r["delta_cm"] is not None] or [0.0])},
-        "photo_edges": photo_edges, "auto_edges": auto_edges, "photo_status": photo_status,
+        "photo_edges": photo_edges, "auto_edges": auto_edges, "photo_status": {k: v["text"] for k, v in photo_status.items()},
+        "photo_level": {k: v["level"] for k, v in photo_status.items()},
         "photo_unverified": sorted([oid for oid, u in units.items() if u["plane"] == REFERENCE_PLANE and not photo_status.get(oid)]
                                    + [it["item"] for it in want["objects"] + want["slabs"] + want["railings"]
                                       if it.get("plane", REFERENCE_PLANE) == REFERENCE_PLANE and not photo_status.get(it["item"])]),
@@ -660,13 +667,19 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
     return result
 
 
-def auto_edge_check(lum: np.ndarray, rect: dict, ph_lum: Photo, edge: str, at: float, rng, rw: float | None) -> dict | None:
-    """Automatic (informative) check of one opening edge on the photo: the strongest step within +-AUTO_SEARCH of the
-    projected model edge -> OK (<= 3 cm) / MIMO / nečitateľné (step < AUTO_CONTRAST).
-    Parallax (G2 finding 1, cause 2): on the edge whose reveal faces the camera (rw = visible width, photo_measure) the
-    masonry corner and the frame are two steps ~rw apart. A step OUTWARD of the model step at that spacing means the model
-    may sit on the frame -> 'nejednoznačné', never OK (the I7 loop measures the pair). A weak masonry step at the model
-    with the frame inward at ~rw is readable through the pair. None: the window lies outside the photo."""
+def auto_edge_check(lum: np.ndarray, rect: dict, ph_lum: Photo, edge: str, at: float, rng, rw: float | None, rect_ph=None,
+                    free: tuple[bool, bool] = (True, True), shared: str | None = None, hidden: str | None = None) -> dict | None:
+    """Automatic (informative) check of one opening edge on the photo. Statuses:
+      OK / MIMO       readable edge within / beyond 3 cm of the projected model edge
+      nečitateľné     no step >= AUTO_CONTRAST
+      nejednoznačné   the edge cannot be judged (see below) - never counted as a measurement
+      spoločné ostenie  the edge is a jamb shared with a touching opening (not a masonry edge; G2 kolo 2, N8)
+      zakrytá         the spec declares the edge hidden (rect.edge_conf odhad, e.g. a lintel behind a shop sign; N1)
+    Without a visible reveal: the strongest step within +-AUTO_SEARCH of the model edge. With a visible reveal >=
+    AUTO_REVEAL_MIN on this edge (oblique photo, G2 finding 1): ONE decision with the I7 loop - photo_measure.
+    judge_reveal_edge (masonry corner = outer step of the pair masonry / frame; weak step < 12, pair spacing < 3 cm, two
+    edges or a step running on beyond the opening -> nejednoznačné; G2 kolo 2, causes 1 and 4). None: the window lies
+    outside the photo."""
     try:
         pos, contrast = photo_edge_any(lum, rect, edge, at, rng, None, AUTO_SEARCH)
     except (ValueError, IndexError):
@@ -675,26 +688,17 @@ def auto_edge_check(lum: np.ndarray, rect: dict, ph_lum: Photo, edge: str, at: f
     d = pos - at
     ae = {"edge": edge, "model": round(at, 4), "photo": round(pos, 4), "delta_cm": round(d * 100, 1),
           "contrast": round(contrast, 1), "status": ("OK" if abs(d) <= 0.03 else "MIMO") if readable else "nečitateľné"}
+    if hidden:
+        return dict(ae, status="zakrytá", note=f"hrana zakrytá podľa spec (ODHAD): {hidden}")
+    if shared:
+        return dict(ae, status="spoločné ostenie", note=f"spoločné ostenie s {shared} - nie je hrana murovaného otvoru (raster sa kontroluje ako lišta)")
     if rw is None or rw < AUTO_REVEAL_MIN:     # a visible reveal narrower than the tolerance cannot make the check wrong by more
         return ae
-    pr = reveal_pair(ph_lum, edge, at, rw, rng, near=AUTO_SEARCH)
-    ae["reveal_cm"] = round(rw * 100, 1)
-    if pr["model"] and pr["outer"]:
-        o_ = pr["outer"][0]
-        ae.update(photo=pr["model"]["pos"], delta_cm=round((pr["model"]["pos"] - at) * 100, 1), contrast=pr["model"]["step"],
-                  status="nejednoznačné", second=o_["pos"], second_step=o_["step"],
-                  note=f"druhý skok {o_['pos']:.3f} (skok {o_['step']:.0f}) o {abs(o_['pos'] - pr['model']['pos']) * 100:.1f} cm "
-                       f"ďalej od kamery (viditeľné ostenie ~{rw * 100:.1f} cm) - model môže byť na ráme")
-    elif pr["model"] and pr["inner"] and pr["inner"][0]["step"] >= AUTO_CONTRAST and (
-            not readable or abs(pos - pr["inner"][0]["pos"]) <= 0.01):
-        # the pair (masonry at the model, readable frame ~rw inward) decides when the masonry step is too weak for the
-        # narrow check or when the narrow window caught that frame just inside it - never when the strongest step is
-        # something else (then the old verdict stays: a frame and a poster inside are no pair)
-        dm = pr["model"]["pos"] - at
-        ae.update(photo=pr["model"]["pos"], delta_cm=round(dm * 100, 1), contrast=pr["model"]["step"],
-                  status="OK" if abs(dm) <= 0.03 else "MIMO", frame=pr["inner"][0]["pos"],
-                  note=f"murovaná hrana (skok {pr['model']['step']:.0f}) čitateľná cez pár: rám {pr['inner'][0]['pos']:.3f} o "
-                       f"{abs(pr['inner'][0]['pos'] - pr['model']['pos']) * 100:.1f} cm vnútri")
+    j = judge_reveal_edge(ph_lum, edge, at, rw, rng, rect_ph, free, 0.03)
+    ae.update(reveal_cm=round(rw * 100, 1), status=j["status"], role=j["role"], frame=j["frame"], note=j["reason"][:220],
+              narrow_photo=round(pos, 4), narrow_contrast=round(contrast, 1))
+    if j["pos"] is not None:
+        ae.update(photo=round(j["pos"], 4), delta_cm=round(j["d"] * 100, 1), contrast=round(j["step"], 1))
     return ae
 
 
@@ -761,30 +765,71 @@ def _font(size: int):
         return ImageFont.load_default()
 
 
-def photo_check_status(photo_edges: list[dict], auto_edges: list[dict]) -> dict:
-    """item -> text of its check against the PHOTO (not against the spec): 'foto max x cm' over the named edges and the
-    readable automatic edges, '+ nejednoznačné' when a frame x reveal pair is open; items without any photo check are
-    absent (the overlay then says 'neoverené voči fotke' - never 'Δ0,0', G2 finding 3/4)."""
+AMBIGUOUS_AUTO = ("nejednoznačné", "spoločné ostenie", "zakrytá")
+
+
+def load_verdicts(out_dir: Path) -> dict:
+    """Verdicts of the last I7 run on the photo edges (<out>/<id>/i7/verdicts.json, written by iterate.Loop): (item, edge)
+    -> {cls, confirmed, model_photo}. Used only to colour the overlay (G2 kolo 2, N10); a verdict counts only while the
+    model edge is still where it was judged (|model - model_photo| < 2 mm)."""
+    p = out_dir / "i7" / "verdicts.json"
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return {(v["item"], v["edge"]): v for v in data.get("edges", [])}
+
+
+def _edge_level(e: dict, verdicts: dict, auto: bool) -> str:
+    """ok | over (beyond tolerance, not explained) | amb (cannot be judged / judged ambiguous by the loop) | unread."""
+    if auto:
+        if e["status"] == "OK":
+            return "ok"
+        if e["status"] in AMBIGUOUS_AUTO:
+            return "amb"
+        if e["status"] == "nečitateľné":
+            return "unread"
+        side, model = e["edge"], e["model"]
+    else:
+        if abs(e["delta_cm"]) <= e["tol_cm"] + 1e-9:
+            return "ok"
+        side = e.get("side") or ("bottom" if str(e.get("corner", "")).startswith("bottom") else "top")
+        model = e.get("model_projected", e.get("v_model_projected"))
+    v = verdicts.get((e["item"], side))
+    if v and v.get("cls") == "ambiguous" and (model is None or v.get("model_photo") is None or abs(v["model_photo"] - model) < 0.002):
+        return "amb"
+    return "over"
+
+
+def photo_check_status(photo_edges: list[dict], auto_edges: list[dict], verdicts: dict | None = None) -> dict:
+    """item -> {text, level} of its check against the PHOTO (not against the spec). 'foto max x cm' is taken over the
+    MEASURED edges only (named edges + readable automatic edges that are not ambiguous - G2 kolo 2, cause 3); ambiguous
+    edges (nejednoznačné, shared jamb, hidden, or over tolerance and judged ambiguous by the I7 loop) are counted apart.
+    level: 'over' = an edge beyond tolerance that nothing explains (red in the overlay), 'amb' = ambiguous only (orange),
+    'ok'. Items without any photo check are absent (the overlay then says 'neoverené voči fotke' - G2 finding 3/4)."""
+    verdicts = verdicts or {}
     acc: dict[str, dict] = {}
-    for e in photo_edges:
-        a = acc.setdefault(e["item"], {"d": [], "amb": 0, "unread": 0})
-        a["d"].append(abs(e["delta_cm"]))
-    for e in auto_edges:
-        a = acc.setdefault(e["item"], {"d": [], "amb": 0, "unread": 0})
-        if e["status"] in ("OK", "MIMO"):
-            a["d"].append(abs(e["delta_cm"]))
-        elif e["status"] == "nejednoznačné":
-            a["amb"] += 1
-        else:
-            a["unread"] += 1
+    for auto, lst in ((False, photo_edges), (True, auto_edges)):
+        for e in lst:
+            a = acc.setdefault(e["item"], {"d": [], "amb": [], "unread": 0, "over": 0})
+            lv = _edge_level(e, verdicts, auto)
+            if lv == "unread":
+                a["unread"] += 1
+            elif lv == "amb":
+                a["amb"].append(abs(e["delta_cm"]))
+            else:
+                a["d"].append(abs(e["delta_cm"]))
+                a["over"] += lv == "over"
     out = {}
     for item, a in acc.items():
         parts = [f"foto max {max(a['d']):.1f} cm ({len(a['d'])} hrán)"] if a["d"] else []
         if a["amb"]:
-            parts.append(f"{a['amb']} nejednoznačné")
+            parts.append(f"{len(a['amb'])} nejednoznačné (max {max(a['amb']):.1f} cm, mimo metriky)")
         if a["unread"] and not a["d"]:
             parts.append("nečitateľné")
-        out[item] = ", ".join(parts)
+        out[item] = {"text": ", ".join(parts), "level": "over" if a["over"] else "amb" if a["amb"] else "ok"}
     return out
 
 
@@ -858,14 +903,22 @@ def draw(spec, src, image_path: Path, proj, wall_faces, rows, trows, units, out_
             x, y = px(s0, vv1)
             ids = "+".join([oid] + [m["id"] for m in u["members"]])
             wv = max([worst.get(i, float("nan")) for i in [oid] + [m["id"] for m in u["members"]]] or [float("nan")])
-            pst = "; ".join(x for x in [(photo_status or {}).get(i) for i in [oid] + [m["id"] for m in u["members"]]] if x) or "neoverené voči fotke"
-            label = f"{ids} {u['o']['kind'][0].upper()} model−spec Δ{wv:.1f} cm · {pst}"
+            sts = [(photo_status or {}).get(i) for i in [oid] + [m["id"] for m in u["members"]]]
+            sts = [x for x in sts if x and x.get("text")]
+            pst = "; ".join(x["text"] for x in sts) or "neoverené voči fotke"
+            lev = "over" if any(x["level"] == "over" for x in sts) else "amb" if any(x["level"] == "amb" for x in sts) else "ok" if sts else "none"
+            head = f"{ids} {u['o']['kind'][0].upper()} model−spec Δ{wv:.1f} cm · "
             typ = _type_label(oid, trows)
             exc = "chýba" in typ
-            for text, dy, col in ((label, -36 if typ else -19, COLORS["text"]), (typ, -19, COLORS["exc"] if exc else COLORS["spec"])):
-                if text:
-                    dr.text((x + 3, y + dy), text, fill=(0, 0, 0, 255), font=small, stroke_width=3, stroke_fill=(0, 0, 0, 255))
-                    dr.text((x + 3, y + dy), text, fill=col + (255,), font=small)
+            dy = -36 if typ else -19
+            # G2 kolo 2 (N10): the photo part coloured - red = beyond tolerance and unexplained, orange = ambiguous only
+            pcol = {"over": COLORS["photo_over"], "amb": COLORS["photo_amb"], "ok": COLORS["text"], "none": COLORS["exc"]}[lev]
+            for text, xx, col in ((head, x + 3, COLORS["text"]), (pst, x + 3 + small.getlength(head), pcol)):
+                dr.text((xx, y + dy), text, fill=(0, 0, 0, 255), font=small, stroke_width=3, stroke_fill=(0, 0, 0, 255))
+                dr.text((xx, y + dy), text, fill=col + (255,), font=small)
+            if typ:
+                dr.text((x + 3, y - 19), typ, fill=(0, 0, 0, 255), font=small, stroke_width=3, stroke_fill=(0, 0, 0, 255))
+                dr.text((x + 3, y - 19), typ, fill=(COLORS["exc"] if exc else COLORS["spec"]) + (255,), font=small)
         tagged = []
         for kind_, bodies_by in (("object", {k: v for k, v in (obj_proj or {}).items() if obj_planes.get(k, REFERENCE_PLANE) == REFERENCE_PLANE}),
                                  *[(kd, bb) for kd, bb, _ in (extra or []) if kd in ("slab", "railing")]):
@@ -885,7 +938,9 @@ def draw(spec, src, image_path: Path, proj, wall_faces, rows, trows, units, out_
                  ("modrá: okná · fialová: dvere (3D) · zelená: rímsy, pásy (3D cez kameru fotky)", COLORS["window"]),
                  ("oranžová: GDL objekty (šambrány, oblúkový štít) cez kameru fotky", COLORS["object"]),
                  ("azúrová: Curtain Wall výkladov (rámy, v rovine fotky) · bledozelená: balkónové dosky · ružová: zábradlia (cez kameru)", COLORS["cw"]),
-                 ("žltá prerušovaná: spec (z fotky); žltý text: typ čítaný späť", COLORS["spec"])]
+                 ("žltá prerušovaná: spec (z fotky); žltý text: typ čítaný späť", COLORS["spec"]),
+                 ("foto: biela = v tolerancii · ČERVENÁ = mimo tolerancie, nevysvetlené · FIALOVÁ = len nejednoznačné (mimo metriky)",
+                  COLORS["photo_over"])]
         if other:
             lines.append((f"roviny bez fotky (nie sú v obraze): {', '.join(other)}", COLORS["exc"]))
         y = 8                                                            # legend on top (sky / roof), the parter stays visible

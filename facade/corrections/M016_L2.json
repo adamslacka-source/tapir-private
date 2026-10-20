@@ -10,12 +10,12 @@
   },
   {
    "ref": "openings[O5] (I7: nejednoznačné hrany)",
-   "text": "I7 slučka hranu neopravila: left -4.0 cm - istá hrana leží vnútri otvoru (+3.9 cm) - rám / krídlo, nie hrana murovaného otvoru (spec číta murovaný otvor)",
+   "text": "I7 slučka hranu neopravila: left -4.0 cm - istá hrana leží vnútri otvoru (+3.9 cm) - rám / krídlo, nie hrana murovaného otvoru (spec číta murovaný otvor); top +0.6 cm - ostenie ~5.5 cm: tretiny hrany ostenia nesúhlasia (5.556, 5.552, 5.532)",
    "proposal": "prijať model; hranu odčítať z ďalšieho záberu alebo zamerania"
   },
   {
    "ref": "openings[O6] (I7: nejednoznačné hrany)",
-   "text": "I7 slučka hranu neopravila: top +3.4 cm - hrana ostenia splýva s prvkom modelu / je ním zakrytá: A1; bottom +6.1 cm - dve hrany: 6.751 (skok 20) a 6.827 (skok 17)",
+   "text": "I7 slučka hranu neopravila: top +3.6 cm - hrana ostenia splýva s prvkom modelu / je ním zakrytá: A1; bottom +6.1 cm - dve hrany: 6.751 (skok 20) a 6.827 (skok 17)",
    "proposal": "prijať model; hranu odčítať z ďalšieho záberu alebo zamerania"
   },
   {

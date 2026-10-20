@@ -135,9 +135,13 @@ def _sub(d: np.ndarray, i: int) -> float:
     return 0.0
 
 
+S_C_DATUM = 23.79522680557854   # camera s_c of the facade frame (pilot B, 2026-10-19) - datum of s, see extract()
+
+
 def edge_in(prof: np.ndarray, sign: int) -> tuple[float, float]:
-    """Strongest step of the given sign (+1 = brighter after) in a profile: (position between samples, strength)."""
-    d = np.diff(prof) * sign
+    """Strongest step of the given sign (+1 = brighter after; 0 = either sign, strength = |step|) in a profile:
+    (position between samples, strength)."""
+    d = np.abs(np.diff(prof)) if sign == 0 else np.diff(prof) * sign
     i = int(np.argmax(d))
     return i + 0.5 + _sub(d, i), float(d[i])
 
@@ -734,8 +738,10 @@ def extract(root: Path, photo: Path) -> dict:
     bay["lintel_bot_px"] = {"GF": h_edge(g, 7210, READ["bay_lintel"][1], -1, 40, 16)[0], "1NP": h_edge(g, 7210, 2557, -1, 40, 14)[0],
                             "2NP": h_edge(g, 7210, 1830, -1, 40, 16)[0]}
     rec["bay"] = bay
-    c0 = vedge(READ["column_l"][0], 2650, 2900, +1)[0]
-    c1 = vedge(READ["column_l"][1], 2650, 2900, -1)[0]
+    # G2 kolo 2 (N6): either sign - in this band the grey column stands against the BRIGHTER sky (left edge bright -> dark,
+    # right edge dark -> bright), lower down against darker foliage; a fixed sign picked a weak step next to the guess
+    c0 = vedge(READ["column_l"][0], 2650, 2900, 0)[0]
+    c1 = vedge(READ["column_l"][1], 2650, 2900, 0)[0]
     ctop = h_edge(g, int(0.5 * (c0 + c1)), READ["column_l_top"], +1, 20, 16)[0]
     z_col = (lv["red1_top"] - cam.v_c) * f / (cam.cy - ctop)          # depth: the column top meets the soffit at its facade height
     # G2 finding 7: a cylinder seen off-axis (the camera is ~23 m to the right) projects WIDER than its diameter by
@@ -803,7 +809,15 @@ def assemble(X: dict) -> dict:
     col = X["col"]
     s_col_left = float(cam.s(col["px"][0], col["w_axis"]))
     s_roof_left = float(cam.s(0, w_f))
-    cam.s_c += -min(s_col_left, s_roof_left) + 0.05
+    # G2 kolo 2: the datum of s is FIXED (frame of 2026-10-19: s = 0 lay 0.05 m left of the column as read then) - a better
+    # reading of the column (edge polarity, N6) moves the column, not the whole facade. Fallback to the old rule only when
+    # a modelled point would get s < 0 with the fixed datum.
+    s_c_free = cam.s_c - min(s_col_left, s_roof_left) + 0.05
+    if min(s_col_left, s_roof_left) - cam.s_c + S_C_DATUM >= 0.0:
+        cam.s_c = S_C_DATUM
+    else:
+        print(f"WARNING: datum of s {S_C_DATUM} would put the column / roof at s < 0 - s origin from the leftmost point ({s_c_free:.6f})")
+        cam.s_c = s_c_free
     S = lambda x, w: round(float(cam.s(x, w)), 3)
     V = lambda y, w: round(float(cam.v(y, w)), 3)
     L = round(max(S(W - 1, CW_DEPTH_W), S(W - 1, W_GF_CW)), 3)

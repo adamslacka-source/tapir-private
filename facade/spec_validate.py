@@ -25,7 +25,7 @@ GDL_MAP_PATH = HERE / "gdl_param_map.json"
 LOW_CONF = ("odhad", "default")
 G1_CONF = ("pravidlo", "odhad", "default")          # below 'meranie' -> gate G1 (ADR 3.1)
 CONF_ORDER = ("kota", "meranie", "pravidlo", "odhad", "default")
-VALUE_KEYS = ("transom_h", "sidelight_w", "sidelight_sill", "transom_bars", "transom_bar_h", "bar_h", "reveal", "shoulder_h")
+VALUE_KEYS = ("transom_h", "sidelight_w", "sidelight_sill", "transom_bars", "transom_cols", "transom_bar_h", "bar_h", "reveal", "shoulder_h")
 TYPE_KEYS = ("leaves", "transom", "sidelight", "sash_bars", "leaf_panel", "frame_surface")
 EPS = 1e-6
 
@@ -48,6 +48,11 @@ def low_values(spec: dict, levels=G1_CONF):
         if is_value(node):
             if node["conf"] in levels:
                 yield ref, node["v"], node["conf"], node["src"], node.get("note", "")
+            # per-edge certainty of a rect (G2 kolo 2, N1): an edge below 'meranie' is a row of its own when the rect is measured
+            elif isinstance(node.get("edge_conf"), dict) and isinstance(node["v"], list) and len(node["v"]) == 4:
+                for e, ec in node["edge_conf"].items():
+                    if ec.get("conf") in levels:
+                        yield f"{ref}.{e}", node["v"][("left", "right", "bottom", "top").index(e)], ec["conf"], ec.get("src"), ec.get("note", "")
             return
         if isinstance(node, dict):
             for k, v in node.items():

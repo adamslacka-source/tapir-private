@@ -46,7 +46,8 @@ BORDER_M = 0.01          # m - candidate closer than this to the window border =
 CONTINUE_RATIO = 0.5     # the step beyond the jambs at >= this x the step on the edge = the edge runs on (wider object)
 UNCLEAR_RATIO = 0.3      # between this and CONTINUE_RATIO: unclear (a stone joint in line with a lintel, or a wider object)
 # parallax of the reveals (G2 finding 1)
-MIN_REVEAL_M = 0.02      # m - a visible reveal narrower than this is within the photo tolerance: no pair logic
+MIN_REVEAL_M = 0.03      # m - a visible reveal narrower than this is within the photo tolerance: no pair logic; a measured
+                         # pair spacing below it is no evidence of a masonry edge (G2 kolo 2, N1: 'ostenie' 2.2 cm = sign bottom)
 REVEAL_WIN = (0.3, 1.25) # spacing masonry -> frame accepted as this range x the expected rw (reveal depth is ODHAD; measured
                          # on M015 / M062: 0.35-0.9 x rw - a wider window catches signs / stone joints beyond the masonry)
 REVEAL_MIN_STEP = 6.0    # wall -> reveal is a step between two faces of one material: weaker than a frame edge
@@ -337,6 +338,16 @@ def masonry_edge(ph: Photo, edge: str, at: float, rw: float, rng, rect=None, fre
         role = "pair" if frame is not None else "outermost"
     res.update(pos=best["pos"], step=best["step"], frame=frame, role=role,
                rw_measured=round(abs(frame - best["pos"]), 4) if frame is not None else None)
+    # G2 kolo 2 (cause 1): a pair is evidence of a masonry edge only with a readable masonry step and a visible reveal
+    if best["step"] < MIN_STEP:
+        if role == "outermost":
+            return dict(res, status="ambiguous", reason=f"nečitateľná: jediný skok {best['step']:.1f} < {MIN_STEP:.0f} (prah kontrastu)")
+        return dict(res, status="ambiguous", reason=f"slabá murovaná hrana: skok {best['step']:.1f} < {MIN_STEP:.0f} (prah kontrastu) - "
+                                                     + (f"pár s rámom {frame:.3f} nie je dôkaz murovanej hrany" if frame is not None
+                                                        else "bez čitateľného rámu"))
+    if frame is not None and abs(frame - best["pos"]) < MIN_REVEAL_M:
+        return dict(res, status="ambiguous", reason=f"pár s ostením {abs(frame - best['pos']) * 100:.1f} cm < {MIN_REVEAL_M * 100:.0f} cm - "
+                                                     f"dva skoky tesne pri sebe nie sú dôkaz murovanej hrany (spodok tabule, lišta, tieň)")
     # thirds: with a frame the SPACING masonry - frame per third is compared (a residual tilt of the rectified photo moves
     # both lines alike); without one the positions themselves
     thirds = edge_thirds(ph, edge, best["pos"], rng, None)
@@ -361,16 +372,45 @@ def masonry_edge(ph: Photo, edge: str, at: float, rw: float, rng, rect=None, fre
     elif len(thirds) < 3 or max(thirds) - min(thirds) > CONSIST_M:
         return dict(res, status="ambiguous", reason=f"tretiny hrany ostenia nesúhlasia ({', '.join(f'{t:.3f}' for t in thirds)})")
     if rect is not None:
-        # a sign / awning runs on beyond BOTH ends of the opening; a joint of the cladding in line with one jamb is normal
         cont = continuation(ph, edge, best["pos"], rect, rng, free, None, best["step"])
         res["continuation"] = cont
         ends = [x for x in cont["beyond"] if x is not None]
-        if ends and all(x >= CONTINUE_RATIO * best["step"] for x in ends):
+        if edge in ("top", "bottom"):
+            # G2 kolo 2 (N1): the continuation test holds for the pair edge as for a single edge - a sign, an awning or a
+            # sill plate runs on beyond a FREE end of the lintel / sill line
+            if cont["continues"]:
+                return dict(res, status="ambiguous", reason=f"hrana pokračuje mimo otvoru (skok {cont['beyond']} vs {best['step']:.0f}) - "
+                                                             f"patrí širšiemu predmetu (tabuľa, markíza, parapetný plech), hrana otvoru je zakrytá")
+            if cont["unclear"]:
+                res["unclear"] = True
+        elif ends and all(x >= CONTINUE_RATIO * best["step"] for x in ends):
+            # a vertical edge: a pole runs on beyond BOTH ends; a joint of the cladding in line with one jamb / the ground
+            # below a door is normal
             return dict(res, status="ambiguous", reason=f"hrana ostenia pokračuje za oba konce otvoru (skok {cont['beyond']} vs {best['step']:.0f}) - patrí širšiemu predmetu")
     what = {"outer": f"murovaná hrana o {abs(best['pos'] - (frame or best['pos'])) * 100:.1f} cm ďalej od kamery ako rám (očakávané ostenie {rw * 100:.1f} cm)",
             "pair": f"hrana modelu je vonkajšia hrana páru, rám o {abs(frame - best['pos']) * 100 if frame else 0:.1f} cm vnútri (očakávané ostenie {rw * 100:.1f} cm)",
             "outermost": "jediný skok, ďalej od kamery nič - najvonkajšia čitateľná hrana (rám ostenia nečitateľný)"}[role]
     return dict(res, status="certain", reason=f"{what}; tretiny súhlasia, končí na ostení")
+
+
+def judge_reveal_edge(ph: Photo, edge: str, at: float, rw: float, rng, rect=None, free: tuple[bool, bool] = (True, True),
+                      tol: float = 0.03) -> dict:
+    """ONE decision on an opening edge whose reveal faces the camera (G2 kolo 2, cause 4: the automatic check of verify
+    and the I7 loop used to judge the same edge differently - M062 O6 'MIMO' and 'model potvrdený'). Both call this.
+      OK             certain masonry edge within tol of the model (photo = masonry edge)
+      MIMO           certain masonry edge farther than tol (the loop may correct the spec from it)
+      nejednoznačné  masonry_edge ambiguous (two edges, thirds disagree, weak step, pair spacing < 3 cm, continues
+                     beyond the opening)
+      nečitateľné    no readable step at all
+    Returns {status, pos, d, step, role, frame, reason, m (the full masonry_edge result)}."""
+    m = masonry_edge(ph, edge, at, rw, rng, rect, free)
+    out = {"pos": m.get("pos"), "step": m.get("step", 0.0), "role": m.get("role"), "frame": m.get("frame"), "m": m,
+           "d": None if m.get("pos") is None else round(m["pos"] - at, 4), "reason": m["reason"]}
+    if m["status"] != "certain":
+        out["status"] = "nečitateľné" if "nečitateľná" in m["reason"] else "nejednoznačné"
+        return out
+    out["status"] = "OK" if abs(m["pos"] - at) <= tol + 1e-9 else "MIMO"
+    return out
 
 
 # ---- crops (evidence) -------------------------------------------------------------------------------------------------

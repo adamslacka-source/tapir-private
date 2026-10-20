@@ -42,22 +42,12 @@ import systems as fs_systems  # noqa: E402
 from geom import REFERENCE_PLANE, frames_of, outside_of  # noqa: E402
 from spec_validate import validate  # noqa: E402
 from tapir_client import TapirClient, TapirError  # noqa: E402
-from from_photo import ATTRIBUTION, dark_center, h_edge  # noqa: E402
+from from_photo import ATTRIBUTION, h_edge  # noqa: E402
+from photo_b import (EDGE_READABLE, Cam, edge_verdict, front_masks, masked_dark_center,  # noqa: E402
+                     v_edge)
 
 KIND_COLOUR = {"curtainwall": (0, 230, 255), "wall": (255, 255, 255), "beam": (255, 40, 40), "column": (255, 160, 0),
                "slab": (60, 255, 60), "railing": (180, 255, 120), "object": (255, 230, 0)}
-
-
-class Cam:
-    def __init__(self, c: dict):
-        self.cx, self.cy, self.f, self.D0, self.s_c, self.v_c = (c[k] for k in ("cx", "cy", "f", "D0", "s_c", "v_c"))
-
-    def xy(self, svw: np.ndarray) -> np.ndarray:
-        z = self.D0 - svw[:, 2]
-        return np.column_stack([self.cx + (svw[:, 0] - self.s_c) * self.f / z, self.cy - (svw[:, 1] - self.v_c) * self.f / z])
-
-    def px_per_m(self, w: float) -> float:
-        return self.f / (self.D0 - w)
 
 
 def bodies_svw(geo: dict, fr) -> list[tuple[np.ndarray, list]]:
@@ -111,17 +101,6 @@ def expected_box(spec: dict, it: dict) -> list[float] | None:
         tpl = sysd[si["system"]]["template"]
         return gdl_expect.facade_bbox(tpl, {kk: v["v"] for kk, v in si["params"].items()}, si["origin"]["v"], outside_of(spec, si.get("plane", REFERENCE_PLANE)))
     return None
-
-
-def v_edge(g: np.ndarray, x_guess: float, y0: int, y1: int, sign: int, half: int = 14) -> tuple[float, float]:
-    """Vertical edge near x_guess: strongest step of the given sign (+1 = brighter to the right) of the column profile
-    (median over the rows y0..y1); returns (x px, strength)."""
-    x0 = int(round(x_guess)) - half
-    x0 = max(0, x0)
-    prof = np.median(g[y0:y1, x0:x0 + 2 * half + 1], axis=0)
-    d = np.diff(prof) * sign
-    i = int(np.argmax(d))
-    return x0 + i + 0.5, float(d[i])
 
 
 def _font(size):
@@ -282,6 +261,7 @@ def verify(spec: dict, project: str, port: int, out_root: Path, overlay: bool = 
     red = rect[..., 2].astype(np.float32) - 0.5 * (rect[..., 0].astype(np.float32) + rect[..., 1].astype(np.float32))
     ptol = spec["tolerances"]["meranie"]
     tree_x = 8350
+    masks = front_masks(spec, cam)
     for cw in spec["cw_fields"]:
         ax = cw.get("u_axes")
         if not ax or ax["conf"] != "meranie":
@@ -299,12 +279,18 @@ def verify(spec: dict, project: str, port: int, out_root: Path, overlay: bool = 
             ya, yb = sorted(cam.xy(np.array([[s, hi[0] + 0.05, w], [s, hi[1] - 0.05, w]]))[:, 1])
             if any(lo - 30 <= xm[0] <= hi + 30 for lo, hi in ((240, 310), (6680, 6750))):
                 continue                                       # behind a downpipe: axis by rule, not measurable
-            xp, st = dark_center(g, xm[0], int(ya), int(yb), half=10)
+            xp, st, hidden_by = masked_dark_center(g, xm[0], int(ya), int(yb), 10, masks)
+            if xp is None:                                     # a post / bracket stands right in front of the bar (N9)
+                photo.append({"item": cw["id"], "edge": f"stĺpik {k_ + 1} (stred lišty)", "model_px": round(float(xm[0]), 1), "photo_px": None,
+                              "delta_cm": None, "tol_cm": ptol * 100, "contrast": 0.0, "ok": None, "readable": False,
+                              "masked": "zakrytá: " + ", ".join(hidden_by)})
+                continue
             dm = (xm[0] - xp) / cam.px_per_m(w)
             readable = st >= 8.0                               # weaker bar = not readable in this band (reported, not judged)
             photo.append({"item": cw["id"], "edge": f"stĺpik {k_ + 1} (stred lišty)", "model_px": round(float(xm[0]), 1), "photo_px": round(float(xp), 1),
                           "delta_cm": round(float(dm) * 100, 2), "tol_cm": ptol * 100, "contrast": round(st, 1),
-                          "ok": abs(dm) <= ptol if readable else None, "readable": readable})
+                          "ok": abs(dm) <= ptol if readable else None, "readable": readable,
+                          **({"masked": "maskované: " + ", ".join(hidden_by)} if hidden_by else {})})
     # horizontal edges: bands (red channel), GF box, roof edge, walkway edges
     lin_by = {it["id"]: it for it in spec["linear"]}
     checks = []
@@ -343,31 +329,32 @@ def verify(spec: dict, project: str, port: int, out_root: Path, overlay: bool = 
             photo.append({"item": item, "edge": name, "model_px": round(float(ym), 1), "photo_px": round(float(yp), 1), "x_px": round(float(xm)),
                           "delta_cm": round(float(dm) * 100, 2), "tol_cm": ptol * 100, "contrast": round(stg, 1), "ok": abs(dm) <= ptol, "sample": True})
         if samples:
-            med = float(np.median(samples))
-            edge_rows.append({"item": item, "edge": name, "n": len(samples), "median_cm": round(med * 100, 2),
-                              "max_cm": round(max(abs(x) for x in samples) * 100, 2), "ok": abs(med) <= ptol})
+            edge_rows.append(dict({"item": item, "edge": name, "kind": "h"}, **edge_verdict(samples, ptol)))
     # vertical edges (G2 findings 6-7): the round column (silhouette of all its 3D vertices through the camera) and the
     # west end wall (left edge at the downpipe), between the walkways (rows where nothing stands in front of them)
     proj_by = {it["item"]: b for it, (_, b) in zip(order, proj)}
-    for item, name, which, sign, bands in (("STLP_L", "ľavá hrana stĺpa", "min", +1, ((2650, 2900), (3400, 3700))),
-                                           ("STLP_L", "pravá hrana stĺpa", "max", -1, ((2650, 2900), (3400, 3700))),
-                                           ("STENA_Z", "ľavá hrana steny (zvod v rohu)", "min", +1, ((2620, 2880), (3400, 3700)))):
+    # G2 kolo 2 (N6): either polarity (the column is darker than the sky above, brighter / darker than the foliage below),
+    # four bands over the height, EVERY sample judged (never a median of 2), a sample weaker than EDGE_READABLE excluded
+    v_bands = ((2420, 2600), (2650, 2900), (3250, 3400), (3400, 3700))
+    for item, name, which, sign, bands in (("STLP_L", "ľavá hrana stĺpa", "min", None, v_bands),
+                                           ("STLP_L", "pravá hrana stĺpa", "max", None, v_bands),
+                                           ("STENA_Z", "ľavá hrana steny (zvod v rohu)", "min", None, v_bands)):
         if item not in proj_by or not proj_by[item]:
             continue
         allp = np.vstack([b for b, _ in proj_by[item]])
         xs = cam.xy(allp)[:, 0]
         xm = float(xs.min() if which == "min" else xs.max())
         w_e = float(allp[np.argmin(xs) if which == "min" else np.argmax(xs), 2])
-        samples = []
+        samples, rd = [], []
         for y0, y1 in bands:
             xp, stg = v_edge(g, xm, y0, y1, sign, 14)
             dm = (xm - xp) / cam.px_per_m(w_e)
             samples.append(dm)
+            rd.append(stg >= EDGE_READABLE)
             photo.append({"item": item, "edge": name, "model_px": round(xm, 1), "photo_px": round(float(xp), 1), "y_px": f"{y0}-{y1}",
-                          "delta_cm": round(float(dm) * 100, 2), "tol_cm": ptol * 100, "contrast": round(stg, 1), "ok": abs(dm) <= ptol, "sample": True})
-        med = float(np.median(samples))
-        edge_rows.append({"item": item, "edge": name, "n": len(samples), "median_cm": round(med * 100, 2),
-                          "max_cm": round(max(abs(x) for x in samples) * 100, 2), "ok": abs(med) <= ptol})
+                          "delta_cm": round(float(dm) * 100, 2), "tol_cm": ptol * 100, "contrast": round(stg, 1),
+                          "ok": abs(dm) <= ptol if stg >= EDGE_READABLE else None, "readable": stg >= EDGE_READABLE, "sample": True})
+        edge_rows.append(dict({"item": item, "edge": name, "kind": "v"}, **edge_verdict(samples, ptol, rd, per_sample=True)))
     # G2 cause 4: what is NOT checked against the photo is said so (never 'Δ0' from model = spec)
     checked = {p["item"] for p in photo}
     unverified = sorted(it["item"] for it in items if it["item"] not in checked)
@@ -401,12 +388,13 @@ def verify(spec: dict, project: str, port: int, out_root: Path, overlay: bool = 
     num = [abs(r["delta_cm"]) for r in rows if r["delta_cm"] is not None]
     mull = [p for p in photo if not p.get("sample") and p.get("readable")]
     unread = [p for p in photo if not p.get("sample") and not p.get("readable")]
-    ph = [abs(p["delta_cm"]) for p in mull] + [abs(e["median_cm"]) for e in edge_rows]
+    ph = [abs(p["delta_cm"]) for p in mull] + [abs(e["judged_cm"]) for e in edge_rows if e["judged_cm"] is not None]
     result = {"spec": spec["id"], "elements": len(guids), "rows": len(rows), "rows_ok": sum(r["ok"] for r in rows), "max_delta_cm": max(num) if num else None,
               "types_ok": sum(t["status"] == "OK" for t in trows), "types": len(trows), "story_ok": n_story_ok,
               "photo": len(mull) + len(edge_rows), "photo_ok": sum(p["ok"] for p in mull) + sum(e["ok"] for e in edge_rows),
               "photo_max_cm": max(ph) if ph else None, "photo_edges": edge_rows, "photo_unreadable": len(unread),
-              "photo_fail": [f"{p['item']} {p['edge']} {p['delta_cm']} cm" for p in mull if not p["ok"]] + [f"{e['item']} {e['edge']} {e['median_cm']} cm" for e in edge_rows if not e["ok"]],
+              "photo_fail": [f"{p['item']} {p['edge']} {p['delta_cm']} cm" for p in mull if not p["ok"]] + [f"{e['item']} {e['edge']} {e['judged_cm']} cm ({e['rule']})" for e in edge_rows if not e["ok"]],
+              "photo_masked": [f"{p['item']} {p['edge']}: {p['masked']}" for p in photo if p.get("masked")],
               "photo_samples_max_cm": max(abs(p["delta_cm"]) for p in photo if p.get("sample")) if edge_rows else None,
               "photo_median_cm": float(np.median(ph)) if ph else None, "problems": problems, "paths": {k: str(v) for k, v in paths.items()},
               "seconds": round(time.monotonic() - t0, 1), "cw_photo": cw_res.get("photo"),

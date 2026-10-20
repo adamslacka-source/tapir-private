@@ -89,6 +89,37 @@ def rects_touch(r1, r2, tol: float = 1e-6) -> bool:
     return (abs(ds) <= tol and dv > 0) or (abs(dv) <= tol and ds > 0)
 
 
+EDGE_INDEX = {"left": 0, "right": 1, "bottom": 2, "top": 3}
+OPPOSITE = {"left": "right", "right": "left", "bottom": "top", "top": "bottom"}
+
+
+def jamb_context(units: dict, oid: str, edge: str) -> dict:
+    """Neighbourhood of one edge of an opening unit (build.opening_units, keyed by id) in its zone - ONE definition for
+    verify (automatic check) and the I7 loop (G2 kolo 2, cause 4):
+      shared   id of a touching opening whose opposite edge lies on this edge (shared jamb: not a masonry edge)
+      free     (before, after) ends of the edge for the continuation test: an end where a touching neighbour continues the
+               edge by construction is not free (top / bottom: left / right end; left / right: lower / upper end)"""
+    u = units[oid]
+    s0, s1, v0, v1 = u["rect"]
+    touching = [k for k, u2 in units.items() if k != oid and u2["zone"] == u["zone"] and rects_touch(u["rect"], u2["rect"])]
+    i, j = EDGE_INDEX[edge], EDGE_INDEX[OPPOSITE[edge]]
+    shared = next((k for k in touching if abs(u["rect"][i] - units[k]["rect"][j]) < 1e-3), None)
+    if edge in ("top", "bottom"):
+        free = (not any(abs(units[t]["rect"][1] - s0) < 1e-3 for t in touching), not any(abs(units[t]["rect"][0] - s1) < 1e-3 for t in touching))
+    else:
+        free = (not any(abs(units[t]["rect"][3] - v0) < 1e-3 for t in touching), not any(abs(units[t]["rect"][2] - v1) < 1e-3 for t in touching))
+    return {"shared": shared, "free": free, "touching": touching}
+
+
+def hidden_edge(rect: dict, edge: str) -> str | None:
+    """Reason when the spec declares this edge of a rect not readable on the photo (rect.edge_conf[edge].conf 'odhad',
+    G2 kolo 2 N1: e.g. the lintel behind a shop sign) - the automatic check never confirms it, the loop never corrects it."""
+    ec = (rect or {}).get("edge_conf", {}).get(edge)
+    if ec and ec.get("conf") in ("odhad", "default"):
+        return ec.get("note") or "hrana zakrytá (ODHAD)"
+    return None
+
+
 def angle_deg(v) -> float:
     return math.degrees(math.atan2(v[1], v[0]))
 

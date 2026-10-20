@@ -437,30 +437,12 @@
     {
      "id": "O1"
     },
-    "rect"
+    "rect",
+    "v",
+    0
    ],
-   "before": {
-    "v": [
-     1.0,
-     1.87,
-     0.15,
-     2.76
-    ],
-    "src": "S6",
-    "conf": "meranie",
-    "note": "dverový stĺpec výkladu O1 (kvetinárstvo): ľavá hrana, spodok a vrch = O1 (I1); pravá = stĺpik medzi dverami a výkladom s = 1,87 (S6; stred lišty na fotke 1,90)"
-   },
-   "after": {
-    "v": [
-     0.9158,
-     1.87,
-     0.15,
-     2.8211
-    ],
-    "src": "I7.1",
-    "conf": "meranie",
-    "note": "I7 iterácia 1: hrany left, top z fotky (zlúčené); pôvodne [1.0, 1.87, 0.15, 2.76] (S6, meranie)"
-   },
+   "before": 1.0,
+   "after": 0.9158,
    "id": "M015_L1.c6",
    "src": "I7.1",
    "conf": "meranie",
@@ -521,9 +503,48 @@
     "tol_cm": 3.0
    },
    "error_before_cm": 8.44,
-   "error_after_cm": 2.18,
+   "error_after_cm": 0.0,
    "kept": true,
-   "evaluated_in": 2
+   "evaluated_in": 2,
+   "history": [
+    {
+     "path": [
+      "i6",
+      "cw_fields",
+      {
+       "id": "O1"
+      },
+      "rect"
+     ],
+     "before": [
+      1.0,
+      1.87,
+      0.15,
+      2.76
+     ],
+     "after": [
+      0.9158,
+      1.87,
+      0.15,
+      2.8211
+     ],
+     "note": "pôvodná zlúčená oprava ľavej hrany a vrchu (I7.1, 2026-10-20 opravné kolo G2)"
+    }
+   ],
+   "edges": [
+    {
+     "edge": "left",
+     "before": 1.0,
+     "after": 0.9158,
+     "error_cm": 8.44,
+     "error_after_cm": 0.0,
+     "photo": null,
+     "reason": "model = spec na ráme, murovaná hrana left je na fotke o -8.4 cm ďalej od kamery (murovaná hrana o 5.9 cm ďalej od kamery ako rám (očakávané ostenie 16.7 cm); tretiny súhlasia, končí na ostení)",
+     "crop": "C:\\FacadePilot\\out\\M015_L1\\i7\\M015_L1_O1_left_auto_it1.png",
+     "method": "masonry_edge (paralaxa ostenia)"
+    }
+   ],
+   "g2_kolo2": "rozdelené po hranách (N2): oprava mení len ľavú hranu 1,00 -> 0,9158 (verify na hrane 0,0 cm); vrch bol zlúčený z hrany 2,824 = spodok tabule kvetinárstva s 'ostením' 2,2 cm < 3 cm (N1) - podľa pravidiel kola 2 nie je dôkaz, vrch je ručne ODHAD v typovom súbore; pôvodná chyba po oprave 2,18 cm patrila vrchu"
   },
   {
    "target": "types",
@@ -563,7 +584,7 @@
    "conf": "meranie",
    "cause": "spec",
    "iteration": 1,
-   "status": "active",
+   "status": "reverted",
    "reason": "model = spec na ráme, murovaná hrana left je na fotke o -8.4 cm ďalej od kamery (murovaná hrana o 5.9 cm ďalej od kamery ako rám (očakávané ostenie 16.7 cm); tretiny súhlasia, končí na ostení)",
    "evidence": {
     "method": "masonry_edge (paralaxa ostenia)",
@@ -620,7 +641,8 @@
    "error_before_cm": 8.44,
    "error_after_cm": 2.18,
    "kept": true,
-   "evaluated_in": 2
+   "evaluated_in": 2,
+   "reverted_reason": "G2 kolo 2 (N1): vrch O1b viazaný na vrch O1 z hrany tabule kvetinárstva - nie je meranie murovaného otvoru; vrch 2,8211 je ručne v typovom súbore s istotou ODHAD (rect.edge_conf.top)"
   },
   {
    "target": "types",
@@ -717,17 +739,22 @@
  "simplifications": [
   {
    "ref": "openings[O1] (I7: nejednoznačné hrany)",
-   "text": "I7 slučka hranu neopravila: right -6.2 cm - spoločné ostenie s O1b (dotýkajúce sa otvory) - hrana nie je hrana murovaného otvoru, raster sa kontroluje ako lišta",
+   "text": "I7 slučka hranu neopravila: right -6.2 cm - spoločné ostenie s O1b (dotýkajúce sa otvory) - hrana nie je hrana murovaného otvoru, raster sa kontroluje ako lišta; top +2.4 cm - hrana zakrytá - ODHAD podľa spec, slučka ju nemeria ani neopravuje: vrch za tabuľou kvetinárstva - nadpražie na fotke nevidno (G2 kolo 2, N1 / č. 15): 2,8211 = spodok tabule (2,80-2,82 v rovine fotky) ako DOLNÁ hranica murovaného otvoru (rám je na 2,76, nad ním po tabuľu tmavý pás - podhľad alebo tieň); skutočný vrch dočítať z ďalšieho záberu alebo zamerania",
    "proposal": "prijať model; hranu odčítať z ďalšieho záberu alebo zamerania"
   },
   {
    "ref": "openings[O2] (I7: nejednoznačné hrany)",
-   "text": "I7 slučka hranu neopravila: right +3.8 cm - dve hrany: 4.524 (skok 52) a 4.500 (skok 46)",
+   "text": "I7 slučka hranu neopravila: left -0.0 cm - ostenie ~13.6 cm: slabá murovaná hrana: skok 7.7 < 12 (prah kontrastu) - pár s rámom 3.394 nie je dôkaz murovanej hrany; right +3.8 cm - dve hrany: 4.524 (skok 52) a 4.500 (skok 46)",
+   "proposal": "prijať model; hranu odčítať z ďalšieho záberu alebo zamerania"
+  },
+  {
+   "ref": "openings[O3] (I7: nejednoznačné hrany)",
+   "text": "I7 slučka hranu neopravila: right -2.1 cm - spoločné ostenie s O4 (dotýkajúce sa otvory) - hrana nie je hrana murovaného otvoru, raster sa kontroluje ako lišta",
    "proposal": "prijať model; hranu odčítať z ďalšieho záberu alebo zamerania"
   },
   {
    "ref": "openings[O4] (I7: nejednoznačné hrany)",
-   "text": "I7 slučka hranu neopravila: bottom -4.2 cm - žiadny skok jasu >= 12 v okne ±10 cm (nečitateľná)",
+   "text": "I7 slučka hranu neopravila: left -2.1 cm - spoločné ostenie s O3 (dotýkajúce sa otvory) - hrana nie je hrana murovaného otvoru, raster sa kontroluje ako lišta; bottom -4.2 cm - žiadny skok jasu >= 12 v okne ±10 cm (nečitateľná)",
    "proposal": "prijať model; hranu odčítať z ďalšieho záberu alebo zamerania"
   },
   {
@@ -738,6 +765,11 @@
   {
    "ref": "openings[O6] (I7: nejednoznačné hrany)",
    "text": "I7 slučka hranu neopravila: bottom -5.0 cm - dve hrany: 4.734 (skok 84) a 4.848 (skok 55)",
+   "proposal": "prijať model; hranu odčítať z ďalšieho záberu alebo zamerania"
+  },
+  {
+   "ref": "openings[O7] (I7: nejednoznačné hrany)",
+   "text": "I7 slučka hranu neopravila: left +0.2 cm - ostenie ~4.3 cm: tretiny ostenia nesúhlasia (odstup od rámu -4.7, -4.2, -5.8 cm; hrana 5.505, 5.508, 5.509; skok ďalej od kamery po tretinách zdola: - / 5.481 / -)",
    "proposal": "prijať model; hranu odčítať z ďalšieho záberu alebo zamerania"
   }
  ],

@@ -523,6 +523,15 @@
      },
      "note": "horizontal division of the main transom: 0 = 'No Grid' (1), 1 = 'Divided Frame' (14); the transom accepts 1, 2, 3, 14, 15, 16, 4 - 'Divided' (6) is reset by the parameter script"
     },
+    "transom_cols": {
+     "write": {
+      "vgn_02": "$v"
+     },
+     "read": {
+      "param": "vgn_02"
+     },
+     "note": "panes side by side in the main transom (G2 kolo 2, N5): 1 = no vertical bar. Verified 2026-10-20 on M062 O4 by Get3DGeometryOfElements: vgn_02 2 -> one vertical bar at the middle of the transom (s 6.425, 0.04 wide), vgn_02 1 -> none; the horizontal bar (hgn_02 = 2) stays"
+    },
     "transom_bar_h": {
      "write": {
       "gs_horiz_div_height_02": "$v"
@@ -530,7 +539,7 @@
      "read": {
       "param": "gs_horiz_div_height_02"
      },
-     "note": "height of the division inside the transom above the leaf; position NEOVERENÉ by geometry, checked on the overlay only"
+     "note": "NO EFFECT on the geometry (tested 2026-10-20 on M062 O4: gs_horiz_div_height_02 0.405 -> 0.5, the horizontal bar of the transom stays at v 2.51 = middle of the transom glazing 2.16-2.86; hgn_02 = 2 equal panes); kept for parts that use it, M062 O4 does not send it any more"
     }
    },
    "system_params": {

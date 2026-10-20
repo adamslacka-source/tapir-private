@@ -456,13 +456,13 @@
     "v": 1,
     "src": "S6",
     "conf": "meranie",
-    "note": "nadsvetlík je dvojdielny (vodorovná priečka v 2,525, fotka)"
+    "note": "nadsvetlík je dvojdielny (vodorovná priečka, fotka 2,52); knižnica ju kladie do stredu nadsvetlíka (2,51, overené 3D geometriou) - parameter výšky delenia gs_horiz_div_height_02 nemá vplyv (overené), spec ho neposiela"
    },
-   "transom_bar_h": {
-    "v": 0.405,
+   "transom_cols": {
+    "v": 1,
     "src": "S6",
-    "conf": "odhad",
-    "note": "2,525 - 2,12; význam parametra knižnice NEOVERENÝ (ako M015 O3)"
+    "conf": "meranie",
+    "note": "nadsvetlík = dve tabule NAD SEBOU cez celú šírku krídla, bez zvislej priečky (fotka; G2 kolo 2, N5)"
    }
   },
   "O5": {
@@ -721,7 +721,7 @@
   },
   {
    "ref": "openings[O4]",
-   "text": "Domové dvere O4 = Door with Transom 27 s dvojdielnym nadsvetlíkom (G2 nález 10); spodok zakrytý kvetmi (ODHAD 0,20); poloha priečky v nadsvetlíku je parameter knižnice s NEOVERENÝM významom.",
+   "text": "Domové dvere O4 = Door with Transom 27 s dvojdielnym nadsvetlíkom (G2 nález 10): dve tabule nad sebou cez celú šírku (vgn_02 = 1, bez zvislej priečky - G2 kolo 2, N5), vodorovná priečka v strede nadsvetlíka 2,51 (fotka 2,52); spodok zakrytý kvetmi (ODHAD 0,20).",
    "proposal": "prijať"
   },
   {
