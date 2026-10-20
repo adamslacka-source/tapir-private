@@ -88,6 +88,8 @@ def pilot_b_gdl_spec():
     spec = json.loads(PILOT_B_SPEC.read_text(encoding="utf-8"))
     spec = copy.deepcopy(spec)
     s = spec["systems"]["rail.ochodza"]
+    if s.get("railing_kind") == "gdl":                         # pilot B is wired (2026-10-20): its own spec as it is
+        return spec
     s.pop("base_favorite", None)
     s.pop("post_distribution", None)
     s["railing_kind"] = "gdl"
@@ -124,8 +126,9 @@ def offline() -> None:
     check("R2 spec with railing_kind 'gdl' valid", not errors, "; ".join(errors[:3]))
     plan = gdl_plan(spec)
     rails = plan["railings"]
-    check("R2 plan: 2 railings x 2 segments = 4 FS_Railing objects (kind object)",
-          len(rails) == 4 and all(it["kind"] == "object" and it["template"] == rg.TEMPLATE for it in rails),
+    n_seg = sum(len(r_["path_sw"]["v"]) - 1 for r_ in spec["railings"])
+    check(f"R2 plan: one FS_Railing object per path segment ({n_seg}, kind object)",
+          len(rails) == n_seg and all(it["kind"] == "object" and it["template"] == rg.TEMPLATE for it in rails),
           ", ".join(f"{it['item']} A={next(w['value'] for w in it['gdl'] if w['name'] == 'A'):.3f}" for it in rails))
     fr = fb.frames_of(spec)["F"] if "F" in fb.frames_of(spec) else next(iter(fb.frames_of(spec).values()))
     ok, det = True, []
@@ -133,7 +136,7 @@ def offline() -> None:
         ang = it["payload"]["angle"]
         left = (-math.sin(ang), math.cos(ang))                   # local +y in plan
         gw = {w["name"]: w["value"] for w in it["gdl"]}
-        long_seg = gw["A"] > 10
+        long_seg = not it["item"].endswith(".1")                # segment 1 = the side railing to the facade
         n = fr.n
         if long_seg:                                              # front of the walkway falls away from the facade (+n)
             good = left[0] * n[0] + left[1] * n[1] > 0.99
@@ -147,9 +150,11 @@ def offline() -> None:
         segs = [it for it in rails if it["item"].startswith(rid)]
         n_posts = sum(counts(rg.expected_parts(rg.full_params({w["name"]: w["value"] for w in it["gdl"]})))["post"] for it in segs)
         L = [next(w["value"] for w in it["gdl"] if w["name"] == "A") for it in segs]
-        want_posts = sum(math.ceil(l / 1.261 - 1e-5) for l in L) + 1
+        r_ = next(x for x in spec["railings"] if x["id"] == rid)
+        bays = (r_.get("segment_bays") or {}).get("v") or [math.ceil(l / 1.261 - 1e-5) for l in L]
+        want_posts = sum(bays) + 1
         pc.append((rid, n_posts, want_posts))
-    check("R2 plan: posts = sum of bays + 1 (the shared corner post once)", all(a == b for _, a, b in pc), f"{pc}")
+    check("R2 plan: posts = sum of bays + 1 (shared vertices once)", all(a == b for _, a, b in pc), f"{pc}")
 
 
 def gdl_plan(spec: dict) -> dict:
@@ -318,11 +323,12 @@ def live(port: int, save: bool) -> None:
                 got = rg.parts_of_geometry(geo, det["details"]["origin"], det["details"].get("angle", 0.0))
                 cmp = rg.compare_parts(rg.expected_parts(pf), got, TOL)
                 bb = rg.bbox_of_parts([("x", b) for b in got])
-                good = cmp["ok"] and abs(bb[5] - pf["ZZYZX"]) <= TOL and abs(bb[4]) <= TOL \
+                z_low = -pf["mountDrop"] if pf["iMount"] == 1 else 0.0       # side mounted: the post runs below the foot
+                good = cmp["ok"] and abs(bb[5] - pf["ZZYZX"]) <= TOL and abs(bb[4] - z_low) <= TOL \
                     and abs(math.remainder(det["details"]["angle"] - it["payload"]["angle"], 2 * math.pi)) < 1e-6
                 ok &= good
                 det_s.append(f"{it['item']}: {counts(rg.expected_parts(pf))}, z {bb[4]:.3f}..{bb[5]:.3f}, angle {math.degrees(det['details']['angle']):.1f}")
-            check("R8 build plan (railing_kind gdl, pilot B walkway copy) placed: geometry = model, foot 0 .. H, angle = plan", ok, "; ".join(det_s))
+            check("R8 build plan (railing_kind gdl, pilot B walkway copy) placed: geometry = model, foot 0 (side mounted: -mountDrop) .. H, angle = plan", ok, "; ".join(det_s))
     finally:
         if created:
             ac.tapir("DeleteElements", {"elements": [{"elementId": {"guid": g}} for g in created]})

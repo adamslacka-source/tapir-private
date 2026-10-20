@@ -703,6 +703,13 @@
           "gdl_params": {
             "type": "object",
             "description": "railing_kind 'gdl': FS_Railing parameters overriding the favourite content (names of the template)"
+          },
+          "gdl_params_src": {
+            "type": "object",
+            "description": "railing_kind 'gdl': source + confidence of every gdl_params value (same keys, value objects; v = the value in gdl_params)",
+            "additionalProperties": {
+              "$ref": "#/$defs/anyValue"
+            }
           }
         }
       }
@@ -1309,6 +1316,34 @@
               "right"
             ],
             "description": "railing_kind 'gdl': fall side of the path direction (default: outside of the area closed by the path, or out of the facade for a straight path)"
+          },
+          "segment_bays": {
+            "type": "object",
+            "description": "railing_kind 'gdl': number of post bays per path segment (posts on the consoles, pilot B); default: bays <= system post_spacing",
+            "required": [
+              "v",
+              "src",
+              "conf"
+            ],
+            "properties": {
+              "v": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "src": {
+                "$ref": "#/$defs/src"
+              },
+              "conf": {
+                "$ref": "#/$defs/conf"
+              },
+              "note": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
           }
         }
       }

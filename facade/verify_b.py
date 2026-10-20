@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import sys
 import time
 from pathlib import Path
@@ -101,6 +102,153 @@ def expected_box(spec: dict, it: dict) -> list[float] | None:
         tpl = sysd[si["system"]]["template"]
         return gdl_expect.facade_bbox(tpl, {kk: v["v"] for kk, v in si["params"].items()}, si["origin"]["v"], outside_of(spec, si.get("plane", REFERENCE_PLANE)))
     return None
+
+
+def _bar_zs(sysd: dict) -> list[float]:
+    import railing_gdl
+    p = railing_gdl.full_params(sysd.get("gdl_params", {}))
+    return railing_gdl.bar_heights(p, railing_gdl.layout(p))
+
+
+def classify_rail_boxes(boxes: list[list[float]], p: dict) -> dict:
+    """Independent reading of the FS_Railing 3D (local boxes x0 x1 y0 y1 z0 z1, z above the foot): posts = upright
+    and narrow, handrail = the highest long box, bars = the other long thin boxes."""
+    longb = [b for b in boxes if b[1] - b[0] > 0.3]
+    posts = [b for b in boxes if b[5] - b[4] > 0.5 and b[1] - b[0] < 0.1]
+    top = max(longb, key=lambda b: b[5]) if longb else None
+    bars = [b for b in longb if b is not top and b[5] - b[4] < 0.05]
+    return {"posts": posts, "handrail": top, "bars": sorted(bars, key=lambda b: b[4])}
+
+
+def verify_rail_gdl(spec: dict, it: dict, geo: dict, det: dict | None, params: dict, fr, row, trow, problems: list, counts: dict) -> None:
+    """FS_Railing object of a 'railing_kind: gdl' railing: GDL parameters = sent, primitives = template model, posts /
+    bars counted from the 3D, bar axes and handrail top above the foot, post foot (mountDrop) and post axis depth -
+    3D in model coordinates, tolerance spec.tolerances.build."""
+    import railing_gdl
+    k = it["item"]
+    if det is None:
+        problems.append(f"{k}: FS_Railing object not readable")
+        return
+    r = it["spec_item"]
+    sysd = spec["systems"][r["system"]]
+    tol = spec["tolerances"]["build"]
+    bad = [f"{w['name']}={params.get(w['name'])!r}!={w['value']!r}" for w in it["gdl"] if not fs_systems.same(params.get(w["name"]), w["value"], 1e-6)]
+    trow(k, "FS_Railing: GDL parameters read = sent", 0, len(bad), "OK" if not bad else "FAIL", "; ".join(bad[:4]))
+    od = det["details"]
+    z_foot = fr.z0 + r["v"]["v"]
+    org = {"x": od["origin"]["x"], "y": od["origin"]["y"], "z": z_foot}
+    got = railing_gdl.parts_of_geometry(geo, org, od.get("angle", 0.0))
+    pf = railing_gdl.full_params({w["name"]: w["value"] for w in it["gdl"]})
+    cmp = railing_gdl.compare_parts(railing_gdl.expected_parts(pf), got, tol)
+    trow(k, "FS_Railing: GDL primitives = template model (count, boxes, foot = walkway top)", cmp["n_want"], cmp["n_got"], "OK" if cmp["ok"] else "FAIL",
+         f"max delta {cmp['max_delta'] * 100:.2f} cm; {cmp['unmatched_want'][:2]}")
+    cl = classify_rail_boxes(got, pf)
+    H = sysd["height"]["v"]
+    if cl["handrail"]:
+        row(k, "handrail top above the foot (3D)", H, cl["handrail"][5], "3D")
+    zs = _bar_zs(sysd)
+    for i, (zw, b) in enumerate(zip(sorted(zs), cl["bars"])):
+        row(k, f"bar {i + 1} axis above the foot (3D)", zw, 0.5 * (b[4] + b[5]), "3D")
+    if len(cl["bars"]) != len(zs):
+        problems.append(f"{k}: {len(cl['bars'])} bars in the 3D != {len(zs)} in the spec")
+    if cl["posts"]:
+        row(k, "post bottom below the foot (3D, mountDrop)", -pf["mountDrop"] if pf["iMount"] == 1 else 0.0, min(b[4] for b in cl["posts"]), "3D")
+        yc = (pf["sideGap"] + (pf["postW"] if pf["iPostProf"] == 1 else pf["postD"]) / 2) if pf["iMount"] == 1 else 0.0
+        row(k, "post axis from the path to the fall side (3D)", yc, float(np.median([0.5 * (b[2] + b[3]) for b in cl["posts"]])), "3D")
+    # counts per railing (all its segments)
+    c = counts.setdefault(r["id"], {"posts": 0, "bars": [], "posts_spec": 0, "bars_spec": len(zs)})
+    c["posts"] += len(cl["posts"])
+    c["bars"].append(len(cl["bars"]))
+    if not c["posts_spec"]:
+        pts = r["path_sw"]["v"]
+        segs = [float(np.hypot(b[0] - a[0], b[1] - a[1])) for a, b in zip(pts, pts[1:])]
+        bays = (r.get("segment_bays") or {}).get("v") or [math.ceil(L_ / sysd["post_spacing"]["v"] - 1e-5) for L_ in segs]
+        c["posts_spec"] = sum(bays) + 1
+
+
+def rail_photo(spec: dict, cam, g: np.ndarray, photo: list, ptol: float, tree_x: float) -> list[dict]:
+    """Photo check of the gdl railings: the front (every path segment along s) of every railing; per bar 11 samples
+    along the visible part (not at the piers / downpipes / tree): the brightest line within +-5 px of the projected bar
+    axis (median over 81 columns - posts are thin); the handrail top edge as a rising step. A sample row carries the
+    segment (FS_Railing object) it falls on; the verdict per bar and railing is the median of the samples (edge_verdict)."""
+    rows = []
+    for r in spec.get("railings", []):
+        sysd = spec["systems"][r["system"]]
+        if sysd.get("railing_kind") != "gdl":
+            continue
+        import railing_gdl
+        pf = railing_gdl.full_params(sysd.get("gdl_params", {}))
+        pts = r["path_sw"]["v"]
+        front = [(i, p, q) for i, (p, q) in enumerate(zip(pts, pts[1:])) if abs(q[1] - p[1]) < 1e-6 and abs(q[0] - p[0]) > 1e-6]
+        if not front:
+            continue
+        yc = (pf["sideGap"] + (pf["postW"] if pf["iPostProf"] == 1 else pf["postD"]) / 2) if pf["iMount"] == 1 else 0.0
+        w = front[0][1][1] + yc                                # the front falls out of the facade (+w)
+        v0, H = r["v"]["v"], sysd["height"]["v"]
+        a = min(min(p[0], q[0]) for _, p, q in front)
+        b = max(max(p[0], q[0]) for _, p, q in front)
+        s_lo = max(a + 0.3, float(cam.s_c + (60 - cam.cx) * (cam.D0 - w) / cam.f))
+        s_hi = min(b - 0.3, float(cam.s_c + (tree_x - cam.cx) * (cam.D0 - w) / cam.f))
+        n_seg = len(pts) - 1
+
+        def seg_of(s_):
+            i = next(i for i, p, q in front if min(p[0], q[0]) - 1e-9 <= s_ <= max(p[0], q[0]) + 1e-9)
+            return f"{r['id']}.{i + 1}" if n_seg > 1 else r["id"]
+
+        targets = [(f"tyč {i + 1} (os, {z:.3f} nad pätou)", v0 + z, "peak") for i, z in enumerate(_bar_zs(sysd))] +                   [("horná hrana madla", v0 + H, "edge")]
+        for name, v, how in targets:
+            samples = []
+            for s in np.linspace(s_lo, s_hi, 11):
+                xm, ym = cam.xy(np.array([[s, v, w]]))[0]
+                if any(lo - 60 <= xm <= hi + 60 for lo, hi in ((240, 310), (6680, 6750), (6990, 7520))):
+                    continue
+                if how == "edge":
+                    yp, st = h_edge(g, int(xm), ym, +1, 20, 6)
+                else:
+                    y0 = int(round(ym)) - 5
+                    prof = np.median(g[y0:y0 + 11, int(xm) - 40:int(xm) + 41], axis=1).astype(float)
+                    j = int(np.argmax(prof))
+                    sub = 0.0
+                    if 0 < j < len(prof) - 1:
+                        den = prof[j - 1] - 2 * prof[j] + prof[j + 1]
+                        sub = 0.5 * (prof[j - 1] - prof[j + 1]) / den if abs(den) > 1e-9 else 0.0
+                    yp, st = y0 + j + sub, float(prof[j] - prof.min())
+                dm = (ym - yp) / cam.px_per_m(w)
+                samples.append(dm)
+                photo.append({"item": seg_of(float(s)), "edge": name, "model_px": round(float(ym), 1), "photo_px": round(float(yp), 1), "x_px": round(float(xm)),
+                              "delta_cm": round(float(dm) * 100, 2), "tol_cm": ptol * 100, "contrast": round(st, 1), "ok": abs(dm) <= ptol, "sample": True})
+            if samples:
+                rows.append(dict({"item": r["id"], "edge": f"čelo: {name}", "kind": "h"}, **edge_verdict(samples, ptol)))
+        # posts of the front: the brightest column within +-12 px of the projected post axis, rows of the dense bar group
+        # (0.05-0.45 m above the foot; the anchor posts sit on consoles read from these posts - only the posts between
+        # them are independent); posts at the piers / downpipes / behind the tree are not read
+        bays = (r.get("segment_bays") or {}).get("v")
+        posts = []
+        for i, p, q in front:
+            n_b = bays[i] if bays else math.ceil(abs(q[0] - p[0]) / sysd["post_spacing"]["v"] - 1e-5)
+            posts += [p[0] + (q[0] - p[0]) * k / n_b for k in range(n_b + 1)]
+        posts = sorted({round(x, 4) for x in posts})
+        samples = []
+        for sp_ in posts:
+            xm = float(cam.xy(np.array([[sp_, v0 + 0.25, w]]))[0][0])
+            if not 80 < xm < tree_x or any(lo - 40 <= xm <= hi + 40 for lo, hi in ((240, 310), (6680, 6750), (6990, 7520))):
+                continue
+            ya, yb = sorted(cam.xy(np.array([[sp_, v0 + 0.45, w], [sp_, v0 + 0.05, w]]))[:, 1])
+            x0 = int(round(xm)) - 12
+            prof = np.median(g[int(ya):int(yb), x0:x0 + 25], axis=0).astype(float)
+            j = int(np.argmax(prof))
+            st = float(prof[j] - np.median(prof))
+            dm = (xm - (x0 + j)) / cam.px_per_m(w)
+            readable = st >= EDGE_READABLE
+            if readable:
+                samples.append(dm)
+            photo.append({"item": seg_of(float(min(max(sp_, a), b))), "edge": "stĺpik zábradlia (os)", "model_px": round(xm, 1), "photo_px": float(x0 + j),
+                          "delta_cm": round(float(dm) * 100, 2), "tol_cm": ptol * 100, "contrast": round(st, 1),
+                          "ok": abs(dm) <= ptol if readable else None, "readable": readable, "sample": True})
+        if samples:
+            rows.append(dict({"item": r["id"], "edge": f"čelo: stĺpiky (os, {len(samples)} čitateľných z {len(posts)})", "kind": "v"},
+                             **edge_verdict(samples, ptol)))
+    return rows
 
 
 def _font(size):
@@ -214,11 +362,17 @@ def verify(spec: dict, project: str, port: int, out_root: Path, overlay: bool = 
     order = [it for it in items if it["item"] in guids]
     geos = geometry(ac, [guids[it["item"]] for it in order])
     proj = []
+    rail_gdl = [it for it in order if it.get("railing_kind") == "gdl"]
+    rpar = fb.gdl_params(ac, [guids[it["item"]] for it in rail_gdl]) if rail_gdl else {}
+    rail_counts: dict = {}
     for it, geo in zip(order, geos):
         bodies = bodies_svw(geo, fr)
-        proj.append((it["kind"], bodies))
+        proj.append(("railing" if it.get("railing_kind") == "gdl" else it["kind"], bodies))
         bb = bbox(bodies)
         k = it["item"]
+        if it.get("railing_kind") == "gdl":                    # FS_Railing object (R1 closed): parts, counts, heights
+            verify_rail_gdl(spec, it, geo, details.get(k), rpar.get(guids[k], {}), fr, row, trow, problems, rail_counts)
+            continue
         if bb is None:                                         # a wall merged into its neighbours in 3D: bounding box of the element
             b3 = ac.tapir("Get3DBoundingBoxes", {"elements": [{"elementId": {"guid": guids[k]}}]})["boundingBoxes3D"][0].get("boundingBox3D")
             if b3 is None:
@@ -252,6 +406,10 @@ def verify(spec: dict, project: str, port: int, out_root: Path, overlay: bool = 
         for i, nm in enumerate(names):
             # a slab / wall extent along s is clipped by nothing here; an object of FS_Louvers: lamellae inside the box
             row(k, f"3D {nm}", exp[i], bb[i], "3D", tolerance=tol if not (it["kind"] == "object" and nm in ("w0", "w1")) else 0.03)
+    # FS_Railing: posts and bars per railing (all segments) vs the spec
+    for rid, c in sorted(rail_counts.items()):
+        trow(rid, "FS_Railing: posts (all segments, model 3D) = spec (sum of segment bays + 1, shared vertices once)", c["posts_spec"], c["posts"])
+        trow(rid, "FS_Railing: horizontal bars per segment (model 3D) = spec (barZList)", c["bars_spec"], sorted(set(c["bars"])) if len(set(c["bars"])) > 1 else c["bars"][0])
     # (d) photo
     cam_d = next(s for s in spec["sources"] if s["id"] == "S1")["camera"]
     cam = Cam(cam_d)
@@ -330,6 +488,9 @@ def verify(spec: dict, project: str, port: int, out_root: Path, overlay: bool = 
                           "delta_cm": round(float(dm) * 100, 2), "tol_cm": ptol * 100, "contrast": round(stg, 1), "ok": abs(dm) <= ptol, "sample": True})
         if samples:
             edge_rows.append(dict({"item": item, "edge": name, "kind": "h"}, **edge_verdict(samples, ptol)))
+    # FS_Railing (R1 closed): every horizontal bar of the front segment = the brightest line near its projection, and the
+    # top edge of the handrail (the scale reference itself, so a check of the w placement) - relative, +-3 cm
+    edge_rows += rail_photo(spec, cam, g, photo, ptol, tree_x)
     # vertical edges (G2 findings 6-7): the round column (silhouette of all its 3D vertices through the camera) and the
     # west end wall (left edge at the downpipe), between the walkways (rows where nothing stands in front of them)
     proj_by = {it["item"]: b for it, (_, b) in zip(order, proj)}

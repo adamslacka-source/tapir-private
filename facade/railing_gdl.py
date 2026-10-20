@@ -33,6 +33,13 @@ EPS = 1e-5
 # steel / glass / perforated sheet surfaces of the CZ template library (pilot projects); a missing one -> 0 (object surface)
 STEEL = "Kov - nízkouhlíková ocel"
 _STEEL_PARTS = {"matPost": STEEL, "matRail": STEEL}
+# the same surface under its SK name (SK template of pilot B, checked 2026-10-20)
+SURFACE_ALT = {STEEL: ("Kov - nízkouhlíková oceľ",)}
+
+
+def surface_name(name: str, available) -> str | None:
+    """Name of the surface as the project has it (CZ name, else its SK equivalent); None when neither exists."""
+    return next((n for n in (name,) + SURFACE_ALT.get(name, ()) if n in available), None)
 
 # Favourites (all values m). Rationale in the template README; normative minima are OVERIT NA STN.
 FAVORITES = {
@@ -256,8 +263,9 @@ def surface_writes(ac, surfaces: dict, log: list | None = None) -> dict:
     by_name = {a["name"]: a["index"] for a in ac.tapir("GetAttributesByType", {"attributeType": "Surface"})["attributes"]}
     out = {}
     for k, name in surfaces.items():
-        out[k] = by_name.get(name, 0)
-        if name not in by_name and log is not None:
+        nm = surface_name(name, by_name)
+        out[k] = by_name[nm] if nm else 0
+        if nm is None and log is not None:
             log.append(f"surface '{name}' not in the project - {k} = 0 (object surface)")
     return out
 
@@ -281,10 +289,13 @@ def _hash(obj) -> str:
 
 
 def ensure_favorites(ac, names=None, origin=(6000.0, 500.0), log: list | None = None, template_hash: str = "",
-                     manifest_path: Path | None = None, force: bool = False) -> dict:
+                     manifest_path: Path | None = None, force: bool = False, prepare=None) -> dict:
     """'FS rail.*' Object favourites of FS_Railing (ADR D4 sample route): CreateObjects far from every model ->
     SetGDLParametersOfElements -> classification 'Zábradlie/Zábradlí' -> Create/UpdateFavoritesFromElements -> delete
-    the sample. Idempotent by a hash (params + template hash) in manifest_path. Returns {name: {hash, params, action}}."""
+    the sample. Idempotent by a hash (params + template hash) in manifest_path. Returns {name: {hash, params, action}}.
+    prepare(guid): called on the fresh sample before it is edited - pilot B: the Object tool puts it on a HIDDEN layer of
+    the template ('Interiér - sanita a zariadenia'), where it can be neither changed nor deleted, so build moves it to
+    the facade layer first (the favourite then carries the facade layer)."""
     log = log if log is not None else []
     names = list(names or FAVORITES)
     man = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path and manifest_path.exists() else {"favorites": {}}
@@ -304,6 +315,8 @@ def ensure_favorites(ac, names=None, origin=(6000.0, 500.0), log: list | None = 
             raise RuntimeError(f"{name}: sample not created: {el}")
         g = el["elementId"]["guid"]
         try:
+            if prepare is not None:
+                prepare(g)
             r = ac.tapir("SetGDLParametersOfElements", {"elementsWithGDLParameters": [{"elementId": {"guid": g}, "gdlParameters": gdl_writes(p)}]})
             errs = [x for x in r["executionResults"] if not x.get("success")]
             if errs:
@@ -349,21 +362,29 @@ def plan_railing(r: dict, sysdef: dict, pts_xy: list[tuple[float, float]], z_abs
                  base_params: dict, fall_left: list[bool] | None = None) -> list[dict]:
     """One FS_Railing object per straight segment of the path. Returns [{seg, payload, params}]: the payload of
     CreateObjects (absolute z, floorIndex, plan angle) and every GDL parameter to write (favourite content + segment).
-    Posts: spacing = system post_spacing (maximum, equal bays), post axis on the path vertices (pInset 0), the shared
-    vertex of two segments carries one post (the first segment's); the handrail runs on by half its width over an
-    inner vertex (closed corner)."""
+    Posts: spacing = system post_spacing (maximum, equal bays) or railing segment_bays (count per segment), post axis on
+    the path vertices (pInset 0), the shared vertex of two segments carries one post (the first segment's); the handrail
+    runs on by half its width over an inner vertex that turns (closed corner), not over a straight joint."""
     pts = [tuple(map(float, q)) for q in pts_xy]
     sides = fall_left or fall_sides(pts, outward)
     n = len(pts) - 1
     p0 = full_params(base_params)
     p0.update(sysdef.get("gdl_params", {}))
     ovh = (p0["railW"] / 2) if p0["bRail"] else 0.0
+    bays = (r.get("segment_bays") or {}).get("v")
+
+    def corner(i: int) -> bool:                    # inner vertex i turns (a straight joint gets no handrail overrun)
+        u = np.array(pts[i]) - np.array(pts[i - 1])
+        w = np.array(pts[i + 1]) - np.array(pts[i])
+        return abs(u[0] * w[1] - u[1] * w[0]) > 1e-6 * np.linalg.norm(u) * np.linalg.norm(w)
+
     items = []
     for k in range(n):
         a, b = np.array(pts[k]), np.array(pts[k + 1])
         L = float(np.linalg.norm(b - a))
         start_post = k == 0                        # path order: segment k > 0 shares its start vertex with segment k - 1
-        ovh_start, ovh_end = (ovh if k > 0 else 0.0), (ovh if k < n - 1 else 0.0)
+        ovh_start = ovh if k > 0 and corner(k) else 0.0
+        ovh_end = ovh if k < n - 1 and corner(k + 1) else 0.0
         if sides[k]:
             org, d = a, (b - a) / L
             bs, be, os_, oe = start_post, True, ovh_start, ovh_end
@@ -373,6 +394,8 @@ def plan_railing(r: dict, sysdef: dict, pts_xy: list[tuple[float, float]], z_abs
         p = dict(p0)
         p.update({"A": round(L, 6), "ZZYZX": sysdef["height"]["v"], "iPostMode": 1, "postSp": sysdef["post_spacing"]["v"],
                   "pInset": 0.0, "bPostStart": bs, "bPostEnd": be, "railOvhS": round(os_, 6), "railOvhE": round(oe, 6)})
+        if bays:                                   # posts per segment given (pilot B: on the consoles) -> by count
+            p.update({"iPostMode": 0, "nPost": int(bays[k]) + 1})
         p.update(info_dims(p))
         payload = {"libraryPartName": TEMPLATE, "coordinates": {"x": round(float(org[0]), 6), "y": round(float(org[1]), 6), "z": round(z_abs, 6)},
                    "floorIndex": floor, "angle": round(math.atan2(d[1], d[0]), 9)}

@@ -829,8 +829,13 @@ def ensure_rail_gdl_favorites(ac: TapirClient, spec: dict, gdl: dict, out_root: 
     std = [n for n in names if n in railing_gdl.FAVORITES]
     n = 0
     if write and std:
+        # the sample goes onto the facade layer before it is edited (the Object tool default layer of the template is hidden:
+        # an element there can be neither changed nor deleted) - the favourite carries the facade layer
+        layer = spec["reference"]["layer"]
+        li = facade_layer(ac, layer, log)
         res = railing_gdl.ensure_favorites(ac, std, origin=(SAMPLE_OFFSET[0], SAMPLE_OFFSET[1] + 40.0), log=log,
-                                           template_hash=gdl["FS_Railing"]["hash"], manifest_path=out_root / "rail_gdl_favorites.json")
+                                           template_hash=gdl["FS_Railing"]["hash"] + "|" + layer, manifest_path=out_root / "rail_gdl_favorites.json",
+                                           prepare=lambda g: move_to_layer(ac, [g], li, log))
         n = sum(v["action"] != "kept" for v in res.values())
         existing |= set(std)
     missing = [nm for nm in names if nm not in existing]

@@ -87,6 +87,9 @@ Výška 1,0 m ako minimum zábradlia (pri väčšej výške pádu 1,1 m) – **O
 (`kind: object`, jeden na úsek, `Element ID` s príponou `.1`, `.2`, …), strana pádu = mimo plochy uzavretej trasou (balkón,
 ochodza), pri priamej trase von z fasády, prípadne `railings[].fall_side`; `verify` ich číta ako objekty + porovnanie
 primitív s modelom šablóny.
+Počet polí na úsek môže dať `railings[].segment_bays` (pilot B: stĺpik na každej konzole, `nPost` na úsek); rovný spoj dvoch
+úsekov je bez presahu madla. Vzorka favoritu sa pred úpravou presunie na vrstvu fasády (SK šablóna: predvolená vrstva nástroja
+Objekt je skrytá – prvok sa tam nedá zmeniť ani zmazať). Zapojené v pilote B 2026-10-20 (ADR-001 sekcia 9).
 
 ## Zmena šablóny
 

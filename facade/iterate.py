@@ -1527,7 +1527,10 @@ def write_g2_b() -> Path:
                            f"(≥ {CONFIRM_RATIO}× ďalší kandidát) pri modeli; pásy so žalúziou merajú škáry / vodiace lišty žalúzií (kruhový dôkaz) a "
                            "nepotvrdzujú nič; inak **neoverené** (nečitateľné). Západná svetlá plocha = plná stena koncového poľa `STENA_Z` "
                            "(hĺbka, hrúbka, materiál ODHAD); stĺp `STLP_L` má os v hĺbke, v ktorej sa odčítali jeho okraje (hĺbka NEOVERENÁ). "
-                           "Zábradlie: výnimka R1 (favorit s vodorovnými tyčami pripraví architekt).\n\n"
+                           "Zábradlie (2026-10-20, výnimka R1 uzavretá): GDL objekt `FS_Railing` z favoritu `FS rail.horiz_5` po priamych úsekoch – "
+                           "10 vodorovných tyčí vo výškach nameraných na fotke, stĺpiky z pásoviny na konzolách (čelo rozdelené v konzolách, "
+                           "kde sa mení rytmus), čelné kotvenie na hrot konzoly; fotokontrola tyčí, hornej hrany madla a stĺpikov čela "
+                           "(medián vzoriek, relatívne – mierka ODHAD).\n\n"
                            "**Dočistenie po 2. kontrole G2 (2026-10-20):** zvislé hrany (stĺp, stena) sa merajú v 4 pásoch po výške s ľubovoľnou "
                            "polaritou a každá vzorka sa hodnotí samostatne (nikdy medián z 2 vzoriek); stĺpiky zábradlí a konzoly pred LOP sú "
                            "maskované z modelu (`photo_b.front_masks`), v parapetnom páse sa nemerajú ako lišty LOP.",

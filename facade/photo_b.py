@@ -73,8 +73,9 @@ POST_MARGIN = 0.065        # m - margin of a railing post mask: reading of the p
 def front_masks(spec: dict, cam) -> list[dict]:
     """Elements standing IN FRONT of the curtain walls, projected into the photo (px boxes): the brackets under the
     walkways and the railing posts on them (one post per bracket, adapter from_photo) - G2 kolo 2 (N9): in the parapet
-    band they were measured as mullions. The modelled railing infill differs from the photo (exception R1), so only the
-    posts and brackets mask. Returns [{item, kind, x0, x1, y0, y1}]."""
+    band they were measured as mullions. Only the posts and brackets mask: the bars of the railing (FS_Railing, R1
+    closed 2026-10-20) are horizontal and the mullion reading takes the median over the rows. The post box stays at the
+    depth the posts were read at (walkway edge, camera of the photo). Returns [{item, kind, x0, x1, y0, y1}]."""
     walks = [sl for sl in spec.get("slabs", []) if sl["kind"] == "walkway"]
     rails = {r["on"]: r for r in spec.get("railings", [])}
     out = []

@@ -506,7 +506,10 @@ def plan_railings_gdl(spec: dict, r: dict, sysdef: dict, frames: dict, home, sys
     base = dict(railing_gdl.FAVORITES[fav]["params"]) if fav in railing_gdl.FAVORITES else {}
     attrs = sysinfo.get("attrs")
     if fav in railing_gdl.FAVORITES and attrs is not None:
-        base.update({k: attrs.surface[n]["index"] for k, n in railing_gdl.FAVORITES[fav].get("surfaces", {}).items() if n in attrs.surface})
+        for k, n in railing_gdl.FAVORITES[fav].get("surfaces", {}).items():
+            nm = railing_gdl.surface_name(n, attrs.surface)      # CZ name or its SK equivalent
+            if nm:
+                base[k] = attrs.surface[nm]["index"]
     pts = [tuple(fr.xy(s_, w_)) for s_, w_ in r["path_sw"]["v"]]
     n_seg = len(pts) - 1
     fall = [r["fall_side"] == "left"] * n_seg if r.get("fall_side") else None
@@ -978,7 +981,8 @@ def build(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_roo
 
     # ---- quick read-back of what was sent (full comparison is verify.py)
     readback = existing(ac, [e["guid"] for e in known.values()])
-    params = gdl_params(ac, [known[o["item"]]["guid"] for o in want["openings"] + want["objects"] if o.get("inst") or o["kind"] == "object"])
+    params = gdl_params(ac, [known[o["item"]]["guid"] for o in want["openings"] + want["objects"] + want["railings"]
+                             if o.get("inst") or o["kind"] == "object"])     # railings: FS_Railing objects (railing_kind gdl)
     mismatches = []
     tol = spec["tolerances"]["build"]
     for item in all_items:

@@ -80,6 +80,9 @@ READ = {
     "tree_x": 8350,                # right of it the upper floors are hidden by leaves
     "walk_corner": 25,             # corner post of the walkways at the left end
     "louvre_bottom": {"2NP": 2232, "1NP": 2998, "GF": None},   # GF: all blinds down to the base
+    # railing posts: the flat bar passes in front of the walkway edge and is bolted (2 bolts) between the two plates of
+    # the console tip; bottom of those plates read by eye on 3x crops at the posts next to cx (4718 / 4712 px)
+    "post_bracket_bottom": {"upper": 2413, "lower": 3227},
 }
 # curtain wall axes read by eye on full-resolution crops of every floor (x px; m = mullion through the whole floor,
 # j = door jamb that ends at the transom), door fields; refined on the photo (dark bar centre) - see rec["axes"].
@@ -400,6 +403,142 @@ def railing_profile(g, posts: list[int], y_bar_guess: float, y_top_guess: float)
     return {"h_px": float(np.median(h)), "h_spread": float(np.median(np.abs(h - np.median(h))) * 1.4826), "n": len(h),
             "top_px": float(np.median(tops)), "edge_px": float(np.median(edges)),
             "bars_px": [float(np.median([b[i] for b in bars_all if len(b) == len(bars_all[0])])) for i in range(len(bars_all[0]))] if bars_all else []}
+
+
+def _fwhm(prof: np.ndarray, i: int, bg: float) -> float:
+    """Full width at half height of the bright peak at i over the background bg (linear interpolation, px)."""
+    h = bg + (prof[i] - bg) / 2
+    a, b = i, i
+    while a > 0 and prof[a] > h:
+        a -= 1
+    while b < len(prof) - 1 and prof[b] > h:
+        b += 1
+    xa = a + (h - prof[a]) / (prof[a + 1] - prof[a]) if prof[a + 1] != prof[a] else float(a)
+    xb = b - 1 + (prof[b - 1] - h) / (prof[b - 1] - prof[b]) if prof[b - 1] != prof[b] else float(b)
+    return float(xb - xa)
+
+
+def railing_infill(g, posts: dict, rails: dict, m_r: float) -> dict:
+    """Horizontal bars of the walkway railings (R1: they are modelled as FS_Railing, so their number and heights are read,
+    not assumed). Per field between two posts (central 120 px, median over the columns): bright peaks between the top
+    rail and the walkway edge, prominent (>= 40 over the +-8 px minimum) and as bright as the top rail (>= 0.85 x its
+    peak - the louvre slats behind the railing are lit too but weaker). Source = the UPPER walkway (all fields show the
+    same count); the LOWER walkway is the independent check (every upper bar looked up within +-3 px in every field).
+    Heights above the foot (walkway edge): z = RAIL_H - (top rail peak - top edge + rel) / m_r, rel = bar - top rail peak.
+    Profiles: top rail silhouette (25 % over the background - its lower half is in shade), bar FWHM (dense group over the
+    uniform perforated panel)."""
+    out = {}
+    for wk in ("upper", "lower"):
+        r = rails[wk]
+        fields = []
+        for p, q in zip(posts[wk], posts[wk][1:]):
+            if not (700 < p < 6600 and 250 < q - p < 320):
+                continue
+            xc = int(0.5 * (p + q))
+            if any(a <= xc <= b for a, b in SKIP_X):
+                continue
+            y0 = int(r["top_px"]) - 12
+            prof = np.median(g[y0:int(r["edge_px"]) + 6, xc - 60:xc + 60], axis=1).astype(float)
+            pk = []
+            for i in range(2, len(prof) - 2):
+                if prof[i] >= prof[i - 1] and prof[i] > prof[i + 1] and y0 + i >= r["top_px"] - 3:
+                    lo_ = min(prof[max(0, i - 8):i].min(), prof[i + 1:i + 9].min())
+                    if prof[i] - lo_ > 40:
+                        pk.append((y0 + i + _sub(prof, i), float(prof[i]), i))
+            if not pk:
+                continue
+            ref = pk[0][1]
+            pk = [t for t in pk if t[1] >= 0.85 * ref]
+            fields.append({"x": xc, "prof": prof, "top": pk[0][0], "rel": [t[0] - pk[0][0] for t in pk[1:]], "idx": [t[2] for t in pk]})
+        out[wk] = fields
+    up = out["upper"]
+    clusters: list[list[float]] = []
+    for v in sorted(v for f_ in up for v in f_["rel"]):
+        if clusters and v - clusters[-1][-1] < 6:
+            clusters[-1].append(v)
+        else:
+            clusters.append([v])
+    bars = [c for c in clusters if len(c) >= 0.6 * len(up)]
+    rel_m = [float(np.median(c)) for c in bars]
+    d_top = float(np.median([f_["top"] for f_ in up])) - rails["upper"]["top_px"]
+    z = [RAIL_H - (d_top + v) / m_r for v in rel_m]
+    # lower walkway: the same bars (scaled by its railing height in px)
+    sc = rails["lower"]["h_px"] / rails["upper"]["h_px"]
+    check = []
+    for v in rel_m:
+        offs = []
+        for f_ in out["lower"]:
+            near = [x for x in f_["rel"] if abs(x - v * sc) <= 3.0]
+            if near:
+                offs.append(min(near, key=lambda x: abs(x - v * sc)) - v * sc)
+        check.append({"rel_px": round(v * sc, 2), "found": len(offs), "fields": len(out["lower"]),
+                      "median_px": round(float(np.median(offs)), 2) if offs else None})
+    rail_sil, bar_fw = [], []
+    for f_ in up:
+        prof, it = f_["prof"], f_["idx"][0]
+        bg = float(np.median(prof[max(0, it - 12):it - 3]))
+        thr = bg + 0.25 * (prof[it] - bg)
+        a, b = it, it
+        while a > 0 and prof[a] > thr:
+            a -= 1
+        while b < len(prof) - 1 and prof[b] > thr and b - it < 14:
+            b += 1
+        rail_sil.append(b - a - 1)
+        for j in f_["idx"][1:]:
+            if j - it > 0.55 * rails["upper"]["h_px"]:          # dense lower group: the uniform perforated panel behind
+                bar_fw.append(_fwhm(prof, j, float(np.median(np.r_[prof[j - 8:j - 4], prof[j + 5:j + 8]]))))
+    return {"fields_upper": len(up), "fields_lower": len(out["lower"]), "bar_counts_per_field": sorted({len(f_["rel"]) for f_ in up}),
+            "bars_rel_px": [round(v, 2) for v in rel_m],
+            "bars_mad_px": [round(float(np.median(np.abs(np.array(c) - np.median(c))) * 1.4826), 2) for c in bars],
+            "bars_found": [len(c) for c in bars], "top_peak_minus_top_edge_px": round(d_top, 2),
+            "z_m": [round(v, 4) for v in z], "lower_check": check,
+            "rail_silhouette_px": float(np.median(rail_sil)), "rail_silhouette_m": float(np.median(rail_sil)) / m_r,
+            "bar_fwhm_px": float(np.median(bar_fw)) if bar_fw else None, "bar_fwhm_m": float(np.median(bar_fw)) / m_r if bar_fw else None}
+
+
+def post_profile(g, posts: dict, cx: float, rails: dict, m_r: float) -> dict:
+    """Front width of the railing posts next to cx (|x - cx| < 900 px: the side face of the flat bar is not visible):
+    FWHM of the brightest line in the rows between the lower bars (median over 75 rows)."""
+    fw = []
+    for wk in ("upper", "lower"):
+        y1 = int(rails[wk]["edge_px"]) - 10
+        for p in posts[wk]:
+            if abs(p - cx) < 900:
+                prof = np.median(g[y1 - 75:y1, p - 15:p + 16], axis=0).astype(float)
+                i = int(np.argmax(prof))
+                fw.append(_fwhm(prof, i, float(np.median(prof))))
+    return {"n": len(fw), "front_fwhm_px": float(np.median(fw)), "front_m": float(np.median(fw)) / m_r}
+
+
+POST_RUN_TOL = 0.06        # m - a measured console may be this far from the equal-bay post of its run
+
+
+def post_runs(s0: float, s_end: float, anchors: list[float], sp: float, tol: float = POST_RUN_TOL) -> tuple[list[float], list[int], float]:
+    """Straight runs of a walkway railing front with equal bays whose posts stand on the consoles. anchors = s of the
+    measured consoles (posts), s0 = the corner post. A run grows over the next gap (bays = round(gap / sp)) while every
+    anchor inside it stays within tol of the equal-bay post positions; otherwise a new run starts at the last anchor.
+    After the last anchor: one run to s_end (photo edge, bays = round(.. / sp)). Returns (run vertices incl. s0 and
+    s_end, bays per run, max anchor deviation)."""
+    pts = [s0] + [a for a in anchors if a > s0 + 0.3]
+    runs: list[list] = []                                # [start, end, bays, anchors]
+    for p, q in zip(pts, pts[1:]):
+        n = max(1, round((q - p) / sp))
+        if runs:
+            a0, _, nb, an = runs[-1]
+            step = (q - a0) / (nb + n)
+            cand = an + [q]
+            if all(abs(a0 + round((x - a0) / step) * step - x) <= tol for x in cand):
+                runs[-1] = [a0, q, nb + n, cand]
+                continue
+        runs.append([p, q, n, [p, q]])
+    if s_end - pts[-1] > 0.05:
+        runs.append([pts[-1], s_end, max(1, round((s_end - pts[-1]) / sp)), [pts[-1]]])
+    dev = 0.0
+    for a0, b0, nb, an in runs:
+        step = (b0 - a0) / nb
+        dev = max([dev] + [abs(a0 + round((x - a0) / step) * step - x) for x in an])
+    verts = [round(runs[0][0], 3)] + [round(r[1], 3) for r in runs]
+    return verts, [r[2] for r in runs], dev
 
 
 class Camera:
@@ -761,6 +900,11 @@ def extract(root: Path, photo: Path) -> dict:
     rec["walk_corner_px"] = vedge(READ["walk_corner"], 2150, 2330, +1, 18)[0]
     sp = [b - a for k_ in posts for a, b in zip(posts[k_], posts[k_][1:]) if 260 < b - a < 300 and 700 < a < 6700]
     rec["post_spacing_px"] = float(np.median(sp))
+    # R1 -> FS_Railing (2026-10-20): bars, profiles and the post mounting read from the photo
+    rec["railing_infill"] = railing_infill(g, posts, rails, m_r)
+    rec["post_profile"] = post_profile(g, posts, cx_v, rails, m_r)
+    rec["post_mount"] = {wk: {"bracket_bottom_px": READ["post_bracket_bottom"][wk],
+                              "drop_m": (READ["post_bracket_bottom"][wk] - rails[wk]["edge_px"]) / m_r} for wk in ("upper", "lower")}
 
     return {"rec": rec, "cam": cam, "rect": rect, "g": g, "posts": posts, "pairs": pairs, "W": W, "H": H, "L": L, "lv": lv,
             "w_r": w_r, "w_f": w_f, "w_bay": w_bay, "S": S, "V": V, "axes": axes, "rows": rows, "louv": louv, "bay": bay, "col": col,
@@ -1081,17 +1225,52 @@ def assemble(X: dict) -> dict:
                                      "src": "S1", "conf": "meranie", "note": "ľavý koniec = rohový stĺpik; hĺbka = poloha stĺpikov voči päte konzol; vpravo okraj fotky"},
                       "v_top": val(top, "meranie", "S1", "vrch čelného plechu ochodze (= úroveň podlahy podlažia, pravidlo)"),
                       "note": "pochôdzny rošt na konzolách"})
+        # posts stand on the consoles (each post is bolted to a console tip): the front is split at the consoles where the
+        # regular rhythm breaks (piers) into straight runs with equal bays - every measured console within POST_RUN_TOL
+        anchors = sorted(0.5 * sum(it["s"]["v"]) for it in lin
+                         if it["id"].startswith(f"KONZ_{'H' if fl == '2NP' else 'D'}_") and it["s"]["conf"] == "meranie")
+        verts, bays, dev = post_runs(round(s_walk0, 3), L, anchors, rec["post_spacing_px"] / m_r)
+        side_bays = max(1, math.ceil((round(w_r, 3) - 0.05) / (rec["post_spacing_px"] / m_r) - 1e-5))
         railings.append({"id": f"ZAB_{fl}", "system": "rail.ochodza", "on": wk, "story": fl,
-                         "path_sw": {"v": [[round(s_walk0 + 0.04, 3), 0.05], [round(s_walk0 + 0.04, 3), round(w_r - 0.04, 3)],
-                                           [L, round(w_r - 0.04, 3)]], "src": "S1", "conf": "meranie",
-                                     "note": "po hrane ochodze 0,04 m od okraja; ľavý koniec s bočným zábradlím k fasáde"},
-                         "v": val(top, "meranie", "S1", "na rošte"), "inset": 0.04, "note": "zábradlie ochodze"})
+                         "path_sw": {"v": [[round(s_walk0, 3), 0.05], [round(s_walk0, 3), round(w_r, 3)]] + [[s_, round(w_r, 3)] for s_ in verts[1:]],
+                                     "src": "S1", "conf": "meranie",
+                                     "note": "líce čela ochodze (bočné kotvenie: stĺpik pred čelom, os = líce + sideGap + postD/2); "
+                                             "ľavý koniec s bočným zábradlím k fasáde; čelo rozdelené v konzolách, kde sa mení rytmus (piliere)"},
+                         "segment_bays": {"v": [side_bays] + bays, "src": "S1", "conf": "meranie",
+                                          "note": f"polia stĺpikov na úsek: stĺpik na každej meranej konzole (max. odchýlka {dev * 100:.1f} cm); "
+                                                  "bočné zábradlie z rozostupu; za poslednou meranou konzolou (strom) rozostup po okraj fotky"},
+                         "v": val(top, "meranie", "S1", "päta = vrch ochodze"), "inset": 0.0, "note": "zábradlie ochodze"})
     for sid, fl, top, bottom in (("STROP_1NP", "1NP", floor_v["1NP"], lv["gf_box_top"]), ("STROP_2NP", "2NP", floor_v["2NP"], lv["red2_top"])):
         slabs.append({"id": sid, "kind": "floor_edge", "system": "slab.strop", "story": fl,
                       "outline_sw": {"v": [[round(s_left_cw, 3), -1.5], [L, -1.5], [L, 0.0], [round(s_left_cw, 3), 0.0]], "src": "S1",
                                      "conf": "odhad", "note": "čelo stropu: pás 1,5 m od čela (doska pokračuje do budovy, nevidno)"},
                       "v_top": val(top, "meranie", "S1", "úroveň podlahy = vrch ochodze"),
                       "note": f"stropná doska nad {'prízemím' if fl == '1NP' else '1.NP'} (hrúbka po vrch skrinky žalúzie: {top - bottom:.3f} m)"})
+
+    # ---- railing infill (FS_Railing parameters) from the photo - every value with src + conf in gdl_params_src -----------
+    ri, pp, pm = rec["railing_infill"], rec["post_profile"], rec["post_mount"]
+    drop = round(float(np.mean([pm[k]["drop_m"] for k in pm])), 3)
+    gps = {
+        "nBars": val(len(ri["z_m"]), "meranie", "S1", f"počet tyčí pod madlom: {len(ri['z_m'])} výšok prítomných v >= 60 % polí hornej ochodze (vrcholy jasné ako madlo; lamely za zábradlím slabšie)", nd=0),
+        "iBarDist": val(1, "meranie", "S1", "nerovnomerné: 3 tyče po ~0,145 m pod madlom, 7 po ~0,073 m dole (zoznam výšok)", nd=0),
+        "barZList": val(";".join(f"{z:.3f}" for z in ri["z_m"]), "meranie", "S1",
+                        f"osi tyčí nad pätou: rel. k madlu {ri['bars_rel_px']} px (MAD {max(ri['bars_mad_px']):.2f} px), "
+                        f"{m_r:.1f} px/m v rovine zábradlia; absolútne viazané na mierku 1,05 (ODHAD)"),
+        "iBarProf": val(0, "odhad", None, "kruhová tyč (na čelnom pohľade nerozlíšiteľné od obdĺžnika)", nd=0),
+        "barD": val(round(ri["bar_fwhm_m"], 3), "meranie", "S1",
+                    f"FWHM svetlej tyče {ri['bar_fwhm_px']:.2f} px (tieňová spodná strana nečitateľná -> skôr viac, Ø 12-16 mm)"),
+        "iRailProf": val(0, "odhad", None, "madlo rúrka (tieňovaná spodná polovica)", nd=0),
+        "railW": val(0.042, "odhad", None, f"rúrka Ø 42,4 (bežný prierez); na fotke svetlá časť {ri['rail_silhouette_px']:.0f} px, spodok v tieni"),
+        "railH": val(0.042, "odhad", None, "= railW (kruh)"),
+        "iPostProf": val(2, "meranie", "S1", "stĺpik = plochá oceľ (pásovina): úzke čelo, pri šikmom pohľade viditeľný bok", nd=0),
+        "postW": val(0.012, "odhad", None, f"hrúbka pásoviny; čelo na fotke {pp['front_fwhm_px']:.1f} px = {pp['front_m'] * 1000:.0f} mm (na hranici rozlíšenia)"),
+        "postD": val(0.06, "odhad", None, "šírka pásoviny kolmo na fasádu (bok zúžený k hornému koncu - nemodelované)"),
+        "iMount": val(1, "meranie", "S1", "bočné (čelné) kotvenie: stĺpik ide pred čelom ochodze a je priskrutkovaný 2 skrutkami medzi 2 plechy hrotu konzoly"),
+        "sideGap": val(0.0, "odhad", None, "stĺpik priamo pred lícom čela"),
+        "mountDrop": val(drop, "meranie", "S1", f"spodok príložiek konzoly {READ['post_bracket_bottom']} px (okom, výrez 3x) "
+                                                 f"pod pätou: {pm['upper']['drop_m']:.3f} / {pm['lower']['drop_m']:.3f} m; koniec stĺpika skrytý"),
+    }
+    gp = {k: v["v"] for k, v in gps.items()}
 
     # ---- systems ---------------------------------------------------------------------------------------------------------
     systems = {
@@ -1114,13 +1293,19 @@ def assemble(X: dict) -> dict:
                        "thickness": val(round(float(np.mean([floor_v['2NP'] - lv['red2_top'], floor_v['1NP'] - lv['gf_box_top']])), 3), "meranie", "S1",
                                         "od vrchu skrinky žalúzie po úroveň ochodze (priemer 2 podlaží)"),
                        "conf": "odhad", "src": "S1", "note": "železobetónová stropná doska (materiál ODHAD)"},
-        "rail.ochodza": {"type": "railing", "base_favorite": "Oceľové vertikálne zábradlie", "favorite": "FS rail.ochodza",
+        # R1 closed (2026-10-20): the native railing cannot get horizontal bars through the API -> GDL object FS_Railing
+        # (facade/railing_gdl.py) from the Object favourite 'FS rail.horiz_5'; bars, mounting and profiles from the photo
+        "rail.ochodza": {"type": "railing", "railing_kind": "gdl", "favorite": "FS rail.horiz_5",
                          "height": val(RAIL_H, "odhad", None, "MIERKA fotky: výška zábradlia ochodze 1,05 m (ODHAD +-10 %, zadanie)"),
                          "post_spacing": val(round(rec["post_spacing_px"] / m_r, 3), "meranie", "S1",
-                                             f"rozostup stĺpikov {rec['post_spacing_px']:.0f} px v rovine zábradlia (medián)"),
-                         "post_distribution": "BestDivision",
-                         "infill": val("rails", "meranie", "S1", "vodorovné tyče: 3 hore po ~0,14 m, 7 dole po ~0,07 m (fotka)"),
-                         "conf": "odhad", "src": "S1", "note": "oceľové zábradlie s vodorovnými tyčami"},
+                                             f"rozostup stĺpikov {rec['post_spacing_px']:.0f} px v rovine zábradlia (medián); "
+                                             "model: rovnaké polia <= rozostup (na fotke pri konzolách)"),
+                         "infill": val("horizontal_bars", "meranie", "S1",
+                                       f"{len(ri['z_m'])} vodorovných tyčí (každé pole hornej ochodze: {ri['bars_found']} z {ri['fields_upper']} polí; "
+                                       f"dolná ochodza = kontrola: {[c['found'] for c in ri['lower_check']]} z {ri['fields_lower']} polí, "
+                                       f"medián +-{max(abs(c['median_px'] or 0) for c in ri['lower_check']):.1f} px)"),
+                         "gdl_params": gp, "gdl_params_src": gps,
+                         "conf": "meranie", "src": "S1", "note": "oceľové zábradlie s vodorovnými tyčami, stĺpiky z pásoviny kotvené čelne na hrot konzoly"},
         "wall.betón": {"type": "wall", "favorite": "Betónová tvárnica - nosná, 200", "structure": "Basic", "reference_line": "Outside",
                        "conf": "default", "src": None, "note": "pilier / nadpražie: existujúci favorit (betón); hrúbka zo zóny"},
         "prof.pas_cerveny": {"type": "profile", "name": "FS prof.pas_cerveny", "polygon_wv": [[0, 0], [0.2, 0], [0.2, round(lv['red1_top'] - lv['red1_bot'], 3)], [0, round(lv['red1_top'] - lv['red1_bot'], 3)]],
@@ -1171,9 +1356,12 @@ def assemble(X: dict) -> dict:
          "proposal": "prijať; strešnú dosku doplniť z pôdorysu"},
         {"ref": "slabs[OCH_*]", "text": "pochôdzny rošt ako plná doska z pozinkovaného plechu hrúbky čelného plechu", "proposal": "prijať"},
         {"ref": "slabs[STROP_*]", "text": "stropné dosky len ako pás 1,5 m za čelom (fasádny model)", "proposal": "prijať"},
-        {"ref": "railings", "text": "VÝNIMKA R1: favorit s vodorovnými tyčami 'Oceľové horizontálne zábradlie - bočné kotvenie' cez API vytvorí len 2 stĺpiky bez madla a tyčí (výška 1,0 sa nedá zmeniť; overené 2026-10-19) - použitý najbližší funkčný 'Oceľové vertikálne zábradlie' (zvislé tyčky); fotka: madlo + 3 vodorovné tyče po 0,14 m + 7 po 0,07 m",
-         "proposal": "R1: architekt pripraví favorit 'FS base zábradlie vodorovné' s 10 tyčami; potom prestavať"},
-        {"ref": "railings.posts", "text": "stĺpiky z rozostupu (BestDivision); na fotke pri pilieroch nepravidelne (339 / 249 / 392 px)", "proposal": "prijať"},
+        {"ref": "railings", "text": "zábradlie = GDL objekt FS_Railing (favorit 'FS rail.horiz_5'), jeden objekt na priamy úsek (čelo + bočné pri fasáde); "
+                                    "natívne zábradlie s vodorovnými tyčami API nevie (R1) - IFC export ako IfcRailing cez klasifikáciu 'Zábradlie'; "
+                                    "10 tyčí v nameraných výškach (3 po ~0,145 m pod madlom, 7 po ~0,073 m dole)",
+         "proposal": "prijať"},
+        {"ref": "railings.posts", "text": "stĺpiky v rovnakých poliach <= nameraný rozostup 1,26 m (na fotke pri každej konzole; pri pilieroch nepravidelne 339 / 249 / 392 px) - stĺpiky modelu nie sú presne nad konzolami", "proposal": "prijať"},
+        {"ref": "railings.posts.profile", "text": "stĺpik = pásovina 12 x 60 mm s konštantným prierezom (na fotke bok zúžený k madlu); kotvenie medzi 2 plechmi hrota konzoly modelované ako predĺženie stĺpika pod pätu (mountDrop)", "proposal": "prijať"},
         {"ref": "fotka.vpravo", "text": "pravých ~13 % (x > 8350 px) v 1.-2.NP zakrýva strom: stĺpiky z prízemia (pravidlo), výška žalúzií ako v podlaží; fasáda pokračuje za okraj fotky (model končí na okraji)",
          "proposal": "doplniť z ďalšej fotky"},
         {"ref": "odkvapové zvody", "text": "2 zvislé rúry (x 272 a 6712 px, s lievikom pri podhľade) - zvody, nie stĺpy; nemodelované (TZB)", "proposal": "prijať"},

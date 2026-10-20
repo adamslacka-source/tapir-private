@@ -365,7 +365,7 @@ Akceptácia: `private-tests/test_railing_cw_defaults.py` (5 tyčí, sklo, plech,
 
 ### I8 – prevzatie G2 (2026-10-20) ✔
 Architekt prijal G2 pre všetky 4 fasády (M015_L1, M062_L2, M016_L2, HOF_B) s výhradami podľa `C:\FacadePilot\out\G2_prevzatie.md` a `kontrola_G2_kolo2.md` (stav po dočistení, commit b84fbe8; 3D zábery `facade/views3d`, 609e12f).
-Rozhodnutia: podlažia pilota A ostávajú jedna sada pre celú ulicu (N7/Q1 uzavreté); Favorites zábradlí s vodorovnými tyčami pripraví architekt ručne (R1) – po ich dodaní ich pipeline použije a automatika mení len výšku a trasu.
+Rozhodnutia: podlažia pilota A ostávajú jedna sada pre celú ulicu (N7/Q1 uzavreté); Favorites zábradlí s vodorovnými tyčami pripraví architekt ručne (R1) – po ich dodaní ich pipeline použije a automatika mení len výšku a trasu. **Aktualizácia 2026-10-20:** Favorites zábradlí (`FS rail.horiz_5 / glass / balusters / panel_perf`) vyrába pipeline sama (GDL `FS_Railing`), pilot B zapojený – ručná príprava architektom netreba.
 Otvorené mimo G2: C++ medzery (povrch tried CW, CW s rôznym vzorom po stĺpcoch, stena so štítom/oblúkom, jednotná výška z v CreateWalls), nález č. 16, prahy merania overené len na fotkách Senca.
 
 
@@ -379,3 +379,25 @@ každé primitívum 3D = nezávislý model (Δ 0,0 mm), H ±0; prvok z Favorite 
 na kópii spec pilota B (2 × 2 úseky, 39 stĺpikov na ochodzu, strana pádu) umiestnený naostro. Lomená trasa = objekt na úsek
 (polia parametrov cez API NEOVERENÉ). Pilot B **nezapojený** – zapojenie (zmena systému `rail.ochodza` na `railing_kind: gdl` + rebuild)
 urobí orchestrátor; tým padne výnimka R1 (tyčky namiesto vodorovných tyčí). verify vetva pre `railing_kind: gdl` naostro NEOVERENÁ (overí sa pri zapojení).
+
+### Pilot B – zapojenie FS_Railing (R1 uzavretá, 2026-10-20)
+`private-tests/test_pilot_b.py` **46/46 PASS** (rozšírený o 9 kontrol zábradlia), 2. build = 0 zmien, `iterate.py B` = 0 opráv (verify PASS),
+`test_fs_railing.py` 55/55, regresia `test_pilot_a.py` 136/136. Systém `rail.ochodza` = `railing_kind: gdl`, favorit `FS rail.horiz_5`
+(adaptér `from_photo.py`, nie ručne v spec). Z fotky (`railing_infill`, `post_profile`, `READ.post_bracket_bottom`):
+- **tyče:** 10 (nie predpoklad – zhluky jasných vrcholov v 20–23 z 21 polí hornej ochodze, MAD ≤ 0,72 px), osi nad pätou
+  0,026 / 0,106 / 0,178 / 0,251 / 0,323 / 0,397 / 0,469 / 0,615 / 0,760 / 0,906 m (7 dole po ~0,073, 3 hore po ~0,145); dolná ochodza
+  nezávisle tie isté tyče (10–20 z 21 polí, medián ≤ 0,83 px); Ø 12 mm (FWHM 2,66 px; tieňová strana nečitateľná);
+- **madlo:** výška 1,05 = mierka (ODHAD ±10 %), rúrka Ø 42 ODHAD (svetlá časť 4 px, spodok v tieni);
+- **stĺpiky:** pásovina (bok viditeľný pri šikmom pohľade), 12 × 60 ODHAD (čelo 1,6 px na hranici rozlíšenia), rozostup 1,261 m;
+  **kotvenie čelné** – stĺpik ide pred čelom ochodze a je 2 skrutkami medzi 2 plechmi hrotu konzoly (`iMount 1`, `mountDrop` 0,312 m
+  = spodok príložiek 0,308 / 0,317); trasa = líce čela ochodze;
+- **stĺpik na každej konzole:** rovnomerné polia celej dĺžky driftovali voči konzolám až o 0,54 m → čelo sa delí v konzolách, kde sa mení
+  rytmus (`post_runs`, tolerancia 6 cm; `railings[].segment_bays` → `nPost` na úsek, rovný spoj bez presahu madla) – 9 / 11 objektov
+  na ochodzu, max. konzola − stĺpik 4,3 / 6,0 cm; za stromom (konzoly „pravidlo“) rozostup po okraj fotky.
+Každá hodnota `src` + istota (`gdl_params_src`, validátor kontroluje zhodu kľúčov a hodnôt). verify_b: parametre GDL = poslané, primitíva =
+model šablóny (20 objektov, Δ 0,00 cm), stĺpiky 38/38 a tyče 10/10 na ochodzu, osi tyčí + vrch madla v 3D = spec (220 riadkov, Δ 0,00 cm),
+fotka: tyče, horná hrana madla a stĺpiky čela – medián −1,16…+0,20 cm (tyče/madlo), −0,15 / +1,57 cm (stĺpiky, 21 čitateľných z 36),
+max. vzorka 4,94 cm. Nálezy: (1) vzorka objektu padne v SK šablóne na **skrytú** vrstvu „Interiér - sanita a zariadenia“ – nedá sa zmeniť
+ani zmazať → `ensure_favorites(prepare=…)` ju najprv presunie na vrstvu fasády (favorit nesie vrstvu fasády); (2) povrch
+`Kov - nízkouhlíková ocel` má v SK šablóne názov `… oceľ` (`SURFACE_ALT`). NEOVERENÉ: profil stĺpika a madla, Ø tyčí ±4 mm, koniec
+stĺpika medzi plechmi, polohy stĺpikov za stromom a pri pilieroch (úseky 1 pole). Výnimka R1 z testu, G1 aj G2 odstránená.

@@ -669,6 +669,15 @@ def _check_i6(spec: dict, zones: dict, openings: list, frames: dict, item_ids: s
                 bad = sorted(k for k in s.get("gdl_params", {}) if k not in railing_gdl.template_defaults())
                 if bad:
                     errors.append(f"systems[{sid}]: gdl_params not in FS_Railing: {bad}")
+                srcs = s.get("gdl_params_src")
+                if srcs is not None:                          # pilot B: every value read from the photo carries src + conf
+                    gp = s.get("gdl_params", {})
+                    if set(srcs) != set(gp):
+                        errors.append(f"systems[{sid}]: gdl_params_src keys {sorted(set(srcs) ^ set(gp))} differ from gdl_params")
+                    for k in sorted(set(srcs) & set(gp)):
+                        if srcs[k]["v"] != gp[k]:
+                            errors.append(f"systems[{sid}]: gdl_params_src.{k} = {srcs[k]['v']!r} != gdl_params.{k} = {gp[k]!r}")
+                        check_src(f"systems[{sid}].gdl_params_src.{k}", srcs[k]["src"], srcs[k]["conf"])
             elif not s.get("base_favorite"):
                 errors.append(f"systems[{sid}]: a railing system starts from a base favourite (R1: infill and posts come from it)")
             for k in ("height", "post_spacing"):
@@ -820,6 +829,15 @@ def _check_i6(spec: dict, zones: dict, openings: list, frames: dict, item_ids: s
         pts = r["path_sw"]["v"]
         if any(np.hypot(q[0] - p[0], q[1] - p[1]) < 0.05 for p, q in zip(pts[:-1], pts[1:])):
             errors.append(f"railings[{rid}]: path has a segment shorter than 5 cm")
+        if r.get("segment_bays"):                             # posts per path segment (FS_Railing: nPost = bays + 1)
+            check_src(f"railings[{rid}].segment_bays", r["segment_bays"]["src"], r["segment_bays"]["conf"])
+            if (sysdef or {}).get("railing_kind") != "gdl":
+                errors.append(f"railings[{rid}]: segment_bays needs a railing_kind 'gdl' system")
+            if len(r["segment_bays"]["v"]) != len(pts) - 1:
+                errors.append(f"railings[{rid}]: segment_bays has {len(r['segment_bays']['v'])} values for {len(pts) - 1} path segments")
+            for n_, p, q in zip(r["segment_bays"]["v"], pts[:-1], pts[1:]):
+                if np.hypot(q[0] - p[0], q[1] - p[1]) / n_ < 0.3:
+                    errors.append(f"railings[{rid}]: segment_bays {n_} on a {np.hypot(q[0] - p[0], q[1] - p[1]):.2f} m segment (bay < 0.3 m)")
         b = bals.get(r.get("on", "")) if r.get("on") else None
         if r.get("on") and b is None:
             sl = next((x for x in spec.get("slabs", []) if x["id"] == r["on"]), None)
