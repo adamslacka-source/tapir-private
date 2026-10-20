@@ -2582,6 +2582,7 @@ var gCommands = [{
                         "endCoordinate": { "$ref": "#/Coordinate2D" },
                         "floorIndex": { "type": "integer", "description": "Story index (as returned by GetStories). When provided, zCoordinate is interpreted as bottomOffset relative to the floor. Takes priority over zCoordinate for floor assignment." },
                         "zCoordinate": { "type": "number", "description": "Absolute Z when floorIndex is absent; bottomOffset relative to the floor when floorIndex is provided." },
+                        "absoluteZCoordinate": { "type": "number", "description": "Optional absolute elevation of the wall base, as zCoordinate of the other Create commands: with floorIndex the base offset from that story is computed from it, without floorIndex the home story is derived from it. Excludes zCoordinate." },
                         "height": { "type": "number", "exclusiveMinimum": 0.0, "description": "Optional explicit height. Sets relativeTopStory to 0, so it replaces the top link of the favorite or the tool default. When omitted, the height and top link of the favorite (or of the Wall tool defaults) are kept." },
                         "thickness": {
                             "type": "number",
@@ -3716,6 +3717,11 @@ var gCommands = [{
                     "defaultsRestored": {
                         "type": "boolean",
                         "description": "Present when restoreDefaults was asked: whether the defaults were put back."
+                    },
+                    "surfaceDiagnostics": {
+                        "type": "array",
+                        "description": "One item per frame or panel class with a surface in the input: the surface fields as ACAPI_Element_GetDefaultsExt (readExt) and ACAPI_Element_GetDefaults (readBasic) gave them after the change, and - when the surface was not kept - the error codes and result of writing the class once more through its subelement default (subElement). notKept is from the final read.",
+                        "items": { "type": "object" }
                     }
                 },
                 "additionalProperties": false,
@@ -3864,6 +3870,342 @@ var gCommands = [{
         },
         "additionalProperties": false,
         "required": ["results"]
+    }
+            },{
+                "name": "GetRailingSystemDefaults",
+                "version": "1.7.2",
+                "description": "Reads the Railing tool defaults as the API gives them: the node and segment templates (posts, inner posts, pattern, panel, balusters, top rail, handrails, rails) with their library parts, the memo, every Railing subelement default ACAPI_Element_GetDefaultsExt gives (with their GDL parameters on request) and optionally the same of a Railing Favorite. A diagnostic command, also used to check that the defaults were restored.",
+                "inputScheme": {
+        "type": "object",
+        "properties": {
+            "favoriteName": {
+                "type": "string",
+                "description": "Optional name of a Railing Favorite to read (its settings, memo and subelement defaults) besides the tool defaults."
+            },
+            "includeParameters": {
+                "type": "boolean",
+                "description": "List the GDL parameters (name, type, description, value) of every subelement default. The default is false (only their number)."
+            },
+            "probeSubElements": {
+                "type": "boolean",
+                "description": "Ask Archicad for every kind of Railing subelement default one by one (ACAPI_Element_GetDefaultsExt with one API_SubElement, with and without the subelement type in its header) and report the error codes. The default is true."
+            }
+        },
+        "additionalProperties": false
+    },
+                "outputScheme": {
+        "type": "object",
+        "description": "The Railing tool defaults as the API gives them. A diagnostic command: the structure follows the API structures (API_RailingType, API_ElementMemo, API_SubElement) and may grow.",
+        "properties": {
+            "getDefaultsExt": { "type": "object", "description": "ACAPI_Element_GetDefaultsExt (Railing, memo, no subelements): ok and the error code when it failed." },
+            "getDefaults": { "type": "object", "description": "ACAPI_Element_GetDefaults (Railing, memo): ok and the error code when it failed." },
+            "railing": { "type": "object", "description": "API_RailingType of the defaults (Ext when it worked): node and segment templates with the library part of each subelement." },
+            "memo": { "type": "object", "description": "The memo of the Ext call: the number of items of every railing memo array and the rails, handrails, panels, baluster sets and patterns in it." },
+            "memoBasic": { "type": "object", "description": "The same for the memo of ACAPI_Element_GetDefaults." },
+            "subElementProbe": { "type": "array", "items": { "type": "object" }, "description": "One item per kind of Railing subelement default: kind, defaultDefault, errorWithType, errorWithoutType and the subelement default when one of the calls worked." },
+            "favorite": { "type": "object", "description": "With favoriteName: the Favorite's railing, memo and subElements as ACAPI_Favorite_Get gives them, or its error." }
+        },
+        "additionalProperties": true
+    }
+            },{
+                "name": "SetRailingSystemDefaults",
+                "version": "1.7.2",
+                "description": "Sets the Railing tool defaults: segment height, post spacing and post/inner post objects, top rail, handrail (visibility, height, offset), horizontal rails (count, heights, offset), the infill (panel, balusters or none) and the library part and GDL parameters (profile, size, surfaces) of each kind of subelement; reads them back and reports what Archicad kept, did not keep and what cannot be read back; optionally saves them as a Favorite with the subelement defaults. CreateRailings then uses them.",
+                "inputScheme": {
+        "type": "object",
+        "description": "Every field is optional; only the given ones are written. The Railing defaults (API_RailingType) carry one template per kind of subelement, so a field applies to all segments and patterns of a railing created from the defaults.",
+        "properties": {
+            "segment": {
+                "type": "object",
+                "properties": {
+                    "height": { "type": "number", "exclusiveMinimum": 0.0, "description": "Height of the railing segments." }
+                },
+                "additionalProperties": false
+            },
+            "posts": {
+                "type": "object",
+                "description": "The posts at the nodes, the length of the pattern (one set of inner posts per pattern) and the inner posts.",
+                "properties": {
+                    "spacing": { "type": "number", "exclusiveMinimum": 0.0, "description": "Length of the railing pattern: the distance between the posts." },
+                    "distribution": { "type": "string", "enum": ["FixedLength", "BestDivision"], "description": "As in ModifyRailingDetails.postDistribution." },
+                    "libraryPartName": {
+                        "type": "string",
+                        "description": "The library part (GDL object) of this kind of subelement, by its name in the loaded libraries. Its own default parameters replace the old ones before 'parameters' are written."
+                    },
+                    "parameters": {
+                        "type": "array",
+                        "description": "GDL parameters of the subelement default, e.g. the profile, size and surfaces of a rail or the thickness and material of a panel. The names depend on the library part; GetRailingSystemDefaults with includeParameters lists them.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": { "type": "string", "description": "Parameter name (not the description)." },
+                                "value": {
+                                    "description": "Number, boolean or string. Material, building material, profile, fill and line type parameters also take the name of the attribute.",
+                                    "oneOf": [ { "type": "number" }, { "type": "boolean" }, { "type": "string" } ]
+                                }
+                            },
+                            "additionalProperties": false,
+                            "required": ["name", "value"]
+                        }
+                    },
+                    "innerPosts": {
+                        "type": "object",
+                        "description": "The posts inside the pattern.",
+                        "properties": {
+                    "libraryPartName": {
+                        "type": "string",
+                        "description": "The library part (GDL object) of this kind of subelement, by its name in the loaded libraries. Its own default parameters replace the old ones before 'parameters' are written."
+                    },
+                    "parameters": {
+                        "type": "array",
+                        "description": "GDL parameters of the subelement default, e.g. the profile, size and surfaces of a rail or the thickness and material of a panel. The names depend on the library part; GetRailingSystemDefaults with includeParameters lists them.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": { "type": "string", "description": "Parameter name (not the description)." },
+                                "value": {
+                                    "description": "Number, boolean or string. Material, building material, profile, fill and line type parameters also take the name of the attribute.",
+                                    "oneOf": [ { "type": "number" }, { "type": "boolean" }, { "type": "string" } ]
+                                }
+                            },
+                            "additionalProperties": false,
+                            "required": ["name", "value"]
+                        }
+                    }
+                        },
+                        "additionalProperties": false
+                    }
+                },
+                "additionalProperties": false
+            },
+            "toprail": {
+                "type": "object",
+                "properties": {
+                    "visible": { "type": "boolean" },
+                    "libraryPartName": {
+                        "type": "string",
+                        "description": "The library part (GDL object) of this kind of subelement, by its name in the loaded libraries. Its own default parameters replace the old ones before 'parameters' are written."
+                    },
+                    "parameters": {
+                        "type": "array",
+                        "description": "GDL parameters of the subelement default, e.g. the profile, size and surfaces of a rail or the thickness and material of a panel. The names depend on the library part; GetRailingSystemDefaults with includeParameters lists them.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": { "type": "string", "description": "Parameter name (not the description)." },
+                                "value": {
+                                    "description": "Number, boolean or string. Material, building material, profile, fill and line type parameters also take the name of the attribute.",
+                                    "oneOf": [ { "type": "number" }, { "type": "boolean" }, { "type": "string" } ]
+                                }
+                            },
+                            "additionalProperties": false,
+                            "required": ["name", "value"]
+                        }
+                    }
+                },
+                "additionalProperties": false
+            },
+            "handrail": {
+                "type": "object",
+                "properties": {
+                    "visible": { "type": "boolean" },
+                    "height": { "type": "number", "exclusiveMinimum": 0.0 },
+                    "horizontalOffset": { "type": "number" },
+                    "bothSides": { "type": "boolean" },
+                    "libraryPartName": {
+                        "type": "string",
+                        "description": "The library part (GDL object) of this kind of subelement, by its name in the loaded libraries. Its own default parameters replace the old ones before 'parameters' are written."
+                    },
+                    "parameters": {
+                        "type": "array",
+                        "description": "GDL parameters of the subelement default, e.g. the profile, size and surfaces of a rail or the thickness and material of a panel. The names depend on the library part; GetRailingSystemDefaults with includeParameters lists them.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": { "type": "string", "description": "Parameter name (not the description)." },
+                                "value": {
+                                    "description": "Number, boolean or string. Material, building material, profile, fill and line type parameters also take the name of the attribute.",
+                                    "oneOf": [ { "type": "number" }, { "type": "boolean" }, { "type": "string" } ]
+                                }
+                            },
+                            "additionalProperties": false,
+                            "required": ["name", "value"]
+                        }
+                    }
+                },
+                "additionalProperties": false
+            },
+            "rails": {
+                "type": "object",
+                "description": "The horizontal rails between the bottom of the segment and the top rail.",
+                "properties": {
+                    "visible": { "type": "boolean" },
+                    "count": { "type": "integer", "minimum": 0, "description": "Number of rails. Without heights they are spaced evenly between bottom and top, both excluded." },
+                    "heights": { "type": "array", "items": { "type": "number", "exclusiveMinimum": 0.0 }, "description": "Height of each rail above the bottom of the segment (absolute, not relative)." },
+                    "bottom": { "type": "number", "description": "Lower bound for count without heights. The default is 0." },
+                    "top": { "type": "number", "description": "Upper bound for count without heights. The default is handrail.height, else segment.height." },
+                    "horizontalOffset": { "type": "number" },
+                    "libraryPartName": {
+                        "type": "string",
+                        "description": "The library part (GDL object) of this kind of subelement, by its name in the loaded libraries. Its own default parameters replace the old ones before 'parameters' are written."
+                    },
+                    "parameters": {
+                        "type": "array",
+                        "description": "GDL parameters of the subelement default, e.g. the profile, size and surfaces of a rail or the thickness and material of a panel. The names depend on the library part; GetRailingSystemDefaults with includeParameters lists them.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": { "type": "string", "description": "Parameter name (not the description)." },
+                                "value": {
+                                    "description": "Number, boolean or string. Material, building material, profile, fill and line type parameters also take the name of the attribute.",
+                                    "oneOf": [ { "type": "number" }, { "type": "boolean" }, { "type": "string" } ]
+                                }
+                            },
+                            "additionalProperties": false,
+                            "required": ["name", "value"]
+                        }
+                    }
+                },
+                "additionalProperties": false
+            },
+            "infill": {
+                "type": "object",
+                "properties": {
+                    "kind": { "type": "string", "enum": ["panel", "balusters", "none"], "description": "What fills the pattern: a panel (glass, sheet), balusters, or nothing." },
+                    "panel": {
+                        "type": "object",
+                        "properties": {
+                    "libraryPartName": {
+                        "type": "string",
+                        "description": "The library part (GDL object) of this kind of subelement, by its name in the loaded libraries. Its own default parameters replace the old ones before 'parameters' are written."
+                    },
+                    "parameters": {
+                        "type": "array",
+                        "description": "GDL parameters of the subelement default, e.g. the profile, size and surfaces of a rail or the thickness and material of a panel. The names depend on the library part; GetRailingSystemDefaults with includeParameters lists them.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": { "type": "string", "description": "Parameter name (not the description)." },
+                                "value": {
+                                    "description": "Number, boolean or string. Material, building material, profile, fill and line type parameters also take the name of the attribute.",
+                                    "oneOf": [ { "type": "number" }, { "type": "boolean" }, { "type": "string" } ]
+                                }
+                            },
+                            "additionalProperties": false,
+                            "required": ["name", "value"]
+                        }
+                    }
+                        },
+                        "additionalProperties": false
+                    },
+                    "balusters": {
+                        "type": "object",
+                        "properties": {
+                            "spacing": { "type": "number", "exclusiveMinimum": 0.0, "description": "Distance between the balusters." },
+                    "libraryPartName": {
+                        "type": "string",
+                        "description": "The library part (GDL object) of this kind of subelement, by its name in the loaded libraries. Its own default parameters replace the old ones before 'parameters' are written."
+                    },
+                    "parameters": {
+                        "type": "array",
+                        "description": "GDL parameters of the subelement default, e.g. the profile, size and surfaces of a rail or the thickness and material of a panel. The names depend on the library part; GetRailingSystemDefaults with includeParameters lists them.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": { "type": "string", "description": "Parameter name (not the description)." },
+                                "value": {
+                                    "description": "Number, boolean or string. Material, building material, profile, fill and line type parameters also take the name of the attribute.",
+                                    "oneOf": [ { "type": "number" }, { "type": "boolean" }, { "type": "string" } ]
+                                }
+                            },
+                            "additionalProperties": false,
+                            "required": ["name", "value"]
+                        }
+                    }
+                        },
+                        "additionalProperties": false
+                    }
+                },
+                "additionalProperties": false
+            },
+            "favorite": {
+                "type": "object",
+                "description": "Optional Favorite saved from the Railing defaults after the change, as CreateFavoritesFromDefaults does (with the subelement defaults).",
+                "properties": {
+                    "name": { "type": "string", "description": "Name of the Favorite." },
+                    "folder": { "type": "array", "items": { "type": "string" }, "description": "Optional folder hierarchy in the Favorites palette." },
+                    "overwriteExisting": { "type": "boolean", "description": "Overwrite a Favorite of the same name. The default is false." }
+                },
+                "additionalProperties": false,
+                "required": ["name"]
+            },
+            "restoreDefaults": {
+                "type": "boolean",
+                "description": "Put the Railing tool defaults back as they were at the end, e.g. when only the favorite is wanted. The default is false."
+            }
+        },
+        "additionalProperties": false
+    },
+                "outputScheme": {
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "apiPath": {
+                        "type": "object",
+                        "description": "How the defaults were read and written.",
+                        "properties": {
+                            "read": { "type": "string", "enum": ["Ext", "Basic"], "description": "ACAPI_Element_GetDefaultsExt or ACAPI_Element_GetDefaults." },
+                            "write": { "type": "string", "enum": ["ExtWithSubElements", "Ext", "Basic"] },
+                            "subElements": { "type": "array", "items": { "type": "string" }, "description": "The kinds of subelement defaults Archicad gave and that were written back." }
+                        },
+                        "additionalProperties": false
+                    },
+                    "kept": { "type": "array", "items": { "type": "string" }, "description": "The input fields read back with the asked value." },
+                    "notKept": {
+                        "type": "array",
+                        "description": "The input fields Archicad did not keep (read back from the defaults), or could not be written, with the reason.",
+                        "items": {
+                            "type": "object",
+                            "properties": { "field": { "type": "string" }, "reason": { "type": "string" } },
+                            "additionalProperties": false,
+                            "required": ["field", "reason"]
+                        }
+                    },
+                    "unverified": {
+                        "type": "array",
+                        "description": "The input fields that were written but cannot be read back from the defaults, with the reason (check them on a railing created from the defaults).",
+                        "items": {
+                            "type": "object",
+                            "properties": { "field": { "type": "string" }, "reason": { "type": "string" } },
+                            "additionalProperties": false,
+                            "required": ["field", "reason"]
+                        }
+                    },
+                    "railing": { "type": "object", "description": "The Railing defaults read back (as GetRailingSystemDefaults.railing)." },
+                    "favorite": {
+                        "oneOf": [
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "name": { "type": "string" },
+                                    "result": { "type": "string", "enum": ["created", "overwritten"] },
+                                    "subElements": { "type": "integer" },
+                                    "subElementsSaved": { "type": "boolean" }
+                                },
+                                "additionalProperties": false,
+                                "required": ["name", "result"]
+                            },
+                            { "$ref": "#/ErrorItem" }
+                        ]
+                    },
+                    "defaultsRestored": { "type": "boolean", "description": "Present when restoreDefaults was asked: whether the defaults were put back." }
+                },
+                "additionalProperties": false,
+                "required": ["apiPath", "kept", "notKept", "unverified"]
+            },
+            { "$ref": "#/ErrorItem" }
+        ]
     }
             },{
                 "name": "CreateAssociativeDimensions",
@@ -6621,6 +6963,14 @@ var gCommands = [{
                                 "result": {
                                     "type": "string",
                                     "enum": ["created", "overwritten"]
+                                },
+                                "subElements": {
+                                    "type": "integer",
+                                    "description": "Railing only: the number of subelement defaults (rails, panels, posts...) read from the tool defaults."
+                                },
+                                "subElementsSaved": {
+                                    "type": "boolean",
+                                    "description": "Railing only: whether the Favorite was saved with the subelement defaults (false: Archicad refused them and the Favorite has the main settings only)."
                                 }
                             },
                             "additionalProperties": false,

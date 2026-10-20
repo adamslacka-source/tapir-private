@@ -1196,6 +1196,14 @@ GS::Optional<GS::UniString> CreateFavoritesFromDefaultsCommand::GetRawResponseSc
                                 "result": {
                                     "type": "string",
                                     "enum": ["created", "overwritten"]
+                                },
+                                "subElements": {
+                                    "type": "integer",
+                                    "description": "Railing only: the number of subelement defaults (rails, panels, posts...) read from the tool defaults."
+                                },
+                                "subElementsSaved": {
+                                    "type": "boolean",
+                                    "description": "Railing only: whether the Favorite was saved with the subelement defaults (false: Archicad refused them and the Favorite has the main settings only)."
                                 }
                             },
                             "additionalProperties": false,
@@ -1232,7 +1240,10 @@ static GS::ObjectState CreateFavoriteResult (const GS::UniString& name, const ch
 // The defaults are read with their memo (ACAPI_Element_GetDefaults), so a library part based tool
 // keeps its GDL parameters (memo.params) and a profiled beam or column its profile; a tool whose
 // defaults Archicad does not give with a memo is read again without one. Classifications and
-// properties of the tool defaults are not part of the Favorite.
+// properties of the tool defaults are not part of the Favorite. The Curtain Wall and the Railing
+// are read with the Ext call, and a Railing with its subelement defaults (rails, panels, posts...),
+// which go into the Favorite's subElements; when Archicad refuses the Favorite with them it is
+// saved without them and the result says so (subElementsSaved: false).
 GS::ObjectState SaveToolDefaultsAsFavorite (const GS::UniString& name, API_ElemTypeID typeId, const GS::Array<GS::UniString>& folderParts, bool overwriteExisting)
 {
     if (name.IsEmpty ()) {
@@ -1246,15 +1257,29 @@ GS::ObjectState SaveToolDefaultsAsFavorite (const GS::UniString& name, API_ElemT
 
     API_Favorite favorite (name);
     favorite.memo.New ();
+    GSErrCode err = NoError;
+    if (HasExtToolDefaults (typeId)) {
+        GS::Array<API_SubElement> subElements;
+        bool usedExt = false;
+        err = GetToolDefaultsWithSubElements (typeId, favorite.element, favorite.memo.Get (), subElements, usedExt);
+        if (!subElements.IsEmpty ()) {
+            favorite.subElements = subElements;
+        }
+    } else {
 #ifdef ServerMainVers_2600
-    favorite.element.header.type = typeId;
+        favorite.element.header.type = typeId;
 #else
-    favorite.element.header.typeID = typeId;
+        favorite.element.header.typeID = typeId;
 #endif
-    GSErrCode err = ACAPI_Element_GetDefaults (&favorite.element, favorite.memo.GetPtr ());
+        err = ACAPI_Element_GetDefaults (&favorite.element, favorite.memo.GetPtr ());
+    }
     if (err != NoError) {
         ACAPI_DisposeElemMemoHdls (favorite.memo.GetPtr ());
         favorite.memo.Clear ();
+        if (favorite.subElements.HasValue ()) {
+            DisposeSubElements (favorite.subElements.Get ());
+            favorite.subElements.Clear ();
+        }
         favorite.element = {};
 #ifdef ServerMainVers_2600
         favorite.element.header.type = typeId;
@@ -1266,6 +1291,9 @@ GS::ObjectState SaveToolDefaultsAsFavorite (const GS::UniString& name, API_ElemT
     const GS::OnExit cleanup ([&]() {
         if (favorite.memo.HasValue ()) {
             ACAPI_DisposeElemMemoHdls (favorite.memo.GetPtr ());
+        }
+        if (favorite.subElements.HasValue ()) {
+            DisposeSubElements (favorite.subElements.Get ());
         }
     });
     if (err != NoError) {
@@ -1279,27 +1307,41 @@ GS::ObjectState SaveToolDefaultsAsFavorite (const GS::UniString& name, API_ElemT
         }
     }
 
-    if (exists) {
-        // Change keeps the place of the Favorite in the palette. It refuses a Favorite of
-        // another element type, which is then replaced by a new one.
-        err = ACAPI_Favorite_Change (favorite);
-        if (err != NoError) {
-            err = ACAPI_Favorite_Delete (name);
-            if (err == NoError) {
-                err = ACAPI_Favorite_Create (favorite);
+    const UInt32 nSubElements = favorite.subElements.HasValue () ? favorite.subElements->GetSize () : 0;
+    const auto store = [&] () -> GSErrCode {
+        if (exists) {
+            // Change keeps the place of the Favorite in the palette. It refuses a Favorite of
+            // another element type, which is then replaced by a new one.
+            GSErrCode storeErr = ACAPI_Favorite_Change (favorite);
+            if (storeErr != NoError) {
+                storeErr = ACAPI_Favorite_Delete (name);
+                if (storeErr == NoError) {
+                    storeErr = ACAPI_Favorite_Create (favorite);
+                }
             }
+            return storeErr;
         }
-        if (err != NoError) {
-            return CreateErrorResponse (err, "Failed to overwrite the Favorite.");
-        }
-        return CreateFavoriteResult (name, "overwritten");
-    }
+        return ACAPI_Favorite_Create (favorite);
+    };
 
-    err = ACAPI_Favorite_Create (favorite);
-    if (err != NoError) {
-        return CreateErrorResponse (err, "Failed to create the Favorite.");
+    err = store ();
+    bool subElementsSaved = nSubElements > 0;
+    if (err != NoError && nSubElements > 0) {
+        // Without the subelement defaults, as before ADR-001 R1.
+        DisposeSubElements (favorite.subElements.Get ());
+        favorite.subElements.Clear ();
+        subElementsSaved = false;
+        err = store ();
     }
-    return CreateFavoriteResult (name, "created");
+    if (err != NoError) {
+        return CreateErrorResponse (err, exists ? "Failed to overwrite the Favorite." : "Failed to create the Favorite.");
+    }
+    GS::ObjectState result = CreateFavoriteResult (name, exists ? "overwritten" : "created");
+    if (nSubElements > 0) {
+        result.Add ("subElements", static_cast<Int32> (nSubElements));
+        result.Add ("subElementsSaved", subElementsSaved);
+    }
+    return result;
 }
 
 GS::ObjectState CreateFavoritesFromDefaultsCommand::Execute (const GS::ObjectState& parameters, GS::ProcessControl& /*processControl*/) const

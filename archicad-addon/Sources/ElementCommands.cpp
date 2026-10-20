@@ -1473,6 +1473,27 @@ GS::ObjectState GetDetailsOfElementsCommand::Execute (const GS::ObjectState& par
                 typeSpecificDetails.Add ("segmentIndex", elem.cwPanel.segmentID);
                 typeSpecificDetails.Add ("className", GS::UniString (elem.cwPanel.className));
                 typeSpecificDetails.Add ("thickness", elem.cwPanel.thickness);
+                // The surface overrides of the panel (ADR-001 nález I5: read back the class surfaces).
+                const auto overriddenSurface = [] (const API_OverriddenAttribute& attr) {
+                    GS::ObjectState os;
+#ifdef ServerMainVers_2700
+                    os.Add ("overridden", attr.hasValue);
+                    if (attr.hasValue) {
+                        os.Add ("surfaceIndex", GetAttributeIndex (attr.value));
+                    }
+#else
+                    os.Add ("overridden", attr.overridden);
+                    if (attr.overridden) {
+                        os.Add ("surfaceIndex", GetAttributeIndex (attr.attributeIndex));
+                    }
+#endif
+                    return os;
+                };
+                typeSpecificDetails.Add ("surfaces", GS::ObjectState (
+                    "outer", overriddenSurface (elem.cwPanel.outerSurfaceMaterial),
+                    "inner", overriddenSurface (elem.cwPanel.innerSurfaceMaterial),
+                    "edge", overriddenSurface (elem.cwPanel.cutSurfaceMaterial)));
+                typeSpecificDetails.Add ("buildingMaterialIndex", GetAttributeIndex (elem.cwPanel.buildingMaterial));
             } break;
 
             case API_CurtainWallFrameID: {
@@ -1483,6 +1504,8 @@ GS::ObjectState GetDetailsOfElementsCommand::Execute (const GS::ObjectState& par
                 typeSpecificDetails.Add ("frameContour", GS::ObjectState ("a1", elem.cwFrame.a1, "a2", elem.cwFrame.a2, "b1", elem.cwFrame.b1, "b2", elem.cwFrame.b2));
                 typeSpecificDetails.Add ("segmentIndex", elem.cwFrame.segmentID);
                 typeSpecificDetails.Add ("className", GS::UniString (elem.cwFrame.className));
+                typeSpecificDetails.Add ("surface", GS::ObjectState ("useOwnMaterial", elem.cwFrame.useOwnMaterial, "surfaceIndex", GetAttributeIndex (elem.cwFrame.material)));
+                typeSpecificDetails.Add ("buildingMaterialIndex", GetAttributeIndex (elem.cwFrame.buildingMaterial));
                 typeSpecificDetails.Add ("type",
                     elem.cwFrame.classID == APICWFrameClass_Merged ? "Deleted" :
                     elem.cwFrame.classID == APICWFrameClass_Boundary ? "Boundary" :

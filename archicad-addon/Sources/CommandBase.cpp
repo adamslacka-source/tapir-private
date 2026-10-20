@@ -1203,3 +1203,166 @@ void DecomposeHotlinkTransformation (const API_Tranmat& transformation, API_Coor
     const double det = transformation.tmx[0] * transformation.tmx[5] - transformation.tmx[1] * transformation.tmx[4];
     mirrored = det < 0.0;
 }
+
+// ---- Tool defaults with their subelement defaults (Curtain Wall, Railing) ----------------------
+
+const GS::Array<RailingSubElementKind>& GetRailingSubElementKinds ()
+{
+    static const GS::Array<RailingSubElementKind> kinds = {
+        { "Node",               APISubElement_RailingNode,               0,                            API_RailingNodeID },
+        { "Segment",            APISubElement_RailingSegment,            0,                            API_RailingSegmentID },
+        { "Post",               APISubElement_RailingPost,               0,                            API_RailingPostID },
+        { "InnerPost",          APISubElement_RailingInnerPost,          0,                            API_RailingInnerPostID },
+        { "Rail",               APISubElement_RailingRail,               APISubElemFlag_DefaultDefault, API_RailingRailID },
+        { "AdditionalRail",     APISubElement_RailingRail,               0,                            API_RailingRailID },
+        { "Handrail",           APISubElement_RailingHandrail,           APISubElemFlag_DefaultDefault, API_RailingHandrailID },
+        { "AdditionalHandrail", APISubElement_RailingHandrail,           0,                            API_RailingHandrailID },
+        { "Toprail",            APISubElement_RailingToprail,            0,                            API_RailingToprailID },
+        { "Panel",              APISubElement_RailingPanel,              0,                            API_RailingPanelID },
+        { "Pattern",            APISubElement_RailingPattern,            0,                            API_RailingPatternID },
+        { "BalusterSet",        APISubElement_RailingBalusterSet,        0,                            API_RailingBalusterSetID },
+        { "Baluster",           APISubElement_RailingBaluster,           0,                            API_RailingBalusterID },
+        { "RailEnd",            APISubElement_RailingRailEnd,            0,                            API_RailingRailEndID },
+        { "HandrailEnd",        APISubElement_RailingHandrailEnd,        0,                            API_RailingHandrailEndID },
+        { "ToprailEnd",         APISubElement_RailingToprailEnd,         0,                            API_RailingToprailEndID },
+        { "RailConnection",     APISubElement_RailingRailConnection,     0,                            API_RailingRailConnectionID },
+        { "HandrailConnection", APISubElement_RailingHandrailConnection, 0,                            API_RailingHandrailConnectionID },
+        { "ToprailConnection",  APISubElement_RailingToprailConnection,  0,                            API_RailingToprailConnectionID },
+        { "Finish",             APISubElement_RailingFinish,             0,                            API_RailingEndFinishID },
+    };
+    return kinds;
+}
+
+GS::Optional<RailingSubElementKind> FindRailingSubElementKind (const API_SubElement& subElement)
+{
+    const UInt64 filter = static_cast<UInt64> (subElement.subType) & ~static_cast<UInt64> (APISubElement_NoParams | APISubElement_NoElem);
+    const bool defaultDefault = (subElement.subElemFlags & APISubElemFlag_DefaultDefault) != 0;
+    for (const RailingSubElementKind& kind : GetRailingSubElementKinds ()) {
+        if (static_cast<UInt64> (kind.subType) == filter && ((kind.flags & APISubElemFlag_DefaultDefault) != 0) == defaultDefault) {
+            return kind;
+        }
+    }
+    return {};
+}
+
+void SetElemHeadType (API_Elem_Head& header, API_ElemTypeID typeId)
+{
+#ifdef ServerMainVers_2600
+    header.type = typeId;
+#else
+    header.typeID = typeId;
+#endif
+}
+
+bool HasExtToolDefaults (API_ElemTypeID typeId)
+{
+    return typeId == API_CurtainWallID || typeId == API_RailingID;
+}
+
+GSErrCode GetRailingSubElementDefault (const RailingSubElementKind& kind, API_SubElement& subElement, GSErrCode& error, GSErrCode& errorWithoutType)
+{
+    API_Element railing = {};
+    SetElemHeadType (railing.header, API_RailingID);
+
+    subElement = {};
+    subElement.subType = kind.subType;
+    subElement.subElemFlags = kind.flags;
+    SetElemHeadType (subElement.subElem.header, kind.typeId);
+    error = ACAPI_Element_GetDefaultsExt (&railing, nullptr, 1, &subElement);
+    errorWithoutType = NoError;
+    if (error == NoError) {
+        return NoError;
+    }
+
+    ACAPI_DisposeElemMemoHdls (&subElement.memo);
+    subElement = {};
+    subElement.subType = kind.subType;
+    subElement.subElemFlags = kind.flags;
+    railing = {};
+    SetElemHeadType (railing.header, API_RailingID);
+    errorWithoutType = ACAPI_Element_GetDefaultsExt (&railing, nullptr, 1, &subElement);
+    if (errorWithoutType != NoError) {
+        ACAPI_DisposeElemMemoHdls (&subElement.memo);
+        subElement = {};
+    }
+    return errorWithoutType;
+}
+
+GSErrCode GetToolDefaultsWithSubElements (API_ElemTypeID typeId, API_Element& element, API_ElementMemo& memo, GS::Array<API_SubElement>& subElements, bool& usedExt)
+{
+    element = {};
+    memo = {};
+    SetElemHeadType (element.header, typeId);
+    usedExt = false;
+    GSErrCode err = APIERR_BADID;
+    if (HasExtToolDefaults (typeId)) {
+        err = ACAPI_Element_GetDefaultsExt (&element, &memo, 0, nullptr);
+        usedExt = err == NoError;
+    }
+    if (err != NoError) {
+        ACAPI_DisposeElemMemoHdls (&memo);
+        memo = {};
+        element = {};
+        SetElemHeadType (element.header, typeId);
+        err = ACAPI_Element_GetDefaults (&element, &memo);
+        if (err != NoError) {
+            return err;
+        }
+    }
+
+    if (typeId == API_RailingID && usedExt) {
+        for (const RailingSubElementKind& kind : GetRailingSubElementKinds ()) {
+            API_SubElement subElement = {};
+            GSErrCode withType = NoError;
+            GSErrCode withoutType = NoError;
+            if (GetRailingSubElementDefault (kind, subElement, withType, withoutType) == NoError) {
+                subElements.Push (subElement);
+            }
+        }
+    }
+    return NoError;
+}
+
+GSErrCode ChangeToolDefaultsWithSubElements (API_Element& element, API_ElementMemo& memo, GS::Array<API_SubElement>& subElements, bool useExt, GS::UniString& path)
+{
+    API_Element mask;
+    ACAPI_ELEMENT_MASK_SETFULL (mask);
+    GSErrCode firstErr = NoError;
+    if (useExt) {
+        if (!subElements.IsEmpty ()) {
+            // The subelement mask says which fields of subElem are written (as the element mask
+            // does for the element); the subelements are full defaults, so all of them.
+            for (API_SubElement& subElement : subElements) {
+                ACAPI_ELEMENT_MASK_SETFULL (subElement.mask);
+            }
+            const GSErrCode err = ACAPI_Element_ChangeDefaultsExt (&element, &memo, &mask, subElements.GetSize (), &subElements[0]);
+            if (err == NoError) {
+                path = "ExtWithSubElements";
+                return NoError;
+            }
+            firstErr = err;
+        }
+        const GSErrCode err = ACAPI_Element_ChangeDefaultsExt (&element, &memo, &mask, 0, nullptr);
+        if (err == NoError) {
+            path = "Ext";
+            return NoError;
+        }
+        if (firstErr == NoError) {
+            firstErr = err;
+        }
+    }
+    const GSErrCode err = ACAPI_Element_ChangeDefaults (&element, &memo, &mask);
+    if (err == NoError) {
+        path = "Basic";
+        return NoError;
+    }
+    return firstErr != NoError ? firstErr : err;
+}
+
+void DisposeSubElements (GS::Array<API_SubElement>& subElements)
+{
+    for (API_SubElement& subElement : subElements) {
+        ACAPI_DisposeElemMemoHdls (&subElement.memo);
+    }
+    subElements.Clear ();
+}

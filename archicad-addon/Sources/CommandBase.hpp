@@ -267,5 +267,47 @@ GS::Optional<GS::UniString> BuildSlabMemoFromGeometry (
 // ExtendedElementCommands.cpp, next to the Window/Door specific variant.
 GSErrCode ApplyFavoriteToElementDefaults (const GS::UniString& favoriteName, API_ElemTypeID expectedTypeId);
 
+// ---- Tool defaults with their subelement defaults (Curtain Wall, Railing) ----------------------
+//
+// The Curtain Wall and the Railing keep a part of their tool defaults in subelement defaults
+// (API_SubElement: the posts, rails, panels, balusters... of a Railing), which
+// ACAPI_Element_GetDefaults / ChangeDefaults do not carry. These helpers read and write them with
+// the Ext functions and fall back to the plain ones when Archicad refuses the Ext call for the
+// type. Defined in CommandBase.cpp.
+
+// One kind of Railing subelement default: the subelement filter, the flags (APISubElemFlag_
+// DefaultDefault, "railing subelement: default default" in the API) and the element type.
+struct RailingSubElementKind {
+    const char*         name;
+    API_SubElementType  subType;
+    UInt32              flags;
+    API_ElemTypeID      typeId;
+};
+const GS::Array<RailingSubElementKind>& GetRailingSubElementKinds ();
+GS::Optional<RailingSubElementKind> FindRailingSubElementKind (const API_SubElement& subElement);
+void SetElemHeadType (API_Elem_Head& header, API_ElemTypeID typeId);
+
+// Whether the tool keeps defaults that only the Ext functions carry (Curtain Wall, Railing).
+bool HasExtToolDefaults (API_ElemTypeID typeId);
+
+// Reads one subelement default of the Railing tool. `error` is the error of the call with the
+// subelement's element type set in its header; when that fails the call is repeated with an
+// empty header (as the API examples do for markers) and `errorWithoutType` gets its error.
+// Returns NoError when either call succeeded; the caller disposes subElement.memo.
+GSErrCode GetRailingSubElementDefault (const RailingSubElementKind& kind, API_SubElement& subElement, GSErrCode& error, GSErrCode& errorWithoutType);
+
+// Reads the tool defaults of `typeId` with their memo. For HasExtToolDefaults types the Ext call is
+// used (usedExt = true) unless Archicad refuses it; for a Railing every subelement default Archicad
+// gives is added to `subElements`. The caller disposes memo and subElements (DisposeSubElements).
+GSErrCode GetToolDefaultsWithSubElements (API_ElemTypeID typeId, API_Element& element, API_ElementMemo& memo, GS::Array<API_SubElement>& subElements, bool& usedExt);
+
+// Writes element (full mask), memo and subElements back into the tool defaults: ChangeDefaultsExt
+// with the subelements, then without them, then ChangeDefaults (only when useExt is false or the
+// Ext calls fail). `path` tells which call succeeded ("ExtWithSubElements", "Ext", "Basic");
+// otherwise the error of the first call is returned.
+GSErrCode ChangeToolDefaultsWithSubElements (API_Element& element, API_ElementMemo& memo, GS::Array<API_SubElement>& subElements, bool useExt, GS::UniString& path);
+
+void DisposeSubElements (GS::Array<API_SubElement>& subElements);
+
 bool LoadElementHeaderByGuid (const API_Guid& elementGuid, API_Elem_Head& elementHeader);
 bool DoesElementExist (const API_Guid& elementGuid, API_ElemTypeID expectedTypeId);

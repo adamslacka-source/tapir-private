@@ -511,6 +511,18 @@ GSErrCode Initialize (void)
             "Changes the details of existing Railings: segment height, post spacing (pattern length and distribution), top rail, handrails, rails, "
             "infill panel visibility and baluster spacing. The result is read back from the subelements and reported per field, with the post, panel and baluster counts."
         );
+        err |= RegisterCommand<GetRailingSystemDefaultsCommand> (
+            elementCommands, "1.7.2",
+            "Reads the Railing tool defaults as the API gives them: the node and segment templates (posts, inner posts, pattern, panel, balusters, "
+            "top rail, handrails, rails) with their library parts, the memo, every Railing subelement default ACAPI_Element_GetDefaultsExt gives "
+            "(with their GDL parameters on request) and optionally the same of a Railing Favorite. A diagnostic command, also used to check that the defaults were restored."
+        );
+        err |= RegisterCommand<SetRailingSystemDefaultsCommand> (
+            elementCommands, "1.7.2",
+            "Sets the Railing tool defaults: segment height, post spacing and post/inner post objects, top rail, handrail (visibility, height, offset), "
+            "horizontal rails (count, heights, offset), the infill (panel, balusters or none) and the library part and GDL parameters (profile, size, surfaces) of each kind of subelement; "
+            "reads them back and reports what Archicad kept, did not keep and what cannot be read back; optionally saves them as a Favorite with the subelement defaults. CreateRailings then uses them."
+        );
         err |= RegisterCommand<CreateAssociativeDimensionsCommand> (
             elementCommands, "1.4.0",
             "Creates associative linear dimensions from explicit witness point references."

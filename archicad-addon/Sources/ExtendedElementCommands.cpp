@@ -3599,6 +3599,7 @@ GS::Optional<GS::UniString> CreateWallsCommand::GetInputParametersSchema () cons
                         "endCoordinate": { "$ref": "#/Coordinate2D" },
                         "floorIndex": { "type": "integer", "description": "Story index (as returned by GetStories). When provided, zCoordinate is interpreted as bottomOffset relative to the floor. Takes priority over zCoordinate for floor assignment." },
                         "zCoordinate": { "type": "number", "description": "Absolute Z when floorIndex is absent; bottomOffset relative to the floor when floorIndex is provided." },
+                        "absoluteZCoordinate": { "type": "number", "description": "Optional absolute elevation of the wall base, as zCoordinate of the other Create commands: with floorIndex the base offset from that story is computed from it, without floorIndex the home story is derived from it. Excludes zCoordinate." },
                         "height": { "type": "number", "exclusiveMinimum": 0.0, "description": "Optional explicit height. Sets relativeTopStory to 0, so it replaces the top link of the favorite or the tool default. When omitted, the height and top link of the favorite (or of the Wall tool defaults) are kept." },
                         "thickness": {
                             "type": "number",
@@ -3707,7 +3708,12 @@ GS::Optional<GS::ObjectState> CreateWallsCommand::SetTypeSpecificParameters (API
     }
 
     double zCoordinate = 0.0;
-    parameters.Get ("zCoordinate", zCoordinate);
+    const bool hasZCoordinate = parameters.Get ("zCoordinate", zCoordinate);
+    double absoluteZCoordinate = 0.0;
+    const bool hasAbsoluteZCoordinate = parameters.Get ("absoluteZCoordinate", absoluteZCoordinate);
+    if (hasZCoordinate && hasAbsoluteZCoordinate) {
+        return CreateErrorResponse (APIERR_BADPARS, "Give either 'zCoordinate' or 'absoluteZCoordinate', not both.");
+    }
 
     // The element arrives filled from the Wall tool defaults, with the item's favorite
     // (favoriteName) already applied to them by CreateElementsCommandBase. Only the
@@ -3758,7 +3764,11 @@ GS::Optional<GS::ObjectState> CreateWallsCommand::SetTypeSpecificParameters (API
 
     // The home story always comes from floorIndex/zCoordinate, never from the favorite.
     Int32 explicitFloorIndex = -1;
-    if (parameters.Get ("floorIndex", explicitFloorIndex)) {
+    if (hasAbsoluteZCoordinate) {
+        const auto floorIndexAndOffset = ResolveFloorIndexAndOffset (parameters, "floorIndex", absoluteZCoordinate, stories);
+        element.header.floorInd   = floorIndexAndOffset.first;
+        element.wall.bottomOffset = floorIndexAndOffset.second;
+    } else if (parameters.Get ("floorIndex", explicitFloorIndex)) {
         element.header.floorInd   = static_cast<short> (explicitFloorIndex);
         element.wall.bottomOffset = zCoordinate;
     } else {
@@ -7823,10 +7833,19 @@ GSErrCode ApplyFavoriteToElementDefaults (const GS::UniString& favoriteName, API
     favorite.properties.New ();
     favorite.classifications.New ();
     favorite.elemCategoryValues.New ();
+    // A Curtain Wall or Railing favorite keeps a part of its settings in subelement defaults
+    // (the rails, panels, balusters... of a Railing), which only ChangeDefaultsExt applies.
+    const bool extTool = HasExtToolDefaults (expectedTypeId);
+    if (extTool) {
+        favorite.subElements.New ();
+    }
 
     GSErrCode err = ACAPI_Favorite_Get (&favorite);
     const auto disposeFavoriteMemos = [&] () {
         ACAPI_DisposeElemMemoHdls (&favorite.memo.Get ());
+        if (favorite.subElements.HasValue ()) {
+            DisposeSubElements (favorite.subElements.Get ());
+        }
     };
     if (err != NoError) {
         disposeFavoriteMemos ();
@@ -7843,9 +7862,14 @@ GSErrCode ApplyFavoriteToElementDefaults (const GS::UniString& favoriteName, API
         return APIERR_REFUSEDPAR;
     }
 
-    API_Element mask;
-    ACAPI_ELEMENT_MASK_SETFULL (mask);
-    err = ACAPI_Element_ChangeDefaults (&favorite.element, favorite.memo.GetPtr (), &mask);
+    if (extTool) {
+        GS::UniString path;
+        err = ChangeToolDefaultsWithSubElements (favorite.element, favorite.memo.Get (), favorite.subElements.Get (), true, path);
+    } else {
+        API_Element mask;
+        ACAPI_ELEMENT_MASK_SETFULL (mask);
+        err = ACAPI_Element_ChangeDefaults (&favorite.element, favorite.memo.GetPtr (), &mask);
+    }
     disposeFavoriteMemos ();
     if (err != NoError) {
         return err;

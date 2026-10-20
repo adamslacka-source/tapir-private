@@ -6,6 +6,7 @@
 #include "FavoritesCommands.hpp"
 
 #include <algorithm>
+#include <cstring>
 #include <cmath>
 #include <functional>
 #include <string>
@@ -90,14 +91,34 @@ GS::ObjectState	CreateElementsCommandBase::Execute (const GS::ObjectState& param
 
         API_Element defaultsSnapshot = element;
         API_ElementMemo defaultsSnapshotMemo = {};
+        // A Curtain Wall or Railing favorite also changes subelement defaults (ADR-001 R1), which
+        // only the Ext functions read and write back.
+        const bool extTool = HasExtToolDefaults (elemTypeID);
+        GS::Array<API_SubElement> defaultsSnapshotSubElements;
+        bool snapshotUsedExt = false;
         const GS::OnExit snapshotGuard ([&] () {
             if (anyFavoriteName) {
                 ACAPI_DisposeElemMemoHdls (&defaultsSnapshotMemo);
+                DisposeSubElements (defaultsSnapshotSubElements);
             }
         });
         if (anyFavoriteName) {
-            ACAPI_Element_GetDefaults (&defaultsSnapshot, &defaultsSnapshotMemo);
+            if (extTool) {
+                GetToolDefaultsWithSubElements (elemTypeID, defaultsSnapshot, defaultsSnapshotMemo, defaultsSnapshotSubElements, snapshotUsedExt);
+            } else {
+                ACAPI_Element_GetDefaults (&defaultsSnapshot, &defaultsSnapshotMemo);
+            }
         }
+        const auto restoreDefaultsSnapshot = [&] () {
+            if (extTool) {
+                GS::UniString path;
+                ChangeToolDefaultsWithSubElements (defaultsSnapshot, defaultsSnapshotMemo, defaultsSnapshotSubElements, snapshotUsedExt, path);
+                return;
+            }
+            API_Element restoreMask;
+            ACAPI_ELEMENT_MASK_SETFULL (restoreMask);
+            ACAPI_Element_ChangeDefaults (&defaultsSnapshot, &defaultsSnapshotMemo, &restoreMask);
+        };
         bool favoriteApplied = false;
 
         for (const GS::ObjectState& data : dataArray) {
@@ -120,9 +141,7 @@ GS::ObjectState	CreateElementsCommandBase::Execute (const GS::ObjectState& param
                     }
                     favoriteApplied = true;
                 } else if (favoriteApplied) {
-                    API_Element restoreMask;
-                    ACAPI_ELEMENT_MASK_SETFULL (restoreMask);
-                    ACAPI_Element_ChangeDefaults (&defaultsSnapshot, &defaultsSnapshotMemo, &restoreMask);
+                    restoreDefaultsSnapshot ();
                     favoriteApplied = false;
                 }
             }
@@ -140,7 +159,18 @@ GS::ObjectState	CreateElementsCommandBase::Execute (const GS::ObjectState& param
 #else
             element.header.typeID = elemTypeID;
 #endif
-            err = ACAPI_Element_GetDefaults (&element, &memo);
+            // The Curtain Wall defaults are read with the Ext call, which the API documents for
+            // them (the plain one may leave out e.g. the surfaces of CW classes). A Railing keeps
+            // the plain read of Do_CreateRailing (API example): its subelement defaults stay in the
+            // tool defaults, the memo of the new railing gets only the reference line.
+            err = elemTypeID == API_CurtainWallID ? ACAPI_Element_GetDefaultsExt (&element, &memo, 0, nullptr) : APIERR_BADID;
+            if (err != NoError) {
+                ACAPI_DisposeElemMemoHdls (&memo);
+                memo = {};
+                element = {};
+                SetElemHeadType (element.header, elemTypeID);
+                err = ACAPI_Element_GetDefaults (&element, &memo);
+            }
             if (err != NoError) {
                 elements (CreateErrorResponse (err, "Failed to read the " + elemTypeName + " defaults."));
                 continue;
@@ -176,9 +206,7 @@ GS::ObjectState	CreateElementsCommandBase::Execute (const GS::ObjectState& param
         // side effect that would otherwise change what the user's next manual placement
         // (or a later command) starts from.
         if (favoriteApplied) {
-            API_Element restoreMask;
-            ACAPI_ELEMENT_MASK_SETFULL (restoreMask);
-            ACAPI_Element_ChangeDefaults (&defaultsSnapshot, &defaultsSnapshotMemo, &restoreMask);
+            restoreDefaultsSnapshot ();
         }
 
         ACAPI_AutoText_ChangeAutoTextFlag (&savedAutoTextFlag);
@@ -3711,6 +3739,102 @@ static GS::ObjectState CreateCWFrameResult (const GS::Array<GS::UniString>& notK
     return os;
 }
 
+static GS::ObjectState CreateCWOverriddenSurfaceOS (const API_OverriddenAttribute& attr)
+{
+    API_AttributeIndex index = {};
+    const bool overridden = GetCWOverriddenSurface (attr, index);
+    GS::ObjectState os;
+    os.Add ("overridden", overridden);
+    if (overridden) {
+        os.Add ("index", GetAttributeIndex (index));
+    }
+    return os;
+}
+
+// The surface fields of a frame class as read back (diagnostics of ADR-001 nález I5).
+static GS::ObjectState CreateCWFrameSurfaceOS (const API_CWFrameType& frame)
+{
+    GS::ObjectState os;
+    os.Add ("useOwnMaterial", frame.useOwnMaterial);
+    os.Add ("material", GetAttributeIndex (frame.material));
+    os.Add ("buildingMaterial", GetAttributeIndex (frame.buildingMaterial));
+    os.Add ("objectType", static_cast<Int32> (frame.objectType));
+    os.Add ("classID", static_cast<Int32> (frame.classID));
+    return os;
+}
+
+static GS::ObjectState CreateCWPanelSurfaceOS (const API_CWPanelType& panel)
+{
+    GS::ObjectState os;
+    os.Add ("outerSurface", CreateCWOverriddenSurfaceOS (panel.outerSurfaceMaterial));
+    os.Add ("innerSurface", CreateCWOverriddenSurfaceOS (panel.innerSurfaceMaterial));
+    os.Add ("edgeSurface", CreateCWOverriddenSurfaceOS (panel.cutSurfaceMaterial));
+    os.Add ("buildingMaterial", GetAttributeIndex (panel.buildingMaterial));
+    os.Add ("objectType", static_cast<Int32> (panel.objectType));
+    os.Add ("classID", static_cast<Int32> (panel.classID));
+    return os;
+}
+
+// Writes a frame or panel class once more through its subelement default (APISubElement_
+// CWFrameClass / CWPanelClass with subIndex = the index of the class in the class list; how the
+// API addresses a class there is not documented), with the class in the memo as well. The
+// subelement is only changed when Archicad gives back the class of that name. Returns the
+// diagnostics: the error codes and the class as the subelement read gave it.
+static GS::ObjectState ChangeCWClassBySubElement (bool isFrame, UIndex classIndex, const API_CWFrameType* frame, const API_CWPanelType* panel)
+{
+    GS::ObjectState diag;
+    API_Element cw = {};
+    API_ElementMemo cwMemo = {};
+    SetElemHeadType (cw.header, API_CurtainWallID);
+    API_SubElement sub = {};
+    sub.subType = isFrame ? APISubElement_CWFrameClass : APISubElement_CWPanelClass;
+    sub.subIndex = static_cast<Int32> (classIndex);
+    SetElemHeadType (sub.subElem.header, isFrame ? API_CurtainWallFrameID : API_CurtainWallPanelID);
+    GSErrCode err = ACAPI_Element_GetDefaultsExt (&cw, &cwMemo, 1, &sub);
+    diag.Add ("getError", static_cast<Int32> (err));
+    if (err == NoError) {
+        bool sameClass = false;
+        if (isFrame) {
+            diag.Add ("subElementBefore", CreateCWFrameSurfaceOS (sub.subElem.cwFrame));
+            diag.Add ("subElementClassName", GS::UniString (sub.subElem.cwFrame.className));
+            GS::Array<API_CWFrameType> classes = GetCWClassArray (cwMemo.cWallFrameDefaults);
+            if (classIndex < classes.GetSize ()) {
+                classes[classIndex] = *frame;
+                SetCWClassArray (cwMemo.cWallFrameDefaults, classes);
+            }
+            sameClass = GS::UniString (sub.subElem.cwFrame.className) == GS::UniString (frame->className);
+            if (sameClass) {
+                sub.subElem.cwFrame.material = frame->material;
+                sub.subElem.cwFrame.useOwnMaterial = frame->useOwnMaterial;
+            }
+        } else {
+            diag.Add ("subElementBefore", CreateCWPanelSurfaceOS (sub.subElem.cwPanel));
+            diag.Add ("subElementClassName", GS::UniString (sub.subElem.cwPanel.className));
+            GS::Array<API_CWPanelType> classes = GetCWClassArray (cwMemo.cWallPanelDefaults);
+            if (classIndex < classes.GetSize ()) {
+                classes[classIndex] = *panel;
+                SetCWClassArray (cwMemo.cWallPanelDefaults, classes);
+            }
+            sameClass = GS::UniString (sub.subElem.cwPanel.className) == GS::UniString (panel->className);
+            if (sameClass) {
+                sub.subElem.cwPanel.outerSurfaceMaterial = panel->outerSurfaceMaterial;
+                sub.subElem.cwPanel.innerSurfaceMaterial = panel->innerSurfaceMaterial;
+                sub.subElem.cwPanel.cutSurfaceMaterial = panel->cutSurfaceMaterial;
+            }
+        }
+        diag.Add ("subElementIsTheClass", sameClass);
+        API_Element mask;
+        ACAPI_ELEMENT_MASK_SETFULL (mask);
+        ACAPI_ELEMENT_MASK_SETFULL (sub.mask);
+        err = sameClass ? ACAPI_Element_ChangeDefaultsExt (&cw, &cwMemo, &mask, 1, &sub)
+                        : ACAPI_Element_ChangeDefaultsExt (&cw, &cwMemo, &mask, 0, nullptr);
+        diag.Add ("changeError", static_cast<Int32> (err));
+    }
+    ACAPI_DisposeElemMemoHdls (&sub.memo);
+    ACAPI_DisposeElemMemoHdls (&cwMemo);
+    return diag;
+}
+
 SetCurtainWallSystemDefaultsCommand::SetCurtainWallSystemDefaultsCommand () :
     CommandBase (CommonSchema::Used)
 {
@@ -3974,6 +4098,11 @@ GS::Optional<GS::UniString> SetCurtainWallSystemDefaultsCommand::GetRawResponseS
                     "defaultsRestored": {
                         "type": "boolean",
                         "description": "Present when restoreDefaults was asked: whether the defaults were put back."
+                    },
+                    "surfaceDiagnostics": {
+                        "type": "array",
+                        "description": "One item per frame or panel class with a surface in the input: the surface fields as ACAPI_Element_GetDefaultsExt (readExt) and ACAPI_Element_GetDefaults (readBasic) gave them after the change, and - when the surface was not kept - the error codes and result of writing the class once more through its subelement default (subElement). notKept is from the final read.",
+                        "items": { "type": "object" }
                     }
                 },
                 "additionalProperties": false,
@@ -4213,22 +4342,25 @@ GS::ObjectState SetCurtainWallSystemDefaultsCommand::Execute (const GS::ObjectSt
             return NoError;
         }
 
-        // Read the defaults back the way CreateCurtainWalls and CreateFavoritesFromDefaults read
-        // them, and report every asked field that did not arrive there.
+        // Read the defaults back with the Ext call, as CreateCurtainWalls and
+        // CreateFavoritesFromDefaults read them now, and report every asked field that did not
+        // arrive there (until ADR-001 nález I5 they were read back with ACAPI_Element_GetDefaults).
         API_Element check = {};
         API_ElementMemo checkMemo = {};
         const GS::OnExit checkGuard ([&checkMemo] () { ACAPI_DisposeElemMemoHdls (&checkMemo); });
-#ifdef ServerMainVers_2600
-        check.header.type = API_CurtainWallID;
-#else
-        check.header.typeID = API_CurtainWallID;
-#endif
         const auto restore = [&] () -> GSErrCode {
             API_Element restoreMask;
             ACAPI_ELEMENT_MASK_SETFULL (restoreMask);
             return ACAPI_Element_ChangeDefaultsExt (&snapshot, &snapshotMemo, &restoreMask, 0, nullptr);
         };
-        err = ACAPI_Element_GetDefaults (&check, &checkMemo);
+        const auto readBack = [&] () -> GSErrCode {
+            ACAPI_DisposeElemMemoHdls (&checkMemo);
+            checkMemo = {};
+            check = {};
+            SetElemHeadType (check.header, API_CurtainWallID);
+            return ACAPI_Element_GetDefaultsExt (&check, &checkMemo, 0, nullptr);
+        };
+        err = readBack ();
         if (err != NoError) {
             if (restoreDefaults) {
                 restore ();
@@ -4236,6 +4368,108 @@ GS::ObjectState SetCurtainWallSystemDefaultsCommand::Execute (const GS::ObjectSt
             response = CreateErrorResponse (err, "The Curtain Wall tool defaults were changed, but reading them back failed.");
             return NoError;
         }
+
+        // Surfaces (ADR-001 nález I5): when a class read back has not got the asked surface, write
+        // it once more through the subelement default of the class and read the defaults back
+        // again. The diagnostics say what each read and write gave.
+        const auto isSurfaceField = [] (const GS::UniString& field) {
+            return field == "surface" || field == "outerSurface" || field == "innerSurface" || field == "edgeSurface";
+        };
+        GS::Array<GS::ObjectState> surfaceDiagnostics;
+        bool surfaceRetried = false;
+        {
+            const GS::Array<API_CWFrameType> firstFrames = GetCWClassArray (checkMemo.cWallFrameDefaults);
+            const GS::Array<API_CWPanelType> firstPanels = GetCWClassArray (checkMemo.cWallPanelDefaults);
+            API_Element basic = {};
+            API_ElementMemo basicMemo = {};
+            const GS::OnExit basicGuard ([&basicMemo] () { ACAPI_DisposeElemMemoHdls (&basicMemo); });
+            SetElemHeadType (basic.header, API_CurtainWallID);
+            const GSErrCode basicErr = ACAPI_Element_GetDefaults (&basic, &basicMemo);
+            const GS::Array<API_CWFrameType> basicFrames = basicErr == NoError ? GetCWClassArray (basicMemo.cWallFrameDefaults) : GS::Array<API_CWFrameType> ();
+            const GS::Array<API_CWPanelType> basicPanels = basicErr == NoError ? GetCWClassArray (basicMemo.cWallPanelDefaults) : GS::Array<API_CWPanelType> ();
+
+            for (const FrameItemState& state : frameStates) {
+                if (state.error.HasValue () || !state.request.surface.HasValue ()) {
+                    continue;
+                }
+                const GS::Optional<UIndex> kept = FindCWClassByName (firstFrames, state.name);
+                if (!kept.HasValue ()) {
+                    continue;
+                }
+                GS::ObjectState diag;
+                diag.Add ("class", state.name);
+                diag.Add ("asked", GetAttributeIndex (state.request.surface.Get ()));
+                diag.Add ("readExt", CreateCWFrameSurfaceOS (firstFrames[kept.Get ()]));
+                const GS::Optional<UIndex> basicIndex = FindCWClassByName (basicFrames, state.name);
+                if (basicIndex.HasValue ()) {
+                    diag.Add ("readBasic", CreateCWFrameSurfaceOS (basicFrames[basicIndex.Get ()]));
+                }
+                bool surfaceLost = false;
+                for (const GS::UniString& field : GetNotKeptCWFrameFields (firstFrames[kept.Get ()], state.request)) {
+                    surfaceLost = surfaceLost || isSurfaceField (field);
+                }
+                if (surfaceLost) {
+                    API_CWFrameType wanted = firstFrames[kept.Get ()];
+                    wanted.material = state.request.surface.Get ();
+                    wanted.useOwnMaterial = true;
+                    diag.Add ("subElement", ChangeCWClassBySubElement (true, kept.Get (), &wanted, nullptr));
+                    surfaceRetried = true;
+                }
+                surfaceDiagnostics.Push (diag);
+            }
+            for (const PanelItemState& state : panelStates) {
+                if (state.error.HasValue () || !(state.request.outerSurface.HasValue () || state.request.innerSurface.HasValue () || state.request.edgeSurface.HasValue ())) {
+                    continue;
+                }
+                const GS::Optional<UIndex> kept = FindCWClassByName (firstPanels, state.name);
+                if (!kept.HasValue ()) {
+                    continue;
+                }
+                GS::ObjectState diag;
+                diag.Add ("class", state.name);
+                diag.Add ("readExt", CreateCWPanelSurfaceOS (firstPanels[kept.Get ()]));
+                const GS::Optional<UIndex> basicIndex = FindCWClassByName (basicPanels, state.name);
+                if (basicIndex.HasValue ()) {
+                    diag.Add ("readBasic", CreateCWPanelSurfaceOS (basicPanels[basicIndex.Get ()]));
+                }
+                bool surfaceLost = false;
+                for (const GS::UniString& field : GetNotKeptCWPanelFields (firstPanels[kept.Get ()], state.request)) {
+                    surfaceLost = surfaceLost || isSurfaceField (field);
+                }
+                if (surfaceLost) {
+                    API_CWPanelType wanted = firstPanels[kept.Get ()];
+                    if (state.request.outerSurface.HasValue ()) {
+                        SetCWOverriddenSurface (wanted.outerSurfaceMaterial, state.request.outerSurface.Get ());
+                    }
+                    if (state.request.innerSurface.HasValue ()) {
+                        SetCWOverriddenSurface (wanted.innerSurfaceMaterial, state.request.innerSurface.Get ());
+                    }
+                    if (state.request.edgeSurface.HasValue ()) {
+                        SetCWOverriddenSurface (wanted.cutSurfaceMaterial, state.request.edgeSurface.Get ());
+                    }
+                    diag.Add ("subElement", ChangeCWClassBySubElement (false, kept.Get (), nullptr, &wanted));
+                    surfaceRetried = true;
+                }
+                surfaceDiagnostics.Push (diag);
+            }
+        }
+        if (surfaceRetried) {
+            err = readBack ();
+            if (err != NoError) {
+                if (restoreDefaults) {
+                    restore ();
+                }
+                response = CreateErrorResponse (err, "The Curtain Wall tool defaults were changed, but reading them back after the surface retry failed.");
+                return NoError;
+            }
+        }
+        if (!surfaceDiagnostics.IsEmpty ()) {
+            const auto& diagnosticsList = response.AddList<GS::ObjectState> ("surfaceDiagnostics");
+            for (const GS::ObjectState& diag : surfaceDiagnostics) {
+                diagnosticsList (diag);
+            }
+        }
+
         const GS::Array<API_CWFrameType> keptFrames = GetCWClassArray (checkMemo.cWallFrameDefaults);
         const GS::Array<API_CWPanelType> keptPanels = GetCWClassArray (checkMemo.cWallPanelDefaults);
 
@@ -5198,6 +5432,1585 @@ GS::Optional<GS::ObjectState> CreateRailingsCommand::ChangeAfterCreation (API_El
     }
     element.header = changed.header;
     return {};
+}
+
+// ============================================================================
+// Railing tool defaults (ADR-001 R1): GetRailingSystemDefaults reads them - the Railing defaults
+// themselves (defNode / defSegment, API_RailingType), their memo and every subelement default
+// Archicad gives through ACAPI_Element_GetDefaultsExt - or the same of a Railing Favorite;
+// SetRailingSystemDefaults writes them and reads them back.
+//
+// What the headers (AC29 APIdefs_Elements.h) give: API_RailingType carries ONE template per kind -
+// defNode.defPost, defSegment.defPattern (distribution, defPanel, defBalusterSet with defBaluster,
+// defInnerPost, nPanels / nBalusterSets / nInnerPosts), defSegment.defDefaultHandrail / defHandrails,
+// defToprail, defDefaultRail / defRails. No rail list, no surface, profile or size field: the
+// subelements are GDL objects (symbID) whose look is in their GDL parameters, which live in the
+// memo.params of the subelement defaults (API_SubElement, APISubElement_Railing*).
+// ============================================================================
+
+static constexpr double RailingDefaultsEps = 1e-6;
+
+static GS::Optional<GS::UniString> GetLibraryPartNameOfSymbol (const API_Guid& symbID)
+{
+    if (symbID == APINULLGuid) {
+        return {};
+    }
+    // ACAPI_LibraryPart_Search matches the main guid of ownUnID only (its revision may differ).
+    API_LibPart libPart = {};
+    const GS::UniString unID = GS::UniString ("{") + APIGuidToString (symbID) + "}-{00000000-0000-0000-0000-000000000000}";
+    const std::string unIDStr (unID.ToCStr ().Get ());
+    strncpy (libPart.ownUnID, unIDStr.c_str (), sizeof (libPart.ownUnID) - 1);
+    const GSErrCode err = ACAPI_LibraryPart_Search (&libPart, false);
+    delete libPart.location;
+    if (err != NoError) {
+        return {};
+    }
+    return GS::UniString (libPart.docu_UName);
+}
+
+static GS::ObjectState CreateRailingSymbolOS (const API_Guid& symbID)
+{
+    GS::ObjectState os;
+    os.Add ("symbolId", APIGuidToString (symbID));
+    const GS::Optional<GS::UniString> name = GetLibraryPartNameOfSymbol (symbID);
+    if (name.HasValue ()) {
+        os.Add ("libraryPartName", name.Get ());
+    }
+    return os;
+}
+
+static GS::ObjectState CreateRailingDistributionOS (const API_RailingDistributionData& distribution)
+{
+    GS::ObjectState os;
+    os.Add ("type", GS::UniString (GetRailingDistributionName (distribution.type)));
+    os.Add ("length", distribution.length);
+    os.Add ("patternAmount", static_cast<Int32> (distribution.patternAmount));
+    os.Add ("alignment", static_cast<Int32> (distribution.alignment));
+    return os;
+}
+
+static GS::ObjectState CreateRailingFrameOS (const API_RailingFrameData& frame)
+{
+    GS::ObjectState os;
+    os.Add ("yOffset", frame.yOffset);
+    os.Add ("zTopOffset", frame.zTopOffset);
+    os.Add ("zBottomOffset", frame.zBottomOffset);
+    os.Add ("xBeginOffset", frame.xBeginOffset);
+    os.Add ("xEndOffset", frame.xEndOffset);
+    os.Add ("bottomRailIndex", static_cast<Int32> (frame.verticalPosition.bottomRailIndex));
+    os.Add ("topRailIndex", static_cast<Int32> (frame.verticalPosition.topRailIndex));
+    return os;
+}
+
+static GS::ObjectState CreateRailingRailOS (const API_RailingRailType& rail)
+{
+    GS::ObjectState os;
+    os.Add ("visible", rail.visible);
+    os.Add ("relative", rail.relative);
+    os.Add ("height", rail.height);
+    os.Add ("horizontalOffset", rail.horizontalOffset);
+    os.Add ("symbol", CreateRailingSymbolOS (rail.symbID));
+    return os;
+}
+
+static GS::ObjectState CreateRailingHandrailOS (const API_RailingHandrailType& handrail)
+{
+    GS::ObjectState os;
+    os.Add ("visible", handrail.visible);
+    os.Add ("bothSides", handrail.doubleHandrail);
+    os.Add ("height", handrail.height);
+    os.Add ("horizontalOffset", handrail.horizontalOffset);
+    os.Add ("symbol", CreateRailingSymbolOS (handrail.symbID));
+    return os;
+}
+
+static GS::ObjectState CreateRailingToprailOS (const API_RailingToprailType& toprail)
+{
+    GS::ObjectState os;
+    os.Add ("visible", toprail.visible);
+    os.Add ("symbol", CreateRailingSymbolOS (toprail.symbID));
+    return os;
+}
+
+static GS::ObjectState CreateRailingPanelOS (const API_RailingPanelType& panel)
+{
+    GS::ObjectState os;
+    os.Add ("visible", panel.visible);
+    os.Add ("frame", CreateRailingFrameOS (panel.frame));
+    os.Add ("symbol", CreateRailingSymbolOS (panel.symbID));
+    return os;
+}
+
+static GS::ObjectState CreateRailingBalusterSetOS (const API_RailingBalusterSetType& balusterSet)
+{
+    GS::ObjectState os;
+    os.Add ("distribution", CreateRailingDistributionOS (balusterSet.distribution));
+    os.Add ("frame", CreateRailingFrameOS (balusterSet.frame));
+    os.Add ("nBalusters", static_cast<Int32> (balusterSet.nBalusters));
+    os.Add ("balusterSymbol", CreateRailingSymbolOS (balusterSet.defBaluster.symbID));
+    return os;
+}
+
+static GS::ObjectState CreateRailingInnerPostOS (const API_RailingInnerPostType& innerPost)
+{
+    GS::ObjectState os;
+    os.Add ("postNum", static_cast<Int32> (innerPost.postNum));
+    os.Add ("doublePostOffset", innerPost.doublePostOffset);
+    os.Add ("bottomRailIndex", static_cast<Int32> (innerPost.verticalPosition.bottomRailIndex));
+    os.Add ("topRailIndex", static_cast<Int32> (innerPost.verticalPosition.topRailIndex));
+    os.Add ("symbol", CreateRailingSymbolOS (innerPost.symbID));
+    return os;
+}
+
+static GS::ObjectState CreateRailingPostOS (const API_RailingPostType& post)
+{
+    GS::ObjectState os;
+    os.Add ("bottomRailIndex", static_cast<Int32> (post.verticalPosition.bottomRailIndex));
+    os.Add ("topRailIndex", static_cast<Int32> (post.verticalPosition.topRailIndex));
+    os.Add ("symbol", CreateRailingSymbolOS (post.symbID));
+    return os;
+}
+
+static GS::ObjectState CreateRailingPatternOS (const API_RailingPatternType& pattern)
+{
+    GS::ObjectState os;
+    os.Add ("distribution", CreateRailingDistributionOS (pattern.distribution));
+    os.Add ("nPanels", static_cast<Int32> (pattern.nPanels));
+    os.Add ("nBalusterSets", static_cast<Int32> (pattern.nBalusterSets));
+    os.Add ("nInnerPosts", static_cast<Int32> (pattern.nInnerPosts));
+    os.Add ("panel", CreateRailingPanelOS (pattern.defPanel));
+    os.Add ("balusterSet", CreateRailingBalusterSetOS (pattern.defBalusterSet));
+    os.Add ("innerPost", CreateRailingInnerPostOS (pattern.defInnerPost));
+    return os;
+}
+
+static GS::ObjectState CreateRailingSegmentOS (const API_RailingSegmentType& segment)
+{
+    GS::ObjectState os;
+    os.Add ("visible", segment.visible);
+    os.Add ("height", segment.height);
+    os.Add ("yOffset", segment.yOffset);
+    os.Add ("zOffset", segment.zOffset);
+    os.Add ("refLineLocation", static_cast<Int32> (segment.refLineLocation));
+    os.Add ("pattern", CreateRailingPatternOS (segment.defPattern));
+    os.Add ("handrail", CreateRailingHandrailOS (segment.defDefaultHandrail));
+    os.Add ("additionalHandrails", CreateRailingHandrailOS (segment.defHandrails));
+    os.Add ("toprail", CreateRailingToprailOS (segment.defToprail));
+    os.Add ("rail", CreateRailingRailOS (segment.defDefaultRail));
+    os.Add ("additionalRails", CreateRailingRailOS (segment.defRails));
+    return os;
+}
+
+static GS::ObjectState CreateRailingNodeOS (const API_RailingNodeType& node)
+{
+    GS::ObjectState os;
+    os.Add ("visible", node.visible);
+    os.Add ("unifyPatterns", node.unifyPatterns);
+    os.Add ("post", CreateRailingPostOS (node.defPost));
+    os.Add ("visiblePostNum", static_cast<Int32> (node.visiblePostNum));
+    os.Add ("postOffset", node.postOffset);
+    os.Add ("elevation", node.elevation);
+    os.Add ("nRailConnections", static_cast<Int32> (node.nRailConnections));
+    os.Add ("nRailEnds", static_cast<Int32> (node.nRailEnds));
+    return os;
+}
+
+static GS::ObjectState CreateRailingTypeOS (const API_RailingType& railing)
+{
+    GS::ObjectState os;
+    os.Add ("bottomOffset", railing.bottomOffset);
+    os.Add ("nVertices", static_cast<Int32> (railing.nVertices));
+    os.Add ("nNodes", static_cast<Int32> (railing.nNodes));
+    os.Add ("nSegments", static_cast<Int32> (railing.nSegments));
+    os.Add ("node", CreateRailingNodeOS (railing.defNode));
+    os.Add ("segment", CreateRailingSegmentOS (railing.defSegment));
+    return os;
+}
+
+// The number of items of every railing memo array, and the rails, handrails, panels, baluster sets
+// and patterns themselves when there are any.
+static GS::ObjectState CreateRailingMemoOS (const API_ElementMemo& memo)
+{
+    GS::ObjectState os;
+    GS::ObjectState counts;
+    counts.Add ("railingNodes", static_cast<Int32> (GetRailingSubelementCount (memo.railingNodes)));
+    counts.Add ("railingSegments", static_cast<Int32> (GetRailingSubelementCount (memo.railingSegments)));
+    counts.Add ("railingPosts", static_cast<Int32> (GetRailingSubelementCount (memo.railingPosts)));
+    counts.Add ("railingRailEnds", static_cast<Int32> (GetRailingSubelementCount (memo.railingRailEnds)));
+    counts.Add ("railingRailConnections", static_cast<Int32> (GetRailingSubelementCount (memo.railingRailConnections)));
+    counts.Add ("railingHandrailEnds", static_cast<Int32> (GetRailingSubelementCount (memo.railingHandrailEnds)));
+    counts.Add ("railingHandrailConnections", static_cast<Int32> (GetRailingSubelementCount (memo.railingHandrailConnections)));
+    counts.Add ("railingToprailEnds", static_cast<Int32> (GetRailingSubelementCount (memo.railingToprailEnds)));
+    counts.Add ("railingToprailConnections", static_cast<Int32> (GetRailingSubelementCount (memo.railingToprailConnections)));
+    counts.Add ("railingRails", static_cast<Int32> (GetRailingSubelementCount (memo.railingRails)));
+    counts.Add ("railingToprails", static_cast<Int32> (GetRailingSubelementCount (memo.railingToprails)));
+    counts.Add ("railingHandrails", static_cast<Int32> (GetRailingSubelementCount (memo.railingHandrails)));
+    counts.Add ("railingPatterns", static_cast<Int32> (GetRailingSubelementCount (memo.railingPatterns)));
+    counts.Add ("railingInnerPosts", static_cast<Int32> (GetRailingSubelementCount (memo.railingInnerPosts)));
+    counts.Add ("railingPanels", static_cast<Int32> (GetRailingSubelementCount (memo.railingPanels)));
+    counts.Add ("railingBalusterSets", static_cast<Int32> (GetRailingSubelementCount (memo.railingBalusterSets)));
+    counts.Add ("railingBalusters", static_cast<Int32> (GetRailingSubelementCount (memo.railingBalusters)));
+    os.Add ("counts", counts);
+    os.Add ("hasParams", memo.params != nullptr);
+
+    const auto& rails = os.AddList<GS::ObjectState> ("rails");
+    for (UInt32 i = 0; i < GetRailingSubelementCount (memo.railingRails); ++i) {
+        rails (CreateRailingRailOS (memo.railingRails[i]));
+    }
+    const auto& handrails = os.AddList<GS::ObjectState> ("handrails");
+    for (UInt32 i = 0; i < GetRailingSubelementCount (memo.railingHandrails); ++i) {
+        handrails (CreateRailingHandrailOS (memo.railingHandrails[i]));
+    }
+    const auto& panels = os.AddList<GS::ObjectState> ("panels");
+    for (UInt32 i = 0; i < GetRailingSubelementCount (memo.railingPanels); ++i) {
+        panels (CreateRailingPanelOS (memo.railingPanels[i]));
+    }
+    const auto& balusterSets = os.AddList<GS::ObjectState> ("balusterSets");
+    for (UInt32 i = 0; i < GetRailingSubelementCount (memo.railingBalusterSets); ++i) {
+        balusterSets (CreateRailingBalusterSetOS (memo.railingBalusterSets[i]));
+    }
+    const auto& patterns = os.AddList<GS::ObjectState> ("patterns");
+    for (UInt32 i = 0; i < GetRailingSubelementCount (memo.railingPatterns); ++i) {
+        patterns (CreateRailingPatternOS (memo.railingPatterns[i]));
+    }
+    return os;
+}
+
+static const char* GetRailingAddParTypeName (API_AddParID typeID)
+{
+    switch (typeID) {
+        case APIParT_Integer:           return "Integer";
+        case APIParT_Length:            return "Length";
+        case APIParT_Angle:             return "Angle";
+        case APIParT_RealNum:           return "RealNumber";
+        case APIParT_LightSw:           return "LightSwitch";
+        case APIParT_ColRGB:            return "RGBColor";
+        case APIParT_Intens:            return "Intensity";
+        case APIParT_LineTyp:           return "LineType";
+        case APIParT_Mater:             return "Material";
+        case APIParT_FillPat:           return "FillPattern";
+        case APIParT_PenCol:            return "PenColor";
+        case APIParT_CString:           return "String";
+        case APIParT_Boolean:           return "Boolean";
+        case APIParT_Separator:         return "Separator";
+        case APIParT_Title:             return "Title";
+        case APIParT_BuildingMaterial:  return "BuildingMaterial";
+        case APIParT_Profile:           return "Profile";
+        case APIParT_Dictionary:        return "Dictionary";
+        default:                        return "Unknown";
+    }
+}
+
+static UInt32 GetAddParCount (API_AddParType** params)
+{
+    return params == nullptr ? 0 : static_cast<UInt32> (BMGetHandleSize (reinterpret_cast<GSHandle> (params)) / sizeof (API_AddParType));
+}
+
+static const API_AddParType* FindRailingAddPar (API_AddParType** params, const GS::String& name)
+{
+    const UInt32 n = GetAddParCount (params);
+    for (UInt32 i = 0; i < n; ++i) {
+        const API_AddParType& param = (*params)[i];
+        if (param.typeID != APIParT_Separator && CHCompareCStrings (param.name, name.ToCStr ()) == 0) {
+            return &param;
+        }
+    }
+    return nullptr;
+}
+
+static void AddRailingAddParValue (GS::ObjectState& os, const API_AddParType& param)
+{
+    if (param.typeMod != API_ParSimple) {
+        os.Add ("array", GS::ObjectState ("dim1", static_cast<Int32> (param.dim1), "dim2", static_cast<Int32> (param.dim2)));
+        return;
+    }
+    switch (param.typeID) {
+        case APIParT_CString:
+        case APIParT_Title:
+            os.Add ("value", GS::UniString (param.value.uStr));
+            break;
+        case APIParT_Boolean:
+            os.Add ("value", param.value.real != 0.0);
+            break;
+        case APIParT_Separator:
+        case APIParT_Dictionary:
+            break;
+        default:
+            os.Add ("value", param.value.real);
+            break;
+    }
+}
+
+// The GDL parameters of a subelement default: their number, and with `withValues` the name, type,
+// description and value of each.
+static GS::ObjectState CreateRailingAddParsOS (API_AddParType** params, bool withValues)
+{
+    GS::ObjectState os;
+    const UInt32 n = GetAddParCount (params);
+    os.Add ("count", static_cast<Int32> (n));
+    if (withValues && n > 0) {
+        const auto& list = os.AddList<GS::ObjectState> ("parameters");
+        for (UInt32 i = 0; i < n; ++i) {
+            const API_AddParType& param = (*params)[i];
+            if (param.typeID == APIParT_Separator) {
+                continue;
+            }
+            GS::ObjectState item;
+            item.Add ("name", GS::UniString (param.name));
+            item.Add ("type", GS::UniString (GetRailingAddParTypeName (param.typeID)));
+            item.Add ("description", GS::UniString (param.uDescname));
+            AddRailingAddParValue (item, param);
+            list (item);
+        }
+    }
+    return os;
+}
+
+static GS::ObjectState CreateRailingSubElementOS (const API_SubElement& subElement, bool withValues)
+{
+    GS::ObjectState os;
+    const GS::Optional<RailingSubElementKind> kind = FindRailingSubElementKind (subElement);
+    os.Add ("kind", GS::UniString (kind.HasValue () ? kind->name : "Unknown"));
+    os.Add ("subType", GS::UniString::Printf ("0x%llx", static_cast<unsigned long long> (subElement.subType)));
+    os.Add ("subIndex", static_cast<Int32> (subElement.subIndex));
+    os.Add ("subSubIndex", static_cast<Int32> (subElement.subSubIndex));
+    os.Add ("subElemFlags", static_cast<Int32> (subElement.subElemFlags));
+    const API_ElemTypeID typeId = GetElemTypeId (subElement.subElem.header);
+    os.Add ("elementType", GetElementTypeNonLocalizedName (typeId));
+    switch (typeId) {
+        case API_RailingRailID:         os.Add ("details", CreateRailingRailOS (subElement.subElem.railingRail)); break;
+        case API_RailingHandrailID:     os.Add ("details", CreateRailingHandrailOS (subElement.subElem.railingHandrail)); break;
+        case API_RailingToprailID:      os.Add ("details", CreateRailingToprailOS (subElement.subElem.railingToprail)); break;
+        case API_RailingPanelID:        os.Add ("details", CreateRailingPanelOS (subElement.subElem.railingPanel)); break;
+        case API_RailingBalusterSetID:  os.Add ("details", CreateRailingBalusterSetOS (subElement.subElem.railingBalusterSet)); break;
+        case API_RailingBalusterID:     os.Add ("details", GS::ObjectState ("symbol", CreateRailingSymbolOS (subElement.subElem.railingBaluster.symbID))); break;
+        case API_RailingInnerPostID:    os.Add ("details", CreateRailingInnerPostOS (subElement.subElem.railingInnerPost)); break;
+        case API_RailingPostID:         os.Add ("details", CreateRailingPostOS (subElement.subElem.railingPost)); break;
+        case API_RailingPatternID:      os.Add ("details", CreateRailingPatternOS (subElement.subElem.railingPattern)); break;
+        case API_RailingSegmentID:      os.Add ("details", CreateRailingSegmentOS (subElement.subElem.railingSegment)); break;
+        case API_RailingNodeID:         os.Add ("details", CreateRailingNodeOS (subElement.subElem.railingNode)); break;
+        default: break;
+    }
+    os.Add ("gdlParameters", CreateRailingAddParsOS (subElement.memo.params, withValues));
+    return os;
+}
+
+// ---------------------------------------------------------------------------------------------
+// GetRailingSystemDefaults
+// ---------------------------------------------------------------------------------------------
+
+GetRailingSystemDefaultsCommand::GetRailingSystemDefaultsCommand () :
+    CommandBase (CommonSchema::Used)
+{
+}
+
+GS::String GetRailingSystemDefaultsCommand::GetName () const
+{
+    return "GetRailingSystemDefaults";
+}
+
+GS::Optional<GS::UniString> GetRailingSystemDefaultsCommand::GetInputParametersSchema () const
+{
+    return R"({
+        "type": "object",
+        "properties": {
+            "favoriteName": {
+                "type": "string",
+                "description": "Optional name of a Railing Favorite to read (its settings, memo and subelement defaults) besides the tool defaults."
+            },
+            "includeParameters": {
+                "type": "boolean",
+                "description": "List the GDL parameters (name, type, description, value) of every subelement default. The default is false (only their number)."
+            },
+            "probeSubElements": {
+                "type": "boolean",
+                "description": "Ask Archicad for every kind of Railing subelement default one by one (ACAPI_Element_GetDefaultsExt with one API_SubElement, with and without the subelement type in its header) and report the error codes. The default is true."
+            }
+        },
+        "additionalProperties": false
+    })";
+}
+
+GS::Optional<GS::UniString> GetRailingSystemDefaultsCommand::GetRawResponseSchema () const
+{
+    return R"({
+        "type": "object",
+        "description": "The Railing tool defaults as the API gives them. A diagnostic command: the structure follows the API structures (API_RailingType, API_ElementMemo, API_SubElement) and may grow.",
+        "properties": {
+            "getDefaultsExt": { "type": "object", "description": "ACAPI_Element_GetDefaultsExt (Railing, memo, no subelements): ok and the error code when it failed." },
+            "getDefaults": { "type": "object", "description": "ACAPI_Element_GetDefaults (Railing, memo): ok and the error code when it failed." },
+            "railing": { "type": "object", "description": "API_RailingType of the defaults (Ext when it worked): node and segment templates with the library part of each subelement." },
+            "memo": { "type": "object", "description": "The memo of the Ext call: the number of items of every railing memo array and the rails, handrails, panels, baluster sets and patterns in it." },
+            "memoBasic": { "type": "object", "description": "The same for the memo of ACAPI_Element_GetDefaults." },
+            "subElementProbe": { "type": "array", "items": { "type": "object" }, "description": "One item per kind of Railing subelement default: kind, defaultDefault, errorWithType, errorWithoutType and the subelement default when one of the calls worked." },
+            "favorite": { "type": "object", "description": "With favoriteName: the Favorite's railing, memo and subElements as ACAPI_Favorite_Get gives them, or its error." }
+        },
+        "additionalProperties": true
+    })";
+}
+
+static GS::ObjectState CreateRailingCallOS (GSErrCode err)
+{
+    GS::ObjectState os;
+    os.Add ("ok", err == NoError);
+    if (err != NoError) {
+        os.Add ("error", static_cast<Int32> (err));
+    }
+    return os;
+}
+
+GS::ObjectState GetRailingSystemDefaultsCommand::Execute (const GS::ObjectState& parameters, GS::ProcessControl& /*processControl*/) const
+{
+    bool includeParameters = false;
+    parameters.Get ("includeParameters", includeParameters);
+    bool probeSubElements = true;
+    parameters.Get ("probeSubElements", probeSubElements);
+
+    GS::ObjectState response;
+
+    API_Element extElement = {};
+    API_ElementMemo extMemo = {};
+    const GS::OnExit extGuard ([&extMemo] () { ACAPI_DisposeElemMemoHdls (&extMemo); });
+    SetElemHeadType (extElement.header, API_RailingID);
+    const GSErrCode extErr = ACAPI_Element_GetDefaultsExt (&extElement, &extMemo, 0, nullptr);
+    response.Add ("getDefaultsExt", CreateRailingCallOS (extErr));
+
+    API_Element basicElement = {};
+    API_ElementMemo basicMemo = {};
+    const GS::OnExit basicGuard ([&basicMemo] () { ACAPI_DisposeElemMemoHdls (&basicMemo); });
+    SetElemHeadType (basicElement.header, API_RailingID);
+    const GSErrCode basicErr = ACAPI_Element_GetDefaults (&basicElement, &basicMemo);
+    response.Add ("getDefaults", CreateRailingCallOS (basicErr));
+
+    if (extErr == NoError) {
+        response.Add ("railing", CreateRailingTypeOS (extElement.railing));
+        response.Add ("memo", CreateRailingMemoOS (extMemo));
+    } else if (basicErr == NoError) {
+        response.Add ("railing", CreateRailingTypeOS (basicElement.railing));
+    }
+    if (basicErr == NoError) {
+        response.Add ("memoBasic", CreateRailingMemoOS (basicMemo));
+    }
+
+    if (probeSubElements) {
+        const auto& probe = response.AddList<GS::ObjectState> ("subElementProbe");
+        for (const RailingSubElementKind& kind : GetRailingSubElementKinds ()) {
+            API_SubElement subElement = {};
+            GSErrCode withType = NoError;
+            GSErrCode withoutType = NoError;
+            const GSErrCode err = GetRailingSubElementDefault (kind, subElement, withType, withoutType);
+            GS::ObjectState item;
+            item.Add ("kind", GS::UniString (kind.name));
+            item.Add ("defaultDefault", (kind.flags & APISubElemFlag_DefaultDefault) != 0);
+            item.Add ("errorWithType", static_cast<Int32> (withType));
+            if (withType != NoError) {
+                item.Add ("errorWithoutType", static_cast<Int32> (withoutType));
+            }
+            if (err == NoError) {
+                item.Add ("subElement", CreateRailingSubElementOS (subElement, includeParameters));
+            }
+            ACAPI_DisposeElemMemoHdls (&subElement.memo);
+            probe (item);
+        }
+    }
+
+    GS::UniString favoriteName;
+    if (parameters.Get ("favoriteName", favoriteName) && !favoriteName.IsEmpty ()) {
+        API_Favorite favorite (favoriteName);
+        favorite.memo.New ();
+        favorite.subElements.New ();
+        const GSErrCode err = ACAPI_Favorite_Get (&favorite);
+        GS::ObjectState favoriteOS;
+        favoriteOS.Add ("name", favoriteName);
+        favoriteOS.Add ("get", CreateRailingCallOS (err));
+        if (err == NoError) {
+            const API_ElemTypeID typeId = GetElemTypeId (favorite.element.header);
+            favoriteOS.Add ("elementType", GetElementTypeNonLocalizedName (typeId));
+            if (typeId == API_RailingID) {
+                favoriteOS.Add ("railing", CreateRailingTypeOS (favorite.element.railing));
+                favoriteOS.Add ("memo", CreateRailingMemoOS (favorite.memo.Get ()));
+            }
+            const auto& subList = favoriteOS.AddList<GS::ObjectState> ("subElements");
+            if (favorite.subElements.HasValue ()) {
+                for (const API_SubElement& subElement : favorite.subElements.Get ()) {
+                    subList (CreateRailingSubElementOS (subElement, includeParameters));
+                }
+            }
+        }
+        ACAPI_DisposeElemMemoHdls (favorite.memo.GetPtr ());
+        if (favorite.subElements.HasValue ()) {
+            DisposeSubElements (favorite.subElements.Get ());
+        }
+        response.Add ("favorite", favoriteOS);
+    }
+
+    return response;
+}
+
+// ---------------------------------------------------------------------------------------------
+// SetRailingSystemDefaults
+// ---------------------------------------------------------------------------------------------
+
+// The library part and GDL parameters asked for one kind of subelement.
+struct RailingGdlRequest {
+    GS::Optional<GS::UniString> libraryPartName;
+    Int32 libInd = 0;
+    API_Guid symbol = APINULLGuid;
+    GS::Array<GS::ObjectState> parameters;
+
+    bool HasSymbol () const { return libraryPartName.HasValue (); }
+    bool HasAny () const { return libraryPartName.HasValue () || !parameters.IsEmpty (); }
+};
+
+struct RailingDefaultsRequest {
+    GS::Optional<double> height;
+    GS::Optional<double> postSpacing;
+    GS::Optional<API_DistribTypeID> postDistribution;
+    RailingGdlRequest post;
+    RailingGdlRequest innerPost;
+    GS::Optional<bool> toprailVisible;
+    RailingGdlRequest toprail;
+    GS::Optional<bool> handrailVisible;
+    GS::Optional<double> handrailHeight;
+    GS::Optional<double> handrailOffset;
+    GS::Optional<bool> handrailBothSides;
+    RailingGdlRequest handrail;
+    GS::Optional<bool> railVisible;
+    GS::Optional<UInt32> railCount;
+    GS::Array<double> railHeights;
+    GS::Optional<double> railOffset;
+    RailingGdlRequest rail;
+    GS::Optional<GS::UniString> infillKind;
+    RailingGdlRequest panel;
+    GS::Optional<double> balusterSpacing;
+    RailingGdlRequest baluster;
+    bool railListWritten = false;   // set by ApplyRailingDefaultsRequest
+};
+
+static GS::Optional<GS::UniString> ParseRailingGdlRequest (const GS::ObjectState& os, const GS::UniString& path, RailingGdlRequest& request)
+{
+    GS::UniString name;
+    if (os.Get ("libraryPartName", name)) {
+        Int32 libInd = 0;
+        API_Guid symbol = APINULLGuid;
+        const auto error = ResolveCWLibraryPart (name, libInd, symbol);
+        if (error.HasValue ()) {
+            return path + ".libraryPartName: " + error.Get ();
+        }
+        if (symbol == APINULLGuid) {
+            return path + ".libraryPartName: the library part has no unique id to refer to it by.";
+        }
+        request.libraryPartName = name;
+        request.libInd = libInd;
+        request.symbol = symbol;
+    }
+    os.Get ("parameters", request.parameters);
+    for (UIndex i = 0; i < request.parameters.GetSize (); ++i) {
+        GS::UniString paramName;
+        if (!request.parameters[i].Get ("name", paramName) || paramName.IsEmpty ()) {
+            return path + GS::UniString::Printf (".parameters[%u]: missing name.", i);
+        }
+        if (!request.parameters[i].Contains ("value")) {
+            return path + GS::UniString::Printf (".parameters[%u]: missing value.", i);
+        }
+    }
+    return {};
+}
+
+static GS::Optional<GS::UniString> ParseRailingDefaultsRequest (const GS::ObjectState& parameters, RailingDefaultsRequest& request)
+{
+    double value = 0.0;
+    bool flag = false;
+    const GS::ObjectState* segment = parameters.Get ("segment");
+    if (segment != nullptr && segment->Get ("height", value)) {
+        if (value <= 0.0) {
+            return GS::UniString ("segment.height must be positive.");
+        }
+        request.height = value;
+    }
+
+    const GS::ObjectState* posts = parameters.Get ("posts");
+    if (posts != nullptr) {
+        if (posts->Get ("spacing", value)) {
+            if (value <= 0.0) {
+                return GS::UniString ("posts.spacing must be positive.");
+            }
+            request.postSpacing = value;
+        }
+        GS::UniString distribution;
+        if (posts->Get ("distribution", distribution)) {
+            if (distribution == "FixedLength") {
+                request.postDistribution = APIDT_PatternLength;
+            } else if (distribution == "BestDivision") {
+                request.postDistribution = APIDT_BestDivisionByLength;
+            } else {
+                return GS::UniString ("posts.distribution must be 'FixedLength' or 'BestDivision'.");
+            }
+        }
+        auto error = ParseRailingGdlRequest (*posts, "posts", request.post);
+        if (error.HasValue ()) {
+            return error;
+        }
+        const GS::ObjectState* innerPosts = posts->Get ("innerPosts");
+        if (innerPosts != nullptr) {
+            error = ParseRailingGdlRequest (*innerPosts, "posts.innerPosts", request.innerPost);
+            if (error.HasValue ()) {
+                return error;
+            }
+        }
+    }
+
+    const GS::ObjectState* toprail = parameters.Get ("toprail");
+    if (toprail != nullptr) {
+        if (toprail->Get ("visible", flag)) {
+            request.toprailVisible = flag;
+        }
+        const auto error = ParseRailingGdlRequest (*toprail, "toprail", request.toprail);
+        if (error.HasValue ()) {
+            return error;
+        }
+    }
+
+    const GS::ObjectState* handrail = parameters.Get ("handrail");
+    if (handrail != nullptr) {
+        if (handrail->Get ("visible", flag)) {
+            request.handrailVisible = flag;
+        }
+        if (handrail->Get ("height", value)) {
+            if (value <= 0.0) {
+                return GS::UniString ("handrail.height must be positive.");
+            }
+            request.handrailHeight = value;
+        }
+        if (handrail->Get ("horizontalOffset", value)) {
+            request.handrailOffset = value;
+        }
+        if (handrail->Get ("bothSides", flag)) {
+            request.handrailBothSides = flag;
+        }
+        const auto error = ParseRailingGdlRequest (*handrail, "handrail", request.handrail);
+        if (error.HasValue ()) {
+            return error;
+        }
+    }
+
+    const GS::ObjectState* rails = parameters.Get ("rails");
+    if (rails != nullptr) {
+        if (rails->Get ("visible", flag)) {
+            request.railVisible = flag;
+        }
+        if (rails->Get ("horizontalOffset", value)) {
+            request.railOffset = value;
+        }
+        GS::Array<double> heights;
+        Int32 count = -1;
+        const bool hasHeights = rails->Get ("heights", heights);
+        const bool hasCount = rails->Get ("count", count);
+        if (hasHeights && hasCount && static_cast<Int32> (heights.GetSize ()) != count) {
+            return GS::UniString ("rails.count and the number of rails.heights differ.");
+        }
+        if (hasHeights) {
+            for (UIndex i = 0; i < heights.GetSize (); ++i) {
+                if (heights[i] <= 0.0) {
+                    return GS::UniString::Printf ("rails.heights[%u] must be positive.", i);
+                }
+            }
+            request.railHeights = heights;
+            request.railCount = heights.GetSize ();
+        } else if (hasCount) {
+            if (count < 0) {
+                return GS::UniString ("rails.count must not be negative.");
+            }
+            // Evenly between bottom (default 0) and top (default: the handrail height, else the
+            // segment height), both bounds excluded: h_i = bottom + (i + 1) * (top - bottom) / (count + 1).
+            double bottom = 0.0;
+            rails->Get ("bottom", bottom);
+            double top = 0.0;
+            if (!rails->Get ("top", top)) {
+                if (request.handrailHeight.HasValue ()) {
+                    top = request.handrailHeight.Get ();
+                } else if (request.height.HasValue ()) {
+                    top = request.height.Get ();
+                } else {
+                    return GS::UniString ("rails.count without rails.heights needs rails.top, handrail.height or segment.height.");
+                }
+            }
+            if (top <= bottom) {
+                return GS::UniString ("rails.top must be above rails.bottom.");
+            }
+            for (Int32 i = 0; i < count; ++i) {
+                request.railHeights.Push (bottom + (i + 1) * (top - bottom) / (count + 1));
+            }
+            request.railCount = static_cast<UInt32> (count);
+        }
+        const auto error = ParseRailingGdlRequest (*rails, "rails", request.rail);
+        if (error.HasValue ()) {
+            return error;
+        }
+    }
+
+    const GS::ObjectState* infill = parameters.Get ("infill");
+    if (infill != nullptr) {
+        GS::UniString kind;
+        if (infill->Get ("kind", kind)) {
+            if (kind != "panel" && kind != "balusters" && kind != "none") {
+                return GS::UniString ("infill.kind must be 'panel', 'balusters' or 'none'.");
+            }
+            request.infillKind = kind;
+        }
+        const GS::ObjectState* panel = infill->Get ("panel");
+        if (panel != nullptr) {
+            const auto error = ParseRailingGdlRequest (*panel, "infill.panel", request.panel);
+            if (error.HasValue ()) {
+                return error;
+            }
+        }
+        const GS::ObjectState* balusters = infill->Get ("balusters");
+        if (balusters != nullptr) {
+            if (balusters->Get ("spacing", value)) {
+                if (value <= 0.0) {
+                    return GS::UniString ("infill.balusters.spacing must be positive.");
+                }
+                request.balusterSpacing = value;
+            }
+            const auto error = ParseRailingGdlRequest (*balusters, "infill.balusters", request.baluster);
+            if (error.HasValue ()) {
+                return error;
+            }
+        }
+    }
+    return {};
+}
+
+// Writes one GDL parameter into a parameter list. Attribute parameters (material, building
+// material, profile, fill, line type) take an attribute index or an attribute name.
+static GS::Optional<GS::UniString> SetRailingGdlParameter (API_AddParType** params, const GS::ObjectState& item)
+{
+    GS::String name;
+    item.Get ("name", name);
+    const UInt32 n = GetAddParCount (params);
+    API_AddParType* param = nullptr;
+    for (UInt32 i = 0; i < n; ++i) {
+        API_AddParType& candidate = (*params)[i];
+        if (candidate.typeID != APIParT_Separator && CHCompareCStrings (candidate.name, name.ToCStr ()) == 0) {
+            param = &candidate;
+            break;
+        }
+    }
+    if (param == nullptr) {
+        return GS::UniString::Printf ("'%s' is not a parameter of the subelement's library part", name.ToCStr ());
+    }
+    if (param->typeMod != API_ParSimple) {
+        return GS::UniString::Printf ("'%s' is an array parameter, which is not supported", name.ToCStr ());
+    }
+
+    API_AttrTypeID attributeType = API_ZombieAttrID;
+    switch (param->typeID) {
+        case APIParT_Mater:             attributeType = API_MaterialID; break;
+        case APIParT_BuildingMaterial:  attributeType = API_BuildingMaterialID; break;
+        case APIParT_Profile:           attributeType = API_ProfileID; break;
+        case APIParT_FillPat:           attributeType = API_FilltypeID; break;
+        case APIParT_LineTyp:           attributeType = API_LinetypeID; break;
+        default: break;
+    }
+
+    double number = 0.0;
+    Int32 integer = 0;
+    bool flag = false;
+    GS::UniString text;
+    switch (param->typeID) {
+        case APIParT_CString:
+        case APIParT_Title:
+            if (!item.Get ("value", text)) {
+                return GS::UniString::Printf ("'%s' needs a string value", name.ToCStr ());
+            }
+            GS::ucscpy (param->value.uStr, text.ToUStr (0, GS::Min (text.GetLength (), static_cast<USize> (API_UAddParStrLen - 1))).Get ());
+            return {};
+        case APIParT_Boolean:
+        case APIParT_LightSw:
+            if (item.Get ("value", flag)) {
+                param->value.real = flag ? 1.0 : 0.0;
+                return {};
+            }
+            if (item.Get ("value", integer)) {
+                param->value.real = integer != 0 ? 1.0 : 0.0;
+                return {};
+            }
+            return GS::UniString::Printf ("'%s' needs a boolean value", name.ToCStr ());
+        case APIParT_Dictionary:
+        case APIParT_Separator:
+            return GS::UniString::Printf ("the type of '%s' is not supported", name.ToCStr ());
+        default:
+            break;
+    }
+
+    if (attributeType != API_ZombieAttrID && item.Get ("value", text)) {
+        API_Attribute attribute = {};
+        attribute.header.typeID = attributeType;
+        attribute.header.uniStringNamePtr = &text;
+        if (ACAPI_Attribute_Get (&attribute) != NoError) {
+            return GS::UniString::Printf ("no attribute named '%s' for '%s'", text.ToCStr ().Get (), name.ToCStr ());
+        }
+        param->value.real = GetAttributeIndex (attribute.header.index);
+        return {};
+    }
+    if (item.Get ("value", number)) {
+        param->value.real = number;
+        return {};
+    }
+    if (item.Get ("value", integer)) {
+        param->value.real = integer;
+        return {};
+    }
+    return GS::UniString::Printf ("'%s' needs a number%s", name.ToCStr (), attributeType != API_ZombieAttrID ? " or an attribute name" : "");
+}
+
+// Replaces the parameter list of a subelement default with the defaults of a new library part.
+static GSErrCode LoadRailingLibPartParams (Int32 libInd, API_AddParType**& params)
+{
+    double a = 0.0;
+    double b = 0.0;
+    Int32 addParNum = 0;
+    API_AddParType** addPars = nullptr;
+    const GSErrCode err = ACAPI_LibraryPart_GetParams (libInd, &a, &b, &addParNum, &addPars);
+    if (err != NoError || addPars == nullptr) {
+        return err != NoError ? err : APIERR_GENERAL;
+    }
+    if (params != nullptr) {
+        ACAPI_DisposeAddParHdl (&params);
+    }
+    params = addPars;
+    return NoError;
+}
+
+// A field the command asked for, and what became of it.
+struct RailingFieldResult {
+    GS::Array<GS::UniString> kept;
+    GS::Array<GS::ObjectState> notKept;
+    GS::Array<GS::ObjectState> unverified;
+
+    void Report (const GS::UniString& field, bool isKept, const GS::UniString& reason)
+    {
+        if (isKept) {
+            kept.Push (field);
+        } else {
+            notKept.Push (GS::ObjectState ("field", field, "reason", reason));
+        }
+    }
+    void Unverified (const GS::UniString& field, const GS::UniString& reason)
+    {
+        unverified.Push (GS::ObjectState ("field", field, "reason", reason));
+    }
+};
+
+// The subelement default of a kind in `subElements`, or nullptr.
+static API_SubElement* FindRailingSubElement (GS::Array<API_SubElement>& subElements, const char* kindName)
+{
+    for (API_SubElement& subElement : subElements) {
+        const GS::Optional<RailingSubElementKind> kind = FindRailingSubElementKind (subElement);
+        if (kind.HasValue () && CHCompareCStrings (kind->name, kindName) == 0) {
+            return &subElement;
+        }
+    }
+    return nullptr;
+}
+
+// Applies the library part and parameters of `request` to the subelement default of a kind (and
+// its symbol to `symbID`, the field of the Railing defaults that names the same library part).
+// Parameter errors are collected in `errors` as {field, reason}.
+static void ApplyRailingGdlRequest (const RailingGdlRequest& request, const GS::UniString& field, const char* kindName,
+                                    GS::Array<API_SubElement>& subElements, API_Guid& symbID, API_Guid* subSymbID,
+                                    GS::Array<GS::ObjectState>& errors)
+{
+    if (request.HasSymbol ()) {
+        symbID = request.symbol;
+    }
+    API_SubElement* subElement = FindRailingSubElement (subElements, kindName);
+    if (subElement == nullptr) {
+        if (!request.parameters.IsEmpty ()) {
+            errors.Push (GS::ObjectState ("field", GS::UniString (field + ".parameters"),
+                "reason", GS::UniString::Printf ("Archicad gives no '%s' subelement default (ACAPI_Element_GetDefaultsExt with APISubElement_Railing*), where the GDL parameters of the Railing defaults live", kindName)));
+        }
+        return;
+    }
+    if (request.HasSymbol ()) {
+        if (subSymbID != nullptr) {
+            *subSymbID = request.symbol;
+        }
+        const GSErrCode err = LoadRailingLibPartParams (request.libInd, subElement->memo.params);
+        if (err != NoError) {
+            errors.Push (GS::ObjectState ("field", GS::UniString (field + ".libraryPartName"),
+                "reason", GS::UniString::Printf ("ACAPI_LibraryPart_GetParams returned error %d, the parameters of the old library part are kept", static_cast<int> (err))));
+        }
+    }
+    for (const GS::ObjectState& item : request.parameters) {
+        GS::UniString paramName;
+        item.Get ("name", paramName);
+        if (subElement->memo.params == nullptr) {
+            errors.Push (GS::ObjectState ("field", GS::UniString (field + ".parameters." + paramName), "reason", GS::UniString ("the subelement default has no GDL parameters (memo.params)")));
+            continue;
+        }
+        const auto error = SetRailingGdlParameter (subElement->memo.params, item);
+        if (error.HasValue ()) {
+            errors.Push (GS::ObjectState ("field", GS::UniString (field + ".parameters." + paramName), "reason", error.Get ()));
+        }
+    }
+}
+
+static void ApplyRailingHandrailRequestTo (API_RailingHandrailType& handrail, const RailingDefaultsRequest& request)
+{
+    if (request.handrailVisible.HasValue ()) {
+        handrail.visible = request.handrailVisible.Get ();
+    }
+    if (request.handrailHeight.HasValue ()) {
+        handrail.height = request.handrailHeight.Get ();
+    }
+    if (request.handrailOffset.HasValue ()) {
+        handrail.horizontalOffset = request.handrailOffset.Get ();
+    }
+    if (request.handrailBothSides.HasValue ()) {
+        handrail.doubleHandrail = request.handrailBothSides.Get ();
+    }
+    if (request.handrail.HasSymbol ()) {
+        handrail.symbID = request.handrail.symbol;
+    }
+}
+
+static void ApplyRailingRailRequestTo (API_RailingRailType& rail, const RailingDefaultsRequest& request, GS::Optional<double> height)
+{
+    if (request.railCount.HasValue ()) {
+        rail.visible = request.railCount.Get () > 0;
+    }
+    if (request.railVisible.HasValue ()) {
+        rail.visible = request.railVisible.Get ();
+    }
+    if (height.HasValue ()) {
+        rail.height = height.Get ();
+        rail.relative = false;
+    }
+    if (request.railOffset.HasValue ()) {
+        rail.horizontalOffset = request.railOffset.Get ();
+    }
+    if (request.rail.HasSymbol ()) {
+        rail.symbID = request.rail.symbol;
+    }
+}
+
+// Applies the request to the pattern template (posts spacing, infill, baluster spacing, symbols).
+static void ApplyRailingPatternRequestTo (API_RailingPatternType& pattern, const RailingDefaultsRequest& request)
+{
+    if (request.postSpacing.HasValue () || request.postDistribution.HasValue ()) {
+        RailingDetailsRequest details;
+        details.postSpacing = request.postSpacing;
+        details.postDistribution = request.postDistribution;
+        pattern.distribution.type = GetRailingPostDistribution (details, pattern.distribution.type);
+        if (request.postSpacing.HasValue ()) {
+            pattern.distribution.length = request.postSpacing.Get ();
+        }
+    }
+    if (request.infillKind.HasValue ()) {
+        const GS::UniString& kind = request.infillKind.Get ();
+        pattern.defPanel.visible = kind == "panel";
+        pattern.nPanels = kind == "panel" ? GS::Max<UInt32> (pattern.nPanels, 1) : 0;
+        pattern.nBalusterSets = kind == "balusters" ? GS::Max<UInt32> (pattern.nBalusterSets, 1) : 0;
+    }
+    if (request.balusterSpacing.HasValue ()) {
+        pattern.defBalusterSet.distribution.length = request.balusterSpacing.Get ();
+        if (pattern.defBalusterSet.distribution.type == APIDT_Divisions) {
+            pattern.defBalusterSet.distribution.type = APIDT_BestDivisionByLength;
+        }
+    }
+    if (request.panel.HasSymbol ()) {
+        pattern.defPanel.symbID = request.panel.symbol;
+    }
+    if (request.baluster.HasSymbol ()) {
+        pattern.defBalusterSet.defBaluster.symbID = request.baluster.symbol;
+    }
+    if (request.innerPost.HasSymbol ()) {
+        pattern.defInnerPost.symbID = request.innerPost.symbol;
+    }
+}
+
+// Applies the whole request to the Railing defaults (element), their memo (the rail list) and
+// their subelement defaults. The element-level templates and the matching subelement defaults
+// get the same values, because it is not documented which of them Archicad builds a new railing from.
+static void ApplyRailingDefaultsRequest (RailingDefaultsRequest& request, API_Element& element, API_ElementMemo& memo,
+                                         GS::Array<API_SubElement>& subElements, GS::Array<GS::ObjectState>& errors)
+{
+    API_RailingSegmentType& segment = element.railing.defSegment;
+    if (request.height.HasValue ()) {
+        segment.height = request.height.Get ();
+    }
+    ApplyRailingPatternRequestTo (segment.defPattern, request);
+    if (request.toprailVisible.HasValue ()) {
+        segment.defToprail.visible = request.toprailVisible.Get ();
+    }
+    if (request.toprail.HasSymbol ()) {
+        segment.defToprail.symbID = request.toprail.symbol;
+    }
+    ApplyRailingHandrailRequestTo (segment.defDefaultHandrail, request);
+    ApplyRailingHandrailRequestTo (segment.defHandrails, request);
+
+    GS::Optional<double> firstHeight;
+    GS::Optional<double> secondHeight;
+    if (!request.railHeights.IsEmpty ()) {
+        firstHeight = request.railHeights[0];
+        secondHeight = request.railHeights.GetSize () > 1 ? request.railHeights[1] : request.railHeights[0];
+    }
+    ApplyRailingRailRequestTo (segment.defDefaultRail, request, firstHeight);
+    ApplyRailingRailRequestTo (segment.defRails, request, secondHeight);
+
+    // The rail list: one rail per height, from the template of the added rails - only when the
+    // defaults read have a rail list (memo.railingRails); one is never invented, because it is
+    // not documented that ChangeDefaultsExt takes one.
+    if (request.railCount.HasValue () && memo.railingRails == nullptr) {
+        errors.Push (GS::ObjectState ("field", GS::UniString ("rails.count"), "reason",
+            GS::UniString ("the Railing defaults have no rail list to write the rails into (memo.railingRails of ACAPI_Element_GetDefaultsExt is empty); "
+                           "only the default rail (defDefaultRail: heights[0]) and the template of added rails (defRails: heights[1]) were written")));
+    }
+    if (request.railCount.HasValue () && memo.railingRails != nullptr) {
+        request.railListWritten = true;
+        GS::Array<API_RailingRailType> rails;
+        for (UIndex i = 0; i < request.railHeights.GetSize (); ++i) {
+            API_RailingRailType rail = i == 0 ? segment.defDefaultRail : segment.defRails;
+            rail.visible = request.railVisible.HasValue () ? request.railVisible.Get () : true;
+            rail.relative = false;
+            rail.height = request.railHeights[i];
+            rails.Push (rail);
+        }
+        SetCWClassArray (memo.railingRails, rails);
+    }
+
+    // The subelement defaults: the same values, plus the GDL parameters.
+    API_SubElement* sub = FindRailingSubElement (subElements, "Segment");
+    if (sub != nullptr && request.height.HasValue ()) {
+        sub->subElem.railingSegment.height = request.height.Get ();
+    }
+    sub = FindRailingSubElement (subElements, "Pattern");
+    if (sub != nullptr) {
+        ApplyRailingPatternRequestTo (sub->subElem.railingPattern, request);
+    }
+    sub = FindRailingSubElement (subElements, "Toprail");
+    if (sub != nullptr && request.toprailVisible.HasValue ()) {
+        sub->subElem.railingToprail.visible = request.toprailVisible.Get ();
+    }
+    for (const char* kindName : { "Handrail", "AdditionalHandrail" }) {
+        sub = FindRailingSubElement (subElements, kindName);
+        if (sub != nullptr) {
+            ApplyRailingHandrailRequestTo (sub->subElem.railingHandrail, request);
+        }
+    }
+    sub = FindRailingSubElement (subElements, "Rail");
+    if (sub != nullptr) {
+        ApplyRailingRailRequestTo (sub->subElem.railingRail, request, firstHeight);
+    }
+    sub = FindRailingSubElement (subElements, "AdditionalRail");
+    if (sub != nullptr) {
+        ApplyRailingRailRequestTo (sub->subElem.railingRail, request, secondHeight);
+    }
+    sub = FindRailingSubElement (subElements, "Panel");
+    if (sub != nullptr && request.infillKind.HasValue ()) {
+        sub->subElem.railingPanel.visible = request.infillKind.Get () == "panel";
+    }
+    sub = FindRailingSubElement (subElements, "BalusterSet");
+    if (sub != nullptr && request.balusterSpacing.HasValue ()) {
+        sub->subElem.railingBalusterSet.distribution.length = request.balusterSpacing.Get ();
+        if (sub->subElem.railingBalusterSet.distribution.type == APIDT_Divisions) {
+            sub->subElem.railingBalusterSet.distribution.type = APIDT_BestDivisionByLength;
+        }
+    }
+
+    const auto subSymbol = [&] (const char* kindName, API_ElemTypeID typeId) -> API_Guid* {
+        API_SubElement* found = FindRailingSubElement (subElements, kindName);
+        if (found == nullptr) {
+            return nullptr;
+        }
+        switch (typeId) {
+            case API_RailingPostID:         return &found->subElem.railingPost.symbID;
+            case API_RailingInnerPostID:    return &found->subElem.railingInnerPost.symbID;
+            case API_RailingToprailID:      return &found->subElem.railingToprail.symbID;
+            case API_RailingHandrailID:     return &found->subElem.railingHandrail.symbID;
+            case API_RailingRailID:         return &found->subElem.railingRail.symbID;
+            case API_RailingPanelID:        return &found->subElem.railingPanel.symbID;
+            case API_RailingBalusterID:     return &found->subElem.railingBaluster.symbID;
+            default:                        return nullptr;
+        }
+    };
+    ApplyRailingGdlRequest (request.post, "posts", "Post", subElements, element.railing.defNode.defPost.symbID, subSymbol ("Post", API_RailingPostID), errors);
+    ApplyRailingGdlRequest (request.innerPost, "posts.innerPosts", "InnerPost", subElements, segment.defPattern.defInnerPost.symbID, subSymbol ("InnerPost", API_RailingInnerPostID), errors);
+    ApplyRailingGdlRequest (request.toprail, "toprail", "Toprail", subElements, segment.defToprail.symbID, subSymbol ("Toprail", API_RailingToprailID), errors);
+    ApplyRailingGdlRequest (request.handrail, "handrail", "Handrail", subElements, segment.defDefaultHandrail.symbID, subSymbol ("Handrail", API_RailingHandrailID), errors);
+    if (request.handrail.HasAny ()) {
+        GS::Array<GS::ObjectState> ignored;
+        ApplyRailingGdlRequest (request.handrail, "handrail", "AdditionalHandrail", subElements, segment.defHandrails.symbID, subSymbol ("AdditionalHandrail", API_RailingHandrailID), ignored);
+    }
+    ApplyRailingGdlRequest (request.rail, "rails", "Rail", subElements, segment.defDefaultRail.symbID, subSymbol ("Rail", API_RailingRailID), errors);
+    if (request.rail.HasAny ()) {
+        GS::Array<GS::ObjectState> ignored;
+        ApplyRailingGdlRequest (request.rail, "rails", "AdditionalRail", subElements, segment.defRails.symbID, subSymbol ("AdditionalRail", API_RailingRailID), ignored);
+    }
+    ApplyRailingGdlRequest (request.panel, "infill.panel", "Panel", subElements, segment.defPattern.defPanel.symbID, subSymbol ("Panel", API_RailingPanelID), errors);
+    ApplyRailingGdlRequest (request.baluster, "infill.balusters", "Baluster", subElements, segment.defPattern.defBalusterSet.defBaluster.symbID, subSymbol ("Baluster", API_RailingBalusterID), errors);
+}
+
+static bool IsSameRailingValue (double a, double b)
+{
+    return std::abs (a - b) <= RailingDefaultsEps;
+}
+
+// Compares the GDL parameters asked for with the subelement default read back.
+static void CheckRailingGdlRequest (const RailingGdlRequest& request, const GS::UniString& field, const char* kindName,
+                                    GS::Array<API_SubElement>& readBack, const API_Guid& symbID, RailingFieldResult& result)
+{
+    if (request.HasSymbol ()) {
+        result.Report (field + ".libraryPartName", symbID == request.symbol,
+            GS::UniString::Printf ("the defaults name library part %T", APIGuidToString (symbID).ToPrintf ()));
+    }
+    if (request.parameters.IsEmpty ()) {
+        return;
+    }
+    API_SubElement* subElement = FindRailingSubElement (readBack, kindName);
+    for (const GS::ObjectState& item : request.parameters) {
+        GS::UniString paramName;
+        item.Get ("name", paramName);
+        const GS::UniString paramField = field + ".parameters." + paramName;
+        if (subElement == nullptr || subElement->memo.params == nullptr) {
+            result.Unverified (paramField, GS::UniString::Printf ("Archicad gives no '%s' subelement default with GDL parameters to read it back from", kindName));
+            continue;
+        }
+        const API_AddParType* param = FindRailingAddPar (subElement->memo.params, GS::String (paramName.ToCStr ().Get ()));
+        if (param == nullptr) {
+            result.Report (paramField, false, "the parameter is not in the subelement default read back");
+            continue;
+        }
+        // Compare by writing the asked value into a copy of the parameter.
+        API_AddParType** probe = reinterpret_cast<API_AddParType**> (BMAllocateHandle (sizeof (API_AddParType), ALLOCATE_CLEAR, 0));
+        (*probe)[0] = *param;
+        const auto error = SetRailingGdlParameter (probe, item);
+        bool same = false;
+        if (!error.HasValue ()) {
+            const API_AddParType& asked = (*probe)[0];
+            same = (param->typeID == APIParT_CString || param->typeID == APIParT_Title)
+                ? GS::UniString (asked.value.uStr) == GS::UniString (param->value.uStr)
+                : IsSameRailingValue (asked.value.real, param->value.real);
+        }
+        BMKillHandle (reinterpret_cast<GSHandle*> (&probe));
+        result.Report (paramField, same, error.HasValue () ? error.Get () : GS::UniString ("the subelement default read back has another value"));
+    }
+}
+
+// Reads the defaults back and reports per asked field whether Archicad kept it.
+static void CheckRailingDefaultsRequest (const RailingDefaultsRequest& request, const API_Element& element, const API_ElementMemo& memo,
+                                         GS::Array<API_SubElement>& subElements, RailingFieldResult& result)
+{
+    const API_RailingSegmentType& segment = element.railing.defSegment;
+    const API_RailingPatternType& pattern = segment.defPattern;
+    if (request.height.HasValue ()) {
+        result.Report ("segment.height", IsSameRailingValue (segment.height, request.height.Get ()),
+            GS::UniString::Printf ("defSegment.height is %.4f", segment.height));
+    }
+    if (request.postSpacing.HasValue ()) {
+        result.Report ("posts.spacing", IsSameRailingValue (pattern.distribution.length, request.postSpacing.Get ()),
+            GS::UniString::Printf ("defSegment.defPattern.distribution.length is %.4f", pattern.distribution.length));
+    }
+    if (request.postDistribution.HasValue ()) {
+        result.Report ("posts.distribution", pattern.distribution.type == request.postDistribution.Get (),
+            GS::UniString ("defSegment.defPattern.distribution.type is ") + GetRailingDistributionName (pattern.distribution.type));
+    }
+    if (request.toprailVisible.HasValue ()) {
+        result.Report ("toprail.visible", segment.defToprail.visible == request.toprailVisible.Get (), "defSegment.defToprail.visible differs");
+    }
+    if (request.handrailVisible.HasValue ()) {
+        result.Report ("handrail.visible", segment.defDefaultHandrail.visible == request.handrailVisible.Get (), "defSegment.defDefaultHandrail.visible differs");
+    }
+    if (request.handrailHeight.HasValue ()) {
+        result.Report ("handrail.height", IsSameRailingValue (segment.defDefaultHandrail.height, request.handrailHeight.Get ()),
+            GS::UniString::Printf ("defSegment.defDefaultHandrail.height is %.4f", segment.defDefaultHandrail.height));
+    }
+    if (request.handrailOffset.HasValue ()) {
+        result.Report ("handrail.horizontalOffset", IsSameRailingValue (segment.defDefaultHandrail.horizontalOffset, request.handrailOffset.Get ()),
+            GS::UniString::Printf ("defSegment.defDefaultHandrail.horizontalOffset is %.4f", segment.defDefaultHandrail.horizontalOffset));
+    }
+    if (request.handrailBothSides.HasValue ()) {
+        result.Report ("handrail.bothSides", segment.defDefaultHandrail.doubleHandrail == request.handrailBothSides.Get (), "defSegment.defDefaultHandrail.doubleHandrail differs");
+    }
+    if (request.railVisible.HasValue ()) {
+        result.Report ("rails.visible", segment.defDefaultRail.visible == request.railVisible.Get (), "defSegment.defDefaultRail.visible differs");
+    }
+    if (request.railOffset.HasValue ()) {
+        result.Report ("rails.horizontalOffset", IsSameRailingValue (segment.defDefaultRail.horizontalOffset, request.railOffset.Get ()),
+            GS::UniString::Printf ("defSegment.defDefaultRail.horizontalOffset is %.4f", segment.defDefaultRail.horizontalOffset));
+    }
+    if (request.railCount.HasValue ()) {
+        const UInt32 nRails = GetRailingSubelementCount (memo.railingRails);
+        if (nRails == 0) {
+            // Only the two templates can be compared then.
+            const bool firstKept = request.railHeights.IsEmpty () || IsSameRailingValue (segment.defDefaultRail.height, request.railHeights[0]);
+            result.Report ("rails.heights[0]", firstKept, GS::UniString::Printf ("defSegment.defDefaultRail.height is %.4f", segment.defDefaultRail.height));
+            if (request.railListWritten) {
+                result.Report ("rails.count", false,
+                    "the rail list written (memo.railingRails) is not in the defaults read back: API_RailingSegmentType "
+                    "has only defDefaultRail and defRails (templates), no number of rails");
+            }
+        } else {
+            bool same = nRails == request.railHeights.GetSize ();
+            for (UInt32 i = 0; same && i < nRails; ++i) {
+                same = IsSameRailingValue (memo.railingRails[i].height, request.railHeights[i]);
+            }
+            result.Report ("rails.heights", same, GS::UniString::Printf ("memo.railingRails read back has %u rails", nRails));
+        }
+    }
+    if (request.infillKind.HasValue ()) {
+        const GS::UniString& kind = request.infillKind.Get ();
+        const bool kept = kind == "panel" ? (pattern.defPanel.visible && pattern.nPanels > 0 && pattern.nBalusterSets == 0)
+                        : kind == "balusters" ? (pattern.nBalusterSets > 0 && (pattern.nPanels == 0 || !pattern.defPanel.visible))
+                        : (pattern.nBalusterSets == 0 && (pattern.nPanels == 0 || !pattern.defPanel.visible));
+        result.Report ("infill.kind", kept, GS::UniString::Printf ("defPattern read back: nPanels %u, defPanel.visible %s, nBalusterSets %u",
+            pattern.nPanels, pattern.defPanel.visible ? "true" : "false", pattern.nBalusterSets));
+    }
+    if (request.balusterSpacing.HasValue ()) {
+        result.Report ("infill.balusters.spacing", IsSameRailingValue (pattern.defBalusterSet.distribution.length, request.balusterSpacing.Get ()),
+            GS::UniString::Printf ("defPattern.defBalusterSet.distribution.length is %.4f", pattern.defBalusterSet.distribution.length));
+    }
+    CheckRailingGdlRequest (request.post, "posts", "Post", subElements, element.railing.defNode.defPost.symbID, result);
+    CheckRailingGdlRequest (request.innerPost, "posts.innerPosts", "InnerPost", subElements, pattern.defInnerPost.symbID, result);
+    CheckRailingGdlRequest (request.toprail, "toprail", "Toprail", subElements, segment.defToprail.symbID, result);
+    CheckRailingGdlRequest (request.handrail, "handrail", "Handrail", subElements, segment.defDefaultHandrail.symbID, result);
+    CheckRailingGdlRequest (request.rail, "rails", "Rail", subElements, segment.defDefaultRail.symbID, result);
+    CheckRailingGdlRequest (request.panel, "infill.panel", "Panel", subElements, pattern.defPanel.symbID, result);
+    CheckRailingGdlRequest (request.baluster, "infill.balusters", "Baluster", subElements, pattern.defBalusterSet.defBaluster.symbID, result);
+}
+
+SetRailingSystemDefaultsCommand::SetRailingSystemDefaultsCommand () :
+    CommandBase (CommonSchema::Used)
+{
+}
+
+GS::String SetRailingSystemDefaultsCommand::GetName () const
+{
+    return "SetRailingSystemDefaults";
+}
+
+static const char* RailingGdlRequestProperties = R"(
+                    "libraryPartName": {
+                        "type": "string",
+                        "description": "The library part (GDL object) of this kind of subelement, by its name in the loaded libraries. Its own default parameters replace the old ones before 'parameters' are written."
+                    },
+                    "parameters": {
+                        "type": "array",
+                        "description": "GDL parameters of the subelement default, e.g. the profile, size and surfaces of a rail or the thickness and material of a panel. The names depend on the library part; GetRailingSystemDefaults with includeParameters lists them.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": { "type": "string", "description": "Parameter name (not the description)." },
+                                "value": {
+                                    "description": "Number, boolean or string. Material, building material, profile, fill and line type parameters also take the name of the attribute.",
+                                    "oneOf": [ { "type": "number" }, { "type": "boolean" }, { "type": "string" } ]
+                                }
+                            },
+                            "additionalProperties": false,
+                            "required": ["name", "value"]
+                        }
+                    })";
+
+GS::Optional<GS::UniString> SetRailingSystemDefaultsCommand::GetInputParametersSchema () const
+{
+    GS::UniString schema = R"({
+        "type": "object",
+        "description": "Every field is optional; only the given ones are written. The Railing defaults (API_RailingType) carry one template per kind of subelement, so a field applies to all segments and patterns of a railing created from the defaults.",
+        "properties": {
+            "segment": {
+                "type": "object",
+                "properties": {
+                    "height": { "type": "number", "exclusiveMinimum": 0.0, "description": "Height of the railing segments." }
+                },
+                "additionalProperties": false
+            },
+            "posts": {
+                "type": "object",
+                "description": "The posts at the nodes, the length of the pattern (one set of inner posts per pattern) and the inner posts.",
+                "properties": {
+                    "spacing": { "type": "number", "exclusiveMinimum": 0.0, "description": "Length of the railing pattern: the distance between the posts." },
+                    "distribution": { "type": "string", "enum": ["FixedLength", "BestDivision"], "description": "As in ModifyRailingDetails.postDistribution." },)";
+    schema += RailingGdlRequestProperties;
+    schema += R"(,
+                    "innerPosts": {
+                        "type": "object",
+                        "description": "The posts inside the pattern.",
+                        "properties": {)";
+    schema += RailingGdlRequestProperties;
+    schema += R"(
+                        },
+                        "additionalProperties": false
+                    }
+                },
+                "additionalProperties": false
+            },
+            "toprail": {
+                "type": "object",
+                "properties": {
+                    "visible": { "type": "boolean" },)";
+    schema += RailingGdlRequestProperties;
+    schema += R"(
+                },
+                "additionalProperties": false
+            },
+            "handrail": {
+                "type": "object",
+                "properties": {
+                    "visible": { "type": "boolean" },
+                    "height": { "type": "number", "exclusiveMinimum": 0.0 },
+                    "horizontalOffset": { "type": "number" },
+                    "bothSides": { "type": "boolean" },)";
+    schema += RailingGdlRequestProperties;
+    schema += R"(
+                },
+                "additionalProperties": false
+            },
+            "rails": {
+                "type": "object",
+                "description": "The horizontal rails between the bottom of the segment and the top rail.",
+                "properties": {
+                    "visible": { "type": "boolean" },
+                    "count": { "type": "integer", "minimum": 0, "description": "Number of rails. Without heights they are spaced evenly between bottom and top, both excluded." },
+                    "heights": { "type": "array", "items": { "type": "number", "exclusiveMinimum": 0.0 }, "description": "Height of each rail above the bottom of the segment (absolute, not relative)." },
+                    "bottom": { "type": "number", "description": "Lower bound for count without heights. The default is 0." },
+                    "top": { "type": "number", "description": "Upper bound for count without heights. The default is handrail.height, else segment.height." },
+                    "horizontalOffset": { "type": "number" },)";
+    schema += RailingGdlRequestProperties;
+    schema += R"(
+                },
+                "additionalProperties": false
+            },
+            "infill": {
+                "type": "object",
+                "properties": {
+                    "kind": { "type": "string", "enum": ["panel", "balusters", "none"], "description": "What fills the pattern: a panel (glass, sheet), balusters, or nothing." },
+                    "panel": {
+                        "type": "object",
+                        "properties": {)";
+    schema += RailingGdlRequestProperties;
+    schema += R"(
+                        },
+                        "additionalProperties": false
+                    },
+                    "balusters": {
+                        "type": "object",
+                        "properties": {
+                            "spacing": { "type": "number", "exclusiveMinimum": 0.0, "description": "Distance between the balusters." },)";
+    schema += RailingGdlRequestProperties;
+    schema += R"(
+                        },
+                        "additionalProperties": false
+                    }
+                },
+                "additionalProperties": false
+            },
+            "favorite": {
+                "type": "object",
+                "description": "Optional Favorite saved from the Railing defaults after the change, as CreateFavoritesFromDefaults does (with the subelement defaults).",
+                "properties": {
+                    "name": { "type": "string", "description": "Name of the Favorite." },
+                    "folder": { "type": "array", "items": { "type": "string" }, "description": "Optional folder hierarchy in the Favorites palette." },
+                    "overwriteExisting": { "type": "boolean", "description": "Overwrite a Favorite of the same name. The default is false." }
+                },
+                "additionalProperties": false,
+                "required": ["name"]
+            },
+            "restoreDefaults": {
+                "type": "boolean",
+                "description": "Put the Railing tool defaults back as they were at the end, e.g. when only the favorite is wanted. The default is false."
+            }
+        },
+        "additionalProperties": false
+    })";
+    return schema;
+}
+
+GS::Optional<GS::UniString> SetRailingSystemDefaultsCommand::GetRawResponseSchema () const
+{
+    return R"({
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "apiPath": {
+                        "type": "object",
+                        "description": "How the defaults were read and written.",
+                        "properties": {
+                            "read": { "type": "string", "enum": ["Ext", "Basic"], "description": "ACAPI_Element_GetDefaultsExt or ACAPI_Element_GetDefaults." },
+                            "write": { "type": "string", "enum": ["ExtWithSubElements", "Ext", "Basic"] },
+                            "subElements": { "type": "array", "items": { "type": "string" }, "description": "The kinds of subelement defaults Archicad gave and that were written back." }
+                        },
+                        "additionalProperties": false
+                    },
+                    "kept": { "type": "array", "items": { "type": "string" }, "description": "The input fields read back with the asked value." },
+                    "notKept": {
+                        "type": "array",
+                        "description": "The input fields Archicad did not keep (read back from the defaults), or could not be written, with the reason.",
+                        "items": {
+                            "type": "object",
+                            "properties": { "field": { "type": "string" }, "reason": { "type": "string" } },
+                            "additionalProperties": false,
+                            "required": ["field", "reason"]
+                        }
+                    },
+                    "unverified": {
+                        "type": "array",
+                        "description": "The input fields that were written but cannot be read back from the defaults, with the reason (check them on a railing created from the defaults).",
+                        "items": {
+                            "type": "object",
+                            "properties": { "field": { "type": "string" }, "reason": { "type": "string" } },
+                            "additionalProperties": false,
+                            "required": ["field", "reason"]
+                        }
+                    },
+                    "railing": { "type": "object", "description": "The Railing defaults read back (as GetRailingSystemDefaults.railing)." },
+                    "favorite": {
+                        "oneOf": [
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "name": { "type": "string" },
+                                    "result": { "type": "string", "enum": ["created", "overwritten"] },
+                                    "subElements": { "type": "integer" },
+                                    "subElementsSaved": { "type": "boolean" }
+                                },
+                                "additionalProperties": false,
+                                "required": ["name", "result"]
+                            },
+                            { "$ref": "#/ErrorItem" }
+                        ]
+                    },
+                    "defaultsRestored": { "type": "boolean", "description": "Present when restoreDefaults was asked: whether the defaults were put back." }
+                },
+                "additionalProperties": false,
+                "required": ["apiPath", "kept", "notKept", "unverified"]
+            },
+            { "$ref": "#/ErrorItem" }
+        ]
+    })";
+}
+
+GS::ObjectState SetRailingSystemDefaultsCommand::Execute (const GS::ObjectState& parameters, GS::ProcessControl& /*processControl*/) const
+{
+    RailingDefaultsRequest request;
+    const auto parseError = ParseRailingDefaultsRequest (parameters, request);
+    if (parseError.HasValue ()) {
+        return CreateErrorResponse (APIERR_BADPARS, parseError.Get ());
+    }
+    bool restoreDefaults = false;
+    parameters.Get ("restoreDefaults", restoreDefaults);
+
+    GS::ObjectState response;
+
+    ACAPI_CallUndoableCommand ("SetRailingSystemDefaults", [&] () -> GSErrCode {
+        API_Element element = {};
+        API_ElementMemo memo = {};
+        GS::Array<API_SubElement> subElements;
+        bool usedExt = false;
+        const GS::OnExit guard ([&] () {
+            ACAPI_DisposeElemMemoHdls (&memo);
+            DisposeSubElements (subElements);
+        });
+        GSErrCode err = GetToolDefaultsWithSubElements (API_RailingID, element, memo, subElements, usedExt);
+        if (err != NoError) {
+            response = CreateErrorResponse (err, "Failed to read the Railing tool defaults.");
+            return NoError;
+        }
+
+        // The defaults as they were, for restoreDefaults.
+        API_Element snapshot = {};
+        API_ElementMemo snapshotMemo = {};
+        GS::Array<API_SubElement> snapshotSubElements;
+        bool snapshotUsedExt = false;
+        const GS::OnExit snapshotGuard ([&] () {
+            ACAPI_DisposeElemMemoHdls (&snapshotMemo);
+            DisposeSubElements (snapshotSubElements);
+        });
+        if (restoreDefaults) {
+            GetToolDefaultsWithSubElements (API_RailingID, snapshot, snapshotMemo, snapshotSubElements, snapshotUsedExt);
+        }
+        const auto restore = [&] () -> GSErrCode {
+            GS::UniString path;
+            return ChangeToolDefaultsWithSubElements (snapshot, snapshotMemo, snapshotSubElements, snapshotUsedExt, path);
+        };
+
+        GS::Array<GS::ObjectState> writeErrors;
+        ApplyRailingDefaultsRequest (request, element, memo, subElements, writeErrors);
+
+        GS::UniString writePath;
+        err = ChangeToolDefaultsWithSubElements (element, memo, subElements, usedExt, writePath);
+        if (err != NoError) {
+            response = CreateErrorResponse (err, "Archicad refused to change the Railing tool defaults (ACAPI_Element_ChangeDefaultsExt and ACAPI_Element_ChangeDefaults).");
+            return NoError;
+        }
+
+        GS::ObjectState apiPath;
+        apiPath.Add ("read", GS::UniString (usedExt ? "Ext" : "Basic"));
+        apiPath.Add ("write", writePath);
+        const auto& kinds = apiPath.AddList<GS::UniString> ("subElements");
+        if (writePath == "ExtWithSubElements") {
+            for (const API_SubElement& subElement : subElements) {
+                const GS::Optional<RailingSubElementKind> kind = FindRailingSubElementKind (subElement);
+                kinds (GS::UniString (kind.HasValue () ? kind->name : "Unknown"));
+            }
+        }
+        response.Add ("apiPath", apiPath);
+
+        // Read the defaults back as a new railing and a Favorite read them.
+        API_Element check = {};
+        API_ElementMemo checkMemo = {};
+        GS::Array<API_SubElement> checkSubElements;
+        bool checkUsedExt = false;
+        const GS::OnExit checkGuard ([&] () {
+            ACAPI_DisposeElemMemoHdls (&checkMemo);
+            DisposeSubElements (checkSubElements);
+        });
+        err = GetToolDefaultsWithSubElements (API_RailingID, check, checkMemo, checkSubElements, checkUsedExt);
+        RailingFieldResult result;
+        for (const GS::ObjectState& item : writeErrors) {
+            result.notKept.Push (item);
+        }
+        if (err != NoError) {
+            result.notKept.Push (GS::ObjectState ("field", GS::UniString ("*"), "reason",
+                GS::UniString::Printf ("reading the defaults back failed with error %d", static_cast<int> (err))));
+        } else {
+            CheckRailingDefaultsRequest (request, check, checkMemo, checkSubElements, result);
+            response.Add ("railing", CreateRailingTypeOS (check.railing));
+        }
+
+        const auto& keptList = response.AddList<GS::UniString> ("kept");
+        for (const GS::UniString& field : result.kept) {
+            keptList (field);
+        }
+        const auto& notKeptList = response.AddList<GS::ObjectState> ("notKept");
+        for (const GS::ObjectState& item : result.notKept) {
+            notKeptList (item);
+        }
+        const auto& unverifiedList = response.AddList<GS::ObjectState> ("unverified");
+        for (const GS::ObjectState& item : result.unverified) {
+            unverifiedList (item);
+        }
+
+        const GS::ObjectState* favoriteOS = parameters.Get ("favorite");
+        if (favoriteOS != nullptr) {
+            GS::UniString favoriteName;
+            favoriteOS->Get ("name", favoriteName);
+            GS::Array<GS::UniString> folderParts;
+            favoriteOS->Get ("folder", folderParts);
+            bool overwriteExisting = false;
+            favoriteOS->Get ("overwriteExisting", overwriteExisting);
+            response.Add ("favorite", SaveToolDefaultsAsFavorite (favoriteName, API_RailingID, folderParts, overwriteExisting));
+        }
+
+        if (restoreDefaults) {
+            response.Add ("defaultsRestored", restore () == NoError);
+        }
+        return NoError;
+    });
+
+    return response;
 }
 
 CreateLabelsCommand::CreateLabelsCommand () :
