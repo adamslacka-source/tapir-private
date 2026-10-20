@@ -660,7 +660,16 @@ def _check_i6(spec: dict, zones: dict, openings: list, frames: dict, item_ids: s
             else:
                 check_src(f"systems[{sid}].thickness", s["thickness"]["src"], s["thickness"]["conf"])
         elif t == "railing":
-            if not s.get("base_favorite"):
+            if s.get("railing_kind") == "gdl":                # R1 fallback: GDL object FS_Railing from an 'FS rail.*' Object favourite
+                if s.get("base_favorite"):
+                    errors.append(f"systems[{sid}]: railing_kind 'gdl' is placed from an Object favourite, not from base_favorite")
+                if not str(s.get("favorite") or "").startswith("FS "):
+                    errors.append(f"systems[{sid}]: railing_kind 'gdl' needs favorite 'FS rail.*' (Object favourite of FS_Railing)")
+                import railing_gdl
+                bad = sorted(k for k in s.get("gdl_params", {}) if k not in railing_gdl.template_defaults())
+                if bad:
+                    errors.append(f"systems[{sid}]: gdl_params not in FS_Railing: {bad}")
+            elif not s.get("base_favorite"):
                 errors.append(f"systems[{sid}]: a railing system starts from a base favourite (R1: infill and posts come from it)")
             for k in ("height", "post_spacing"):
                 if k not in s or s[k]["v"] <= 0:

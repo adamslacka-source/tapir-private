@@ -220,6 +220,8 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
     # ---- (a) parameters read back
     layer_index = state.get("layer", {}).get("index")
     all_items = want["walls"] + want["openings"] + want["linear"] + want["objects"] + want["cw"] + want["slabs"] + want["railings"]
+    rail_gdl = [it for it in want["railings"] if it.get("railing_kind") == "gdl"]     # FS_Railing objects (R1 fallback)
+    want["railings"] = [it for it in want["railings"] if it.get("railing_kind") != "gdl"]
     for item in all_items:
         d = details.get(item["item"])
         if not d:
@@ -501,11 +503,33 @@ def verify(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_ro
     balr = verify_balconies(ac, spec, want["slabs"], guids, details, frames, stories, row, trow, problems) if want["slabs"] else {"proj": {}}
     railr = verify_railings(ac, spec, want["railings"], guids, frames, row, trow, problems) if want["railings"] else {"proj": {}}
     edges += cwr["photo"]
+    if rail_gdl:
+        import railing_gdl
+        present = [it for it in rail_gdl if it["item"] in details]
+        for it in rail_gdl:
+            if it["item"] not in details:
+                problems.append(f"{it['item']}: FS_Railing object missing in the project")
+        rgeo = ac.tapir("Get3DGeometryOfElements", {"elements": [{"elementId": {"guid": guids[it["item"]]}} for it in present]},
+                        timeout=120)["geometries3D"] if present else []
+        rpar = gdl_params(ac, [guids[it["item"]] for it in present])
+        for it, g in zip(present, rgeo):
+            od = details[it["item"]]["details"]
+            p = rpar.get(guids[it["item"]], {})
+            for wr in it["gdl"]:
+                if not fs_systems.same(p.get(wr["name"]), wr["value"], 1e-6):
+                    problems.append(f"{it['item']}: GDL {wr['name']} = {p.get(wr['name'])!r} != sent {wr['value']!r}")
+            pf = railing_gdl.full_params({w["name"]: w["value"] for w in it["gdl"]})
+            cmp = railing_gdl.compare_parts(railing_gdl.expected_parts(pf), railing_gdl.parts_of_geometry(g, od["origin"], od.get("angle", 0.0)),
+                                            spec["tolerances"]["build"])
+            trow(it["item"], "FS_Railing: GDL primitives = template model (count, boxes)", cmp["n_want"], cmp["n_got"], "OK" if cmp["ok"] else "FAIL",
+                 f"max delta {cmp['max_delta'] * 100:.2f} cm")
+            row(it["item"], "FS_Railing: 3D height (top - foot)", pf["ZZYZX"],
+                railing_gdl.bbox_of_parts([("x", b) for b in railing_gdl.parts_of_geometry(g, od["origin"], od.get("angle", 0.0))])[5], "3D")
 
     # independent counts on the facade layer: beams / columns (linear), objects, curtain walls, slabs, railings
     n_lin_spec = {"beam": sum(it["kind"] == "beam" for it in want["linear"]), "column": sum(it["kind"] == "column" for it in want["linear"]),
-                  "object": len(want["objects"])}
-    n_lin_model = count_on_layer(ac, layer_index) if (want["linear"] or want["objects"]) else {"beam": 0, "column": 0, "object": 0}
+                  "object": len(want["objects"]) + len(rail_gdl)}
+    n_lin_model = count_on_layer(ac, layer_index) if (want["linear"] or want["objects"] or rail_gdl) else {"beam": 0, "column": 0, "object": 0}
     if n_lin_model != n_lin_spec:
         problems.append(f"linear elements / objects on the facade layer {n_lin_model} != spec {n_lin_spec}")
     n_i6_spec = {"curtainwall": len(want["cw"]), "slab": len(want["slabs"]), "railing": len(want["railings"])}

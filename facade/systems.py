@@ -805,8 +805,38 @@ def cleanup_scratch(ac: TapirClient, manifest: dict, out_root: Path, log: list) 
 
 
 # ---- GDL objects (pilot A: FS_Surround, FS_ArchGable from the I4 templates) ------------------------------------
+def gdl_railing_systems(spec: dict) -> dict:
+    """Railing systems placed as the GDL object FS_Railing (railing_kind 'gdl', ADR-001 R1 fallback)."""
+    return {sid: s for sid, s in spec["systems"].items() if s["type"] == "railing" and s.get("railing_kind") == "gdl"}
+
+
 def gdl_templates(spec: dict) -> list[str]:
-    return sorted({s["template"] for s in spec["systems"].values() if s["type"] == "gdl"})
+    names = {s["template"] for s in spec["systems"].values() if s["type"] == "gdl"}
+    if gdl_railing_systems(spec):
+        names.add("FS_Railing")
+    return sorted(names)
+
+
+def ensure_rail_gdl_favorites(ac: TapirClient, spec: dict, gdl: dict, out_root: Path, log: list, write: bool = True) -> int:
+    """'FS rail.*' Object favourites of the gdl railing systems: the standard ones (railing_gdl.FAVORITES) are made from
+    a sample far from the model; any other favourite name must already exist in the project."""
+    rails = gdl_railing_systems(spec)
+    if not rails:
+        return 0
+    import railing_gdl
+    names = sorted({s["favorite"] for s in rails.values()})
+    existing = set(ac.tapir("GetFavoritesByType", {"elementType": "Object"}).get("favorites", []))
+    std = [n for n in names if n in railing_gdl.FAVORITES]
+    n = 0
+    if write and std:
+        res = railing_gdl.ensure_favorites(ac, std, origin=(SAMPLE_OFFSET[0], SAMPLE_OFFSET[1] + 40.0), log=log,
+                                           template_hash=gdl["FS_Railing"]["hash"], manifest_path=out_root / "rail_gdl_favorites.json")
+        n = sum(v["action"] != "kept" for v in res.values())
+        existing |= set(std)
+    missing = [nm for nm in names if nm not in existing]
+    if missing:
+        raise TapirError(f"gdl railing favourites missing in the project: {missing}")
+    return n
 
 
 def ensure_gdl(ac: TapirClient, spec: dict, project: str, log: list, write: bool = True) -> tuple[int, dict]:
@@ -840,6 +870,8 @@ def classification_of_systems(ac: TapirClient, spec: dict) -> dict:
     project). An object placed by CreateObjects from a library part is unclassified and then cannot carry the FS_*
     properties (their availability is per classification item)."""
     want = {sid: s["classification"] for sid, s in spec["systems"].items() if s["type"] == "gdl" and s.get("classification")}
+    for sid, s in gdl_railing_systems(spec).items():         # FS_Railing: railing item -> IFC export as IfcRailing
+        want[sid] = s.get("classification") or list(KIND_CLASS["railing"])
     if not want:
         return {}
     found: dict[str, list] = {}
@@ -853,6 +885,8 @@ def classification_of_systems(ac: TapirClient, spec: dict) -> dict:
             stack += it.get("children", [])
     out = {}
     for sid, name in want.items():
+        if isinstance(name, list):                           # candidates (SK / CZ template): the first unique one
+            name = next((n for n in name if len(found.get(n, [])) == 1), name[0])
         hits = found.get(name, [])
         if len(hits) != 1:
             raise TapirError(f"systems[{sid}]: classification item '{name}' found {len(hits)} times in the project")
@@ -907,6 +941,7 @@ def ensure(ac: TapirClient, spec: dict, project: str, out_root: Path, log: list)
     n_fav, plans, exceptions = ensure_favorites(ac, spec, attrs, composites, manifest, out_root, log, profiles)
     save_manifest(out_root, manifest)
     n_gdl, gdl = ensure_gdl(ac, spec, project, log, write=True)
+    n_fav += ensure_rail_gdl_favorites(ac, spec, gdl, out_root, log, write=True)
     return {"composites": composites, "props": props, "favorites": {sid: {"name": p["name"], "hash": p["hash"]} for sid, p in plans.items()},
             "profiles": profiles, "exceptions": exceptions, "gdl": gdl, "classes": classification_of_systems(ac, spec),
             "changes": {"composites": n_comp, "properties": n_prop, "profiles": n_prof, "favorites": n_fav, "gdl": n_gdl},
@@ -930,6 +965,7 @@ def resolve(ac: TapirClient, spec: dict, project: str, out_root: Path) -> dict:
     for sid, p in plans.items():
         exceptions += manifest["favorites"].get(p["name"], {}).get("exceptions", [])
     _, gdl = ensure_gdl(ac, spec, project, [], write=False)
+    ensure_rail_gdl_favorites(ac, spec, gdl, out_root, [], write=False)
     return {"composites": composites, "props": props, "favorites": {sid: {"name": p["name"], "hash": p["hash"]} for sid, p in plans.items()},
             "profiles": profiles, "exceptions": exceptions, "manifest": manifest, "attrs": attrs, "gdl": gdl,
             "classes": classification_of_systems(ac, spec)}

@@ -352,3 +352,15 @@ Negatívne / náklady:
 Architekt prijal G2 pre všetky 4 fasády (M015_L1, M062_L2, M016_L2, HOF_B) s výhradami podľa `C:\FacadePilot\out\G2_prevzatie.md` a `kontrola_G2_kolo2.md` (stav po dočistení, commit b84fbe8; 3D zábery `facade/views3d`, 609e12f).
 Rozhodnutia: podlažia pilota A ostávajú jedna sada pre celú ulicu (N7/Q1 uzavreté); Favorites zábradlí s vodorovnými tyčami pripraví architekt ručne (R1) – po ich dodaní ich pipeline použije a automatika mení len výšku a trasu.
 Otvorené mimo G2: C++ medzery (povrch tried CW, CW s rôznym vzorom po stĺpcoch, stena so štítom/oblúkom, jednotná výška z v CreateWalls), nález č. 16, prahy merania overené len na fotkách Senca.
+
+
+### FS_Railing – GDL záloha k natívnemu zábradliu (R1, 2026-10-20)
+`private-tests/test_fs_railing.py` 55/55 PASS (I4 regresia `test_i4_gdl.py` 52/52, pilot A offline 46/46). Šablóna `facade/gdl/templates/FS_Railing.xml`
+(podtyp *Railing*, 44 parametrov: priamy úsek, stĺpiky obdĺžnik/kruh/pásovina, počet alebo max. rozostup, kotvenie na doske / bočné,
+madlo kruh/obdĺžnik/pásovina s presahmi, výplň none / horizontal_bars (rovnomerne alebo zoznam výšok) / vertical_balusters / glass / panel),
+modul `facade/railing_gdl.py`, Favorites `FS rail.horiz_5`, `FS rail.glass`, `FS rail.balusters`, `FS rail.panel_perf` (Object, klasifikované
+`Zábradlí` → `IfcRailing`). Overené: 10 sád (4 Favorites, bočné kotvenie s kruhovými stĺpikmi, zoznam 10 tyčí ako na fotke pilota B),
+každé primitívum 3D = nezávislý model (Δ 0,0 mm), H ±0; prvok z Favorite = rovnaké parametre a geometria; plán `railing_kind: gdl`
+na kópii spec pilota B (2 × 2 úseky, 39 stĺpikov na ochodzu, strana pádu) umiestnený naostro. Lomená trasa = objekt na úsek
+(polia parametrov cez API NEOVERENÉ). Pilot B **nezapojený** – zapojenie (zmena systému `rail.ochodza` na `railing_kind: gdl` + rebuild)
+urobí orchestrátor; tým padne výnimka R1 (tyčky namiesto vodorovných tyčí). verify vetva pre `railing_kind: gdl` naostro NEOVERENÁ (overí sa pri zapojení).

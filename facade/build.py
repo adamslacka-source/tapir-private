@@ -491,11 +491,53 @@ def plan_slabs(spec: dict, frames: dict, home, sysinfo: dict) -> list[dict]:
     return out
 
 
+def plan_railings_gdl(spec: dict, r: dict, sysdef: dict, frames: dict, home, sysinfo: dict) -> list[dict]:
+    """Railing of a system with railing_kind 'gdl' (ADR-001 R1 fallback): one FS_Railing object per straight segment
+    (railing_gdl.plan_railing), kind 'object' - created by CreateObjects, finished and read back like the GDL objects."""
+    import railing_gdl
+    ref = spec["reference"]
+    ginfo = sysinfo.get("gdl", {}).get(railing_gdl.TEMPLATE)
+    if ginfo is None:
+        raise TapirError(f"railings[{r['id']}]: GDL template {railing_gdl.TEMPLATE} not loaded (systems.ensure)")
+    fr = frames[r.get("plane", REFERENCE_PLANE)]
+    z = fr.z0 + r["v"]["v"]
+    floor, level = home(z)
+    fav = sysdef.get("favorite")
+    base = dict(railing_gdl.FAVORITES[fav]["params"]) if fav in railing_gdl.FAVORITES else {}
+    attrs = sysinfo.get("attrs")
+    if fav in railing_gdl.FAVORITES and attrs is not None:
+        base.update({k: attrs.surface[n]["index"] for k, n in railing_gdl.FAVORITES[fav].get("surfaces", {}).items() if n in attrs.surface})
+    pts = [tuple(fr.xy(s_, w_)) for s_, w_ in r["path_sw"]["v"]]
+    n_seg = len(pts) - 1
+    fall = [r["fall_side"] == "left"] * n_seg if r.get("fall_side") else None
+    segs = railing_gdl.plan_railing(r, sysdef, pts, z, floor, tuple(fr.n), base, fall)
+    confs = [r["path_sw"]["conf"], r["v"]["conf"], sysdef["height"]["conf"], sysdef["post_spacing"]["conf"]]
+    eid0 = element_id(spec, r, *confs)
+    zdroj, istota = _zdroj([("trasa", r["path_sw"]), ("päta", r["v"]), ("výška", sysdef["height"]), ("rozostup stĺpikov", sysdef["post_spacing"]),
+                            ("výplň", sysdef.get("infill"))])
+    cls = sysinfo.get("classes", {}).get(r["system"])
+    out = []
+    for sg in segs:
+        suffix = f".{sg['seg'] + 1}" if n_seg > 1 else ""
+        eid = eid0[:-1] + suffix + "?" if eid0.endswith("?") else eid0 + suffix
+        writes = railing_gdl.gdl_writes(sg["params"])
+        item = {"item": r["id"] + suffix, "kind": "object", "railing_kind": "gdl", "payload": sg["payload"], "gdl": writes, "element_id": eid,
+                "layer": ref["layer"], "props": {"FS_zdroj": zdroj, "FS_istota": istota, "FS_spec": f"{spec['id']}.{r['id']}"},
+                "template": railing_gdl.TEMPLATE, "template_hash": ginfo["hash"], "spec_item": r, "plane": r.get("plane", REFERENCE_PLANE),
+                "classification": cls, "z_story": level, "exceptions": []}
+        item["hash"] = _hash([sg["payload"], writes, eid, ref["layer"], item["props"], ginfo["hash"], cls])
+        out.append(item)
+    return out
+
+
 def plan_railings(spec: dict, frames: dict, home, sysinfo: dict) -> list[dict]:
     out = []
     ref = spec["reference"]
     for r in spec["railings"]:
         sysdef = spec["systems"][r["system"]]
+        if sysdef.get("railing_kind") == "gdl":           # R1 fallback: GDL object FS_Railing instead of the native railing
+            out += plan_railings_gdl(spec, r, sysdef, frames, home, sysinfo)
+            continue
         fav = sysinfo["favorites"].get(r["system"])
         if fav is None:
             raise TapirError(f"railings[{r['id']}]: favourite of {r['system']} not prepared (systems.ensure)")

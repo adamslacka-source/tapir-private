@@ -692,6 +692,17 @@
           "favorite_baluster_spacing": {
             "type": "number",
             "description": "baluster spacing the base favourite carries (fixed by the favourite: ModifyRailingDetails cannot change it, R1)"
+          },
+          "railing_kind": {
+            "enum": [
+              "native",
+              "gdl"
+            ],
+            "description": "railing: 'native' (default, Railing tool from base_favorite) or 'gdl' = GDL object FS_Railing, one per segment, from the Object favourite 'favorite' (ADR-001 R1 fallback)"
+          },
+          "gdl_params": {
+            "type": "object",
+            "description": "railing_kind 'gdl': FS_Railing parameters overriding the favourite content (names of the template)"
           }
         }
       }
@@ -1291,6 +1302,13 @@
           },
           "story": {
             "type": "string"
+          },
+          "fall_side": {
+            "enum": [
+              "left",
+              "right"
+            ],
+            "description": "railing_kind 'gdl': fall side of the path direction (default: outside of the area closed by the path, or out of the facade for a straight path)"
           }
         }
       }

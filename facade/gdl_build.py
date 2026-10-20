@@ -41,7 +41,7 @@ CONVERTER = Path(r"C:\Program Files\Graphisoft\Archicad 29\LP_XMLConverter.exe")
 PROJECT = r"C:\FacadePilot\Fasada_pilot_A.pln"
 EMBEDDED_DIR = "FS_GDL"                         # folder inside the embedded library
 CONVERT_TIMEOUT = 120                            # s per converter call
-TEMPLATE_NAMES = ("FS_Louvers", "FS_SpandrelPanel", "FS_CladdingPanels", "FS_Surround", "FS_ArchGable")
+TEMPLATE_NAMES = ("FS_Louvers", "FS_SpandrelPanel", "FS_CladdingPanels", "FS_Surround", "FS_ArchGable", "FS_Railing")
 IGNORED_ERRORS = ("Missing ancestor",)
 
 
@@ -78,8 +78,9 @@ def template_info(xml: str) -> dict:
     """MainGUID, version comment and parameters {name: (type, default)} of a template XML."""
     guid = re.search(r'<Symbol[^>]*MainGUID="([0-9A-F-]+)"', xml).group(1)
     params = {}
-    for m in re.finditer(r'<(\w+) Name="(\w+)">\s*<Description>.*?</Description>\s*<Value>([^<]*)</Value>', xml, re.S):
-        params[m.group(2)] = (m.group(1), m.group(3))
+    for m in re.finditer(r'<(\w+) Name="(\w+)">\s*<Description>.*?</Description>\s*<Value>(<!\[CDATA\[.*?\]\]>|[^<]*)</Value>',
+                         xml, re.S):
+        params[m.group(2)] = (m.group(1), m.group(3))            # String values are CDATA
     ver = re.search(r'! (FS_\w+) ([0-9.]+)', xml)
     return {"guid": guid, "params": params, "version": ver.group(2) if ver else ""}
 

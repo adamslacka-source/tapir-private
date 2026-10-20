@@ -1,0 +1,460 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Symbol IsArchivable="false" IsPlaceable="true" MainGUID="B8D62E6F-5990-5773-8B05-9AF66909CF7D" MigrationValue="Normal" Owner="0" Version="46">
+<!-- FS_Railing 1.0 - straight railing segment (ADR-001 R1 fallback to the native railing). Units: metres, degrees.
+     Local system: x = along the railing (length A), z = up (ZZYZX = H = top of the handrail above the foot),
+     y = outwards (fall side). y = 0 is the reference line: the post axis (top mounted) or the slab edge face (side mounted).
+     A bent route is several objects (bPostStart / bPostEnd avoid a double post in the shared corner).
+     Subtype 'Railing' (built-in, under Model Element) so that the IFC export maps it to IfcRailing. -->
+<Ancestry SectVersion="1" SectionFlags="0" SubIdent="0" Template="false">
+	<MainGUID>F938E33A-329D-4A36-BE3E-85E126820996</MainGUID>
+	<MainGUID>103E8D2C-8230-42E1-9597-46F84CCE28C0</MainGUID>
+	<MainGUID>09BEB35E-7BF8-448C-B408-AC04D159B0D1</MainGUID>
+</Ancestry>
+
+<CalledMacros SectVersion="2" SectionFlags="0" SubIdent="0">
+</CalledMacros>
+
+<ParamSection SectVersion="27" SectionFlags="0" SubIdent="0">
+	<ParamSectHeader>
+		<AutoHotspots>false</AutoHotspots>
+		<StatBits>
+			<STBit_FixSize/>
+		</StatBits>
+		<WDLeftFrame>0</WDLeftFrame>
+		<WDRightFrame>0</WDRightFrame>
+		<WDTopFrame>0</WDTopFrame>
+		<WDBotFrame>0</WDBotFrame>
+		<LayFlags>65535</LayFlags>
+		<WDMirrorThickness>0</WDMirrorThickness>
+		<WDWallInset>0</WDWallInset>
+	</ParamSectHeader>
+	<Parameters>
+		<Length Name="A">
+			<Description><![CDATA["Length of the segment (x)"]]></Description>
+			<Value>3</Value>
+		</Length>
+		<Length Name="B">
+			<Description><![CDATA["Depth (information only, y)"]]></Description>
+			<Value>0.06</Value>
+		</Length>
+		<Length Name="ZZYZX">
+			<Description><![CDATA["Height H: top of the handrail above the foot"]]></Description>
+			<Value>1</Value>
+		</Length>
+		<Integer Name="iPostProf">
+			<Description><![CDATA["Post profile: 0 rectangle, 1 round, 2 flat bar"]]></Description>
+			<Value>2</Value>
+		</Integer>
+		<Length Name="postW">
+			<Description><![CDATA["Post size along x (rectangle width / diameter / flat bar thickness)"]]></Description>
+			<Value>0.012</Value>
+		</Length>
+		<Length Name="postD">
+			<Description><![CDATA["Post size along y (rectangle depth / flat bar width; round: unused)"]]></Description>
+			<Value>0.06</Value>
+		</Length>
+		<Integer Name="iPostMode">
+			<Description><![CDATA["Post layout: 0 by count, 1 by maximum spacing"]]></Description>
+			<Value>1</Value>
+		</Integer>
+		<Integer Name="nPost">
+			<Description><![CDATA["Number of post positions incl. both ends (iPostMode = 0)"]]></Description>
+			<Value>3</Value>
+		</Integer>
+		<Length Name="postSp">
+			<Description><![CDATA["Maximum post spacing, axis to axis (iPostMode = 1)"]]></Description>
+			<Value>1.2</Value>
+		</Length>
+		<Length Name="pInset">
+			<Description><![CDATA["End post axis from the segment end"]]></Description>
+			<Value>0.006</Value>
+		</Length>
+		<Boolean Name="bPostStart">
+			<Description><![CDATA["Post at the start (x = pInset)"]]></Description>
+			<Value>1</Value>
+		</Boolean>
+		<Boolean Name="bPostEnd">
+			<Description><![CDATA["Post at the end (x = A - pInset)"]]></Description>
+			<Value>1</Value>
+		</Boolean>
+		<Integer Name="iMount">
+			<Description><![CDATA["Anchoring: 0 on the slab (top), 1 side / fascia mounted"]]></Description>
+			<Value>0</Value>
+		</Integer>
+		<Length Name="sideGap">
+			<Description><![CDATA["Side mounting: gap slab edge face (y = 0) - post face"]]></Description>
+			<Value>0.02</Value>
+		</Length>
+		<Length Name="mountDrop">
+			<Description><![CDATA["Side mounting: post reaches below the foot by"]]></Description>
+			<Value>0.15</Value>
+		</Length>
+		<Boolean Name="bRail">
+			<Description><![CDATA["Top handrail"]]></Description>
+			<Value>1</Value>
+		</Boolean>
+		<Integer Name="iRailProf">
+			<Description><![CDATA["Handrail profile: 0 round, 1 rectangle, 2 flat bar"]]></Description>
+			<Value>0</Value>
+		</Integer>
+		<Length Name="railW">
+			<Description><![CDATA["Handrail width along y (round: diameter)"]]></Description>
+			<Value>0.042</Value>
+		</Length>
+		<Length Name="railH">
+			<Description><![CDATA["Handrail height along z (rectangle / flat bar)"]]></Description>
+			<Value>0.04</Value>
+		</Length>
+		<Length Name="railOvhS">
+			<Description><![CDATA["Handrail overhang beyond the start (x < 0)"]]></Description>
+			<Value>0</Value>
+		</Length>
+		<Length Name="railOvhE">
+			<Description><![CDATA["Handrail overhang beyond the end (x > A)"]]></Description>
+			<Value>0</Value>
+		</Length>
+		<Integer Name="iInfill">
+			<Description><![CDATA["Infill: 0 none, 1 horizontal bars, 2 vertical balusters, 3 glass, 4 panel"]]></Description>
+			<Value>1</Value>
+		</Integer>
+		<Length Name="botGap">
+			<Description><![CDATA["Clear gap foot - lowest infill element"]]></Description>
+			<Value>0.1</Value>
+		</Length>
+		<Length Name="topGap">
+			<Description><![CDATA["Glass / panel: clear gap below the handrail"]]></Description>
+			<Value>0.05</Value>
+		</Length>
+		<Length Name="infGap">
+			<Description><![CDATA["Glass / panel: clear gap to the post faces"]]></Description>
+			<Value>0.015</Value>
+		</Length>
+		<Length Name="infOffs">
+			<Description><![CDATA["Glass / panel: offset of the infill plane from the post axis (y)"]]></Description>
+			<Value>0</Value>
+		</Length>
+		<Integer Name="nBars">
+			<Description><![CDATA["Horizontal bars: count (uniform distribution)"]]></Description>
+			<Value>5</Value>
+		</Integer>
+		<Integer Name="iBarDist">
+			<Description><![CDATA["Horizontal bars: 0 uniform, 1 from the list barZList"]]></Description>
+			<Value>0</Value>
+		</Integer>
+		<String Name="barZList">
+			<Description><![CDATA["Horizontal bars: axis heights above the foot, separated by ;"]]></Description>
+			<Value><![CDATA["0.15;0.35;0.55"]]></Value>
+		</String>
+		<Integer Name="iBarProf">
+			<Description><![CDATA["Horizontal bar profile: 0 round, 1 rectangle"]]></Description>
+			<Value>0</Value>
+		</Integer>
+		<Length Name="barD">
+			<Description><![CDATA["Horizontal bar diameter / height (z)"]]></Description>
+			<Value>0.012</Value>
+		</Length>
+		<Length Name="barT">
+			<Description><![CDATA["Horizontal bar depth (y, rectangle)"]]></Description>
+			<Value>0.012</Value>
+		</Length>
+		<Length Name="balSp">
+			<Description><![CDATA["Balusters: maximum spacing, axis to axis"]]></Description>
+			<Value>0.11</Value>
+		</Length>
+		<Integer Name="iBalProf">
+			<Description><![CDATA["Baluster profile: 0 round, 1 square"]]></Description>
+			<Value>1</Value>
+		</Integer>
+		<Length Name="balD">
+			<Description><![CDATA["Baluster size (diameter / side)"]]></Description>
+			<Value>0.012</Value>
+		</Length>
+		<Boolean Name="bBotRail">
+			<Description><![CDATA["Balusters: bottom rail"]]></Description>
+			<Value>1</Value>
+		</Boolean>
+		<Length Name="botRW">
+			<Description><![CDATA["Bottom rail width (y)"]]></Description>
+			<Value>0.04</Value>
+		</Length>
+		<Length Name="botRH">
+			<Description><![CDATA["Bottom rail height (z)"]]></Description>
+			<Value>0.02</Value>
+		</Length>
+		<Length Name="glassT">
+			<Description><![CDATA["Glass thickness"]]></Description>
+			<Value>0.016</Value>
+		</Length>
+		<Length Name="panT">
+			<Description><![CDATA["Panel thickness"]]></Description>
+			<Value>0.003</Value>
+		</Length>
+		<Integer Name="iPanType">
+			<Description><![CDATA["Panel: 0 solid sheet, 1 perforated sheet (perforation = surface, not modelled)"]]></Description>
+			<Value>0</Value>
+		</Integer>
+		<Material Name="matPost">
+			<Description><![CDATA["Post surface (0 = object surface)"]]></Description>
+			<Value>0</Value>
+		</Material>
+		<Material Name="matRail">
+			<Description><![CDATA["Handrail surface (0 = object surface)"]]></Description>
+			<Value>0</Value>
+		</Material>
+		<Material Name="matInfill">
+			<Description><![CDATA["Infill surface (0 = object surface)"]]></Description>
+			<Value>0</Value>
+		</Material>
+	</Parameters>
+</ParamSection>
+
+<Script_1D SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+! FS_Railing 1.0 - master script: layout shared by the 2D and 3D scripts
+EPS = 0.00001
+H = ZZYZX
+
+! post section and the y of the railing axis
+IF iPostProf = 1 THEN
+	secX = postW
+	secY = postW
+ELSE
+	secX = postW
+	secY = postD
+ENDIF
+IF iMount = 1 THEN
+	yc = sideGap + secY / 2
+	zPost0 = -mountDrop
+ELSE
+	yc = 0
+	zPost0 = 0
+ENDIF
+
+! handrail
+zRailBot = H
+zPostTop = H
+IF bRail THEN
+	IF iRailProf = 0 THEN
+		zRailBot = H - railW
+		zPostTop = H - railW / 2
+	ELSE
+		zRailBot = H - railH
+		zPostTop = H - railH
+	ENDIF
+ENDIF
+
+! post positions (virtual ones too: bPostStart / bPostEnd only decide whether the post body is drawn)
+x0 = pInset
+x1 = A - pInset
+span = x1 - x0
+IF span < EPS THEN span = EPS
+IF iPostMode = 0 THEN
+	nBays = MAX(1, nPost - 1)
+ELSE
+	nBays = MAX(1, CEIL(span / MAX(postSp, 0.01) - EPS))
+ENDIF
+IF nBays > 500 THEN nBays = 500
+bay = span / nBays
+DIM px[]
+FOR i = 0 TO nBays
+	px[i + 1] = x0 + i * bay
+NEXT i
+
+! horizontal bars: axis heights
+DIM bz[]
+nB = 0
+IF iInfill = 1 THEN
+	IF iBarDist = 0 THEN
+		nB = MAX(1, nBars)
+		g = (zRailBot - botGap - nB * barD) / nB
+		FOR i = 1 TO nB
+			bz[i] = botGap + barD / 2 + (i - 1) * (barD + g)
+		NEXT i
+	ELSE
+		s = barZList
+		WHILE STRLEN(s) > 0 AND nB < 100 DO
+			k = STRSTR(s, ";")
+			IF k > 0 THEN
+				tok = STRSUB(s, 1, k - 1)
+				s = STRSUB(s, k + 1, STRLEN(s) - k)
+			ELSE
+				tok = s
+				s = ""
+			ENDIF
+			nr = SPLIT(tok, "%n", v)
+			IF nr > 0 THEN
+				nB = nB + 1
+				bz[nB] = v
+			ENDIF
+		ENDWHILE
+	ENDIF
+ENDIF
+
+! glass / panel / balusters: vertical extent
+zInf0 = botGap
+zInf1 = zRailBot - topGap
+]]></Script_1D>
+
+<Script_2D SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+HOTSPOT2 0, yc
+HOTSPOT2 A, yc
+PROJECT2 3, 270, 2
+]]></Script_2D>
+
+<Script_3D SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+RESOL 16
+HOTSPOT 0, yc, 0
+HOTSPOT A, yc, 0
+HOTSPOT 0, yc, H
+HOTSPOT A, yc, H
+
+! posts
+IF matPost > 0 THEN
+	MATERIAL matPost
+ELSE
+	MATERIAL SYMB_MAT
+ENDIF
+FOR i = 0 TO nBays
+	bDraw = 1
+	IF i = 0 AND NOT(bPostStart) THEN bDraw = 0
+	IF i = nBays AND NOT(bPostEnd) THEN bDraw = 0
+	IF bDraw THEN
+		IF iPostProf = 1 THEN
+			ADD px[i + 1], yc, zPost0
+			CYLIND zPostTop - zPost0, postW / 2
+			DEL 1
+		ELSE
+			ADD px[i + 1] - secX / 2, yc - secY / 2, zPost0
+			BLOCK secX, secY, zPostTop - zPost0
+			DEL 1
+		ENDIF
+	ENDIF
+NEXT i
+
+! handrail
+IF bRail THEN
+	IF matRail > 0 THEN
+		MATERIAL matRail
+	ELSE
+		MATERIAL SYMB_MAT
+	ENDIF
+	IF iRailProf = 0 THEN
+		ADD -railOvhS, yc, H - railW / 2
+		ROTy 90
+		CYLIND A + railOvhS + railOvhE, railW / 2
+		DEL 2
+	ELSE
+		ADD -railOvhS, yc - railW / 2, zRailBot
+		BLOCK A + railOvhS + railOvhE, railW, railH
+		DEL 1
+	ENDIF
+ENDIF
+
+! infill
+IF matInfill > 0 THEN
+	MATERIAL matInfill
+ELSE
+	MATERIAL SYMB_MAT
+ENDIF
+IF iInfill = 1 THEN
+	FOR i = 1 TO nB
+		IF iBarProf = 0 THEN
+			ADD px[1], yc, bz[i]
+			ROTy 90
+			CYLIND px[nBays + 1] - px[1], barD / 2
+			DEL 2
+		ELSE
+			ADD px[1], yc - barT / 2, bz[i] - barD / 2
+			BLOCK px[nBays + 1] - px[1], barT, barD
+			DEL 1
+		ENDIF
+	NEXT i
+ENDIF
+IF iInfill = 2 THEN
+	zb0 = botGap
+	IF bBotRail THEN
+		ADD px[1], yc - botRW / 2, botGap
+		BLOCK px[nBays + 1] - px[1], botRW, botRH
+		DEL 1
+		zb0 = botGap + botRH
+	ENDIF
+	FOR j = 1 TO nBays
+		fa = px[j] + secX / 2
+		lc = px[j + 1] - px[j] - secX
+		IF lc > EPS THEN
+			ks = CEIL(lc / MAX(balSp, 0.01) - EPS)
+			FOR m = 1 TO ks - 1
+				xb = fa + m * lc / ks
+				IF iBalProf = 0 THEN
+					ADD xb, yc, zb0
+					CYLIND zRailBot - zb0, balD / 2
+					DEL 1
+				ELSE
+					ADD xb - balD / 2, yc - balD / 2, zb0
+					BLOCK balD, balD, zRailBot - zb0
+					DEL 1
+				ENDIF
+			NEXT m
+		ENDIF
+	NEXT j
+ENDIF
+IF iInfill = 3 OR iInfill = 4 THEN
+	IF iInfill = 3 THEN
+		t = glassT
+	ELSE
+		t = panT
+	ENDIF
+	FOR j = 1 TO nBays
+		xa = px[j] + secX / 2 + infGap
+		xe = px[j + 1] - secX / 2 - infGap
+		IF xe - xa > EPS AND zInf1 - zInf0 > EPS THEN
+			ADD xa, yc + infOffs - t / 2, zInf0
+			BLOCK xe - xa, t, zInf1 - zInf0
+			DEL 1
+		ENDIF
+	NEXT j
+ENDIF
+]]></Script_3D>
+
+<Script_PR SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+VALUES{2} "iPostProf" 0, "rectangle", 1, "round", 2, "flat bar"
+VALUES{2} "iPostMode" 0, "by count", 1, "by maximum spacing"
+VALUES{2} "iMount" 0, "on the slab", 1, "side mounted"
+VALUES{2} "iRailProf" 0, "round", 1, "rectangle", 2, "flat bar"
+VALUES{2} "iInfill" 0, "none", 1, "horizontal_bars", 2, "vertical_balusters", 3, "glass", 4, "panel"
+VALUES{2} "iBarDist" 0, "uniform", 1, "list"
+VALUES{2} "iBarProf" 0, "round", 1, "rectangle"
+VALUES{2} "iBalProf" 0, "round", 1, "square"
+VALUES{2} "iPanType" 0, "solid", 1, "perforated"
+VALUES "nPost" RANGE [2, 501]
+VALUES "nBars" RANGE [1, 100]
+VALUES "postW" RANGE (0, ]
+VALUES "postD" RANGE (0, ]
+VALUES "postSp" RANGE [0.01, ]
+VALUES "railW" RANGE (0, ]
+VALUES "railH" RANGE (0, ]
+VALUES "barD" RANGE (0, ]
+VALUES "balSp" RANGE [0.01, ]
+VALUES "balD" RANGE (0, ]
+VALUES "glassT" RANGE (0, ]
+VALUES "panT" RANGE (0, ]
+]]></Script_PR>
+
+<Script_UI SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+]]></Script_UI>
+
+<Script_VL SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
+]]></Script_VL>
+
+<Comment SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[FS_Railing 1.0 - tapir-private facade pipeline (ADR-001 R1)]]></Comment>
+
+<Keywords SectVersion="1" SectionFlags="0" SubIdent="0"><![CDATA[FS facade railing balustrade]]></Keywords>
+
+<Copyright SectVersion="1" SectionFlags="0" SubIdent="0">
+	<Author>tapir-private</Author>
+	<License>
+		<Type>CC BY</Type>
+		<Version>4.0</Version>
+	</License>
+</Copyright>
+
+</Symbol>
