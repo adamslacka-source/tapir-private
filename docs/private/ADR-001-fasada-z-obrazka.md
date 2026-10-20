@@ -407,3 +407,10 @@ max. vzorka 4,94 cm. Nálezy: (1) vzorka objektu padne v SK šablóne na **skryt
 ani zmazať → `ensure_favorites(prepare=…)` ju najprv presunie na vrstvu fasády (favorit nesie vrstvu fasády); (2) povrch
 `Kov - nízkouhlíková ocel` má v SK šablóne názov `… oceľ` (`SURFACE_ALT`). NEOVERENÉ: profil stĺpika a madla, Ø tyčí ±4 mm, koniec
 stĺpika medzi plechmi, polohy stĺpikov za stromom a pri pilieroch (úseky 1 pole). Výnimka R1 z testu, G1 aj G2 odstránená.
+
+
+### Sonda natívneho zábradlia naostro (2026-10-20, add-on def8040)
+- `GetDefaults` / `GetDefaultsExt` zábradlia: OK. Predvoľby nesú len 1 vnútorný stĺpik, 1 sadu tyčiek, 1 tyčku a panel – **zoznam vodorovných tyčí (railingRails) v predvoľbách nie je**.
+- Sonda podprvkov cez Ext: Node, Segment, Post (71 GDL parametrov), InnerPost (71), Rail (67), AdditionalRail (67), Handrail (67), Toprail (67) – OK. **AdditionalHandrail a Panel zhodia ArchiCAD** (pôvodný pád b565598 = sonda všetkých druhov naraz). Ostatné druhy (Pattern, BalusterSet, Baluster, koncovky, spoje, Finish) neskúšané.
+- Favorites zábradlí (`ACAPI_Favorite_Get`, aj so subElements): favorit „Ocelové horizontální zábradlí – boční kotvení" vracia railingRails = null a 0 subElements – **počet a výšky vodorovných tyčí nie sú cez C API dostupné ani z favoritu**.
+- Záver: natívne zábradlie cez API = trasa, výška, rozostup stĺpikov (+ GDL parametre stĺpikov/tyčí/madiel cez Ext opt-in, zápis neoverený). Vlastná výplň (vodorovné tyče, sklo, panel) = **GDL `FS_Railing`** (Favorites `FS rail.*`), čo je platné riešenie R1. Ext cesty ostávajú opt-in; predvolené správanie overené `test_pilot_a.py` 136/136.
