@@ -115,4 +115,7 @@ public:
 // Saves the current defaults of a tool as a Favorite (the core of CreateFavoritesFromDefaults), for
 // commands that set tool defaults and save them in one step. Call it inside an undoable command.
 // Returns {name, result: created/overwritten} or an error item.
-GS::ObjectState SaveToolDefaultsAsFavorite (const GS::UniString& name, API_ElemTypeID typeId, const GS::Array<GS::UniString>& folderParts, bool overwriteExisting);
+// useExtDefaults (opt-in, NOT verified live): read a Curtain Wall / Railing tool with
+// ACAPI_Element_GetDefaultsExt, a Railing also with its subelement defaults (Favorite.subElements).
+GS::ObjectState SaveToolDefaultsAsFavorite (const GS::UniString& name, API_ElemTypeID typeId, const GS::Array<GS::UniString>& folderParts, bool overwriteExisting,
+                                            bool useExtDefaults = false);

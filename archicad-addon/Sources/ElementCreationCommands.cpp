@@ -92,8 +92,18 @@ GS::ObjectState	CreateElementsCommandBase::Execute (const GS::ObjectState& param
         API_Element defaultsSnapshot = element;
         API_ElementMemo defaultsSnapshotMemo = {};
         // A Curtain Wall or Railing favorite also changes subelement defaults (ADR-001 R1), which
-        // only the Ext functions read and write back.
-        const bool extTool = HasExtToolDefaults (elemTypeID);
+        // only the Ext functions read and write back. Opt-in per item (useExtDefaults, only in the
+        // CreateCurtainWalls / CreateRailings schemas): NOT verified live, and
+        // ACAPI_Element_GetDefaultsExt is not documented for the Railing.
+        const bool extTool = HasExtToolDefaults (elemTypeID) && [&] () {
+            for (const GS::ObjectState& data : dataArray) {
+                bool useExt = false;
+                if (data.Get ("useExtDefaults", useExt) && useExt) {
+                    return true;
+                }
+            }
+            return false;
+        } ();
         GS::Array<API_SubElement> defaultsSnapshotSubElements;
         bool snapshotUsedExt = false;
         const GS::OnExit snapshotGuard ([&] () {
@@ -104,7 +114,7 @@ GS::ObjectState	CreateElementsCommandBase::Execute (const GS::ObjectState& param
         });
         if (anyFavoriteName) {
             if (extTool) {
-                GetToolDefaultsWithSubElements (elemTypeID, defaultsSnapshot, defaultsSnapshotMemo, defaultsSnapshotSubElements, snapshotUsedExt);
+                GetToolDefaultsWithSubElements (elemTypeID, defaultsSnapshot, defaultsSnapshotMemo, defaultsSnapshotSubElements, snapshotUsedExt, true, true);
             } else {
                 ACAPI_Element_GetDefaults (&defaultsSnapshot, &defaultsSnapshotMemo);
             }
@@ -122,11 +132,14 @@ GS::ObjectState	CreateElementsCommandBase::Execute (const GS::ObjectState& param
         bool favoriteApplied = false;
 
         for (const GS::ObjectState& data : dataArray) {
+            bool itemUsesExt = false;
+            data.Get ("useExtDefaults", itemUsesExt);
+            itemUsesExt = itemUsesExt && extTool;
             if (anyFavoriteName) {
                 GS::UniString favoriteName;
                 const bool hasFavoriteName = data.Get ("favoriteName", favoriteName) && !favoriteName.IsEmpty ();
                 if (hasFavoriteName) {
-                    const GSErrCode favoriteErr = ApplyFavoriteToElementDefaults (favoriteName, elemTypeID);
+                    const GSErrCode favoriteErr = ApplyFavoriteToElementDefaults (favoriteName, elemTypeID, itemUsesExt);
                     if (favoriteErr != NoError) {
                         // Say which of the two usual causes it was: ApplyFavoriteToElementDefaults
                         // answers APIERR_REFUSEDPAR for a favorite of another element type, and
@@ -159,11 +172,10 @@ GS::ObjectState	CreateElementsCommandBase::Execute (const GS::ObjectState& param
 #else
             element.header.typeID = elemTypeID;
 #endif
-            // The Curtain Wall defaults are read with the Ext call, which the API documents for
-            // them (the plain one may leave out e.g. the surfaces of CW classes). A Railing keeps
-            // the plain read of Do_CreateRailing (API example): its subelement defaults stay in the
-            // tool defaults, the memo of the new railing gets only the reference line.
-            err = elemTypeID == API_CurtainWallID ? ACAPI_Element_GetDefaultsExt (&element, &memo, 0, nullptr) : APIERR_BADID;
+            // With useExtDefaults the Curtain Wall defaults are read with the Ext call, which the
+            // API documents for them (the plain one may leave out e.g. the surfaces of CW classes).
+            // A Railing always keeps the plain read of Do_CreateRailing (API example).
+            err = itemUsesExt && elemTypeID == API_CurtainWallID ? ACAPI_Element_GetDefaultsExt (&element, &memo, 0, nullptr) : APIERR_BADID;
             if (err != NoError) {
                 ACAPI_DisposeElemMemoHdls (&memo);
                 memo = {};
@@ -2864,6 +2876,10 @@ GS::Optional<GS::UniString> CreateCurtainWallsCommand::GetInputParametersSchema 
                         "type": "string",
                         "description": "Optional name of a favorite to base the new element on. Its settings are applied first, then the explicitly given fields override them."
                     },
+                    "useExtDefaults": {
+                        "type": "boolean",
+                        "description": "Experimental (not verified live): apply the favorite with ACAPI_Element_ChangeDefaultsExt including its subelement defaults and read the Curtain Wall defaults with ACAPI_Element_GetDefaultsExt (e.g. for the class surfaces). The default is false (the verified plain calls)."
+                    },
                     "coordinates": {
                         "type": "array",
                         "description": "The 2D coordinates of the reference line of the curtain wall on the floor plan. Each pair of consecutive coordinates becomes one straight segment, so two coordinates give a single-segment curtain wall.",
@@ -4009,7 +4025,8 @@ GS::Optional<GS::UniString> SetCurtainWallSystemDefaultsCommand::GetInputParamet
                 "properties": {
                     "name": { "type": "string", "description": "Name of the Favorite." },
                     "folder": { "type": "array", "items": { "type": "string" }, "description": "Optional folder hierarchy in the Favorites palette." },
-                    "overwriteExisting": { "type": "boolean", "description": "Overwrite a Favorite of the same name. The default is false." }
+                    "overwriteExisting": { "type": "boolean", "description": "Overwrite a Favorite of the same name. The default is false." },
+                    "useExtDefaults": { "type": "boolean", "description": "Experimental (not verified live): read the defaults for the Favorite with ACAPI_Element_GetDefaultsExt. The default is false." }
                 },
                 "additionalProperties": false,
                 "required": ["name"]
@@ -4017,6 +4034,14 @@ GS::Optional<GS::UniString> SetCurtainWallSystemDefaultsCommand::GetInputParamet
             "restoreDefaults": {
                 "type": "boolean",
                 "description": "Put the Curtain Wall tool defaults back as they were at the end, e.g. when only the favorite is wanted. The default is false (the defaults keep the change)."
+            },
+            "readBackExt": {
+                "type": "boolean",
+                "description": "Experimental (not verified live): read the defaults back for notKept with ACAPI_Element_GetDefaultsExt instead of ACAPI_Element_GetDefaults. The default is false."
+            },
+            "surfaceRetryBySubElement": {
+                "type": "boolean",
+                "description": "Experimental (not verified live): when a class surface was not kept, write the class once more through its subelement default (APISubElement_CWFrameClass / CWPanelClass). The default is false; surfaceDiagnostics are reported either way."
             }
         },
         "additionalProperties": false
@@ -4121,6 +4146,11 @@ GS::ObjectState SetCurtainWallSystemDefaultsCommand::Execute (const GS::ObjectSt
     parameters.Get ("panelClasses", panelItems);
     bool restoreDefaults = false;
     parameters.Get ("restoreDefaults", restoreDefaults);
+    // Opt-in (ADR-001 nález I5, NOT verified live); the defaults keep the verified path.
+    bool readBackExt = false;
+    parameters.Get ("readBackExt", readBackExt);
+    bool surfaceRetry = false;
+    parameters.Get ("surfaceRetryBySubElement", surfaceRetry);
 
     GS::ObjectState response;
 
@@ -4342,9 +4372,8 @@ GS::ObjectState SetCurtainWallSystemDefaultsCommand::Execute (const GS::ObjectSt
             return NoError;
         }
 
-        // Read the defaults back with the Ext call, as CreateCurtainWalls and
-        // CreateFavoritesFromDefaults read them now, and report every asked field that did not
-        // arrive there (until ADR-001 nález I5 they were read back with ACAPI_Element_GetDefaults).
+        // Read the defaults back (plain call by default, the Ext call with readBackExt) and report
+        // every asked field that did not arrive there.
         API_Element check = {};
         API_ElementMemo checkMemo = {};
         const GS::OnExit checkGuard ([&checkMemo] () { ACAPI_DisposeElemMemoHdls (&checkMemo); });
@@ -4358,7 +4387,7 @@ GS::ObjectState SetCurtainWallSystemDefaultsCommand::Execute (const GS::ObjectSt
             checkMemo = {};
             check = {};
             SetElemHeadType (check.header, API_CurtainWallID);
-            return ACAPI_Element_GetDefaultsExt (&check, &checkMemo, 0, nullptr);
+            return readBackExt ? ACAPI_Element_GetDefaultsExt (&check, &checkMemo, 0, nullptr) : ACAPI_Element_GetDefaults (&check, &checkMemo);
         };
         err = readBack ();
         if (err != NoError) {
@@ -4369,9 +4398,9 @@ GS::ObjectState SetCurtainWallSystemDefaultsCommand::Execute (const GS::ObjectSt
             return NoError;
         }
 
-        // Surfaces (ADR-001 nález I5): when a class read back has not got the asked surface, write
-        // it once more through the subelement default of the class and read the defaults back
-        // again. The diagnostics say what each read and write gave.
+        // Surfaces (ADR-001 nález I5): the diagnostics give the class surfaces as both documented
+        // CW reads see them; with surfaceRetryBySubElement a lost surface is written once more
+        // through the subelement default of the class and the defaults are read back again.
         const auto isSurfaceField = [] (const GS::UniString& field) {
             return field == "surface" || field == "outerSurface" || field == "innerSurface" || field == "edgeSurface";
         };
@@ -4408,7 +4437,7 @@ GS::ObjectState SetCurtainWallSystemDefaultsCommand::Execute (const GS::ObjectSt
                 for (const GS::UniString& field : GetNotKeptCWFrameFields (firstFrames[kept.Get ()], state.request)) {
                     surfaceLost = surfaceLost || isSurfaceField (field);
                 }
-                if (surfaceLost) {
+                if (surfaceLost && surfaceRetry) {
                     API_CWFrameType wanted = firstFrames[kept.Get ()];
                     wanted.material = state.request.surface.Get ();
                     wanted.useOwnMaterial = true;
@@ -4436,7 +4465,7 @@ GS::ObjectState SetCurtainWallSystemDefaultsCommand::Execute (const GS::ObjectSt
                 for (const GS::UniString& field : GetNotKeptCWPanelFields (firstPanels[kept.Get ()], state.request)) {
                     surfaceLost = surfaceLost || isSurfaceField (field);
                 }
-                if (surfaceLost) {
+                if (surfaceLost && surfaceRetry) {
                     API_CWPanelType wanted = firstPanels[kept.Get ()];
                     if (state.request.outerSurface.HasValue ()) {
                         SetCWOverriddenSurface (wanted.outerSurfaceMaterial, state.request.outerSurface.Get ());
@@ -4520,7 +4549,9 @@ GS::ObjectState SetCurtainWallSystemDefaultsCommand::Execute (const GS::ObjectSt
             favoriteOS->Get ("folder", folderParts);
             bool overwriteExisting = false;
             favoriteOS->Get ("overwriteExisting", overwriteExisting);
-            response.Add ("favorite", SaveToolDefaultsAsFavorite (favoriteName, API_CurtainWallID, folderParts, overwriteExisting));
+            bool useExtDefaults = false;
+            favoriteOS->Get ("useExtDefaults", useExtDefaults);
+            response.Add ("favorite", SaveToolDefaultsAsFavorite (favoriteName, API_CurtainWallID, folderParts, overwriteExisting, useExtDefaults));
         }
 
         if (restoreDefaults) {
@@ -5306,6 +5337,10 @@ GS::Optional<GS::UniString> CreateRailingsCommand::GetInputParametersSchema () c
                         "type": "string",
                         "enum": ["FixedLength", "BestDivision"],
                         "description": "Optional way the pattern is laid along a segment, as in ModifyRailingDetails."
+                    },
+                    "useExtDefaults": {
+                        "type": "boolean",
+                        "description": "Experimental (not verified live): apply the favorite with ACAPI_Element_ChangeDefaultsExt including its subelement defaults (rails, panels, posts...). ACAPI_Element_GetDefaultsExt is not documented for the Railing and crashed Archicad 29 in GetRailingSystemDefaults. The default is false (the verified ACAPI_Element_ChangeDefaults)."
                     }
                 },
                 "additionalProperties": false,
@@ -5468,10 +5503,17 @@ static GS::Optional<GS::UniString> GetLibraryPartNameOfSymbol (const API_Guid& s
     return GS::UniString (libPart.docu_UName);
 }
 
+// Whether CreateRailingSymbolOS looks up the library part name of a symbol
+// (ACAPI_LibraryPart_Search by ownUnID): opt-in per command call (resolveLibraryPartNames).
+static bool sResolveRailingSymbolNames = false;
+
 static GS::ObjectState CreateRailingSymbolOS (const API_Guid& symbID)
 {
     GS::ObjectState os;
     os.Add ("symbolId", APIGuidToString (symbID));
+    if (!sResolveRailingSymbolNames) {
+        return os;
+    }
     const GS::Optional<GS::UniString> name = GetLibraryPartNameOfSymbol (symbID);
     if (name.HasValue ()) {
         os.Add ("libraryPartName", name.Get ());
@@ -5627,50 +5669,61 @@ static GS::ObjectState CreateRailingTypeOS (const API_RailingType& railing)
     return os;
 }
 
-// The number of items of every railing memo array, and the rails, handrails, panels, baluster sets
-// and patterns themselves when there are any.
-static GS::ObjectState CreateRailingMemoOS (const API_ElementMemo& memo)
+// The railing memo arrays: without `readArrays` only whether each pointer is set (nothing is
+// dereferenced); with it the number of items (BMGetPtrSize, as for an element memo) and the rails,
+// handrails, panels, baluster sets and patterns themselves, each read only below that number.
+static GS::ObjectState CreateRailingMemoOS (const API_ElementMemo& memo, bool readArrays)
 {
     GS::ObjectState os;
-    GS::ObjectState counts;
-    counts.Add ("railingNodes", static_cast<Int32> (GetRailingSubelementCount (memo.railingNodes)));
-    counts.Add ("railingSegments", static_cast<Int32> (GetRailingSubelementCount (memo.railingSegments)));
-    counts.Add ("railingPosts", static_cast<Int32> (GetRailingSubelementCount (memo.railingPosts)));
-    counts.Add ("railingRailEnds", static_cast<Int32> (GetRailingSubelementCount (memo.railingRailEnds)));
-    counts.Add ("railingRailConnections", static_cast<Int32> (GetRailingSubelementCount (memo.railingRailConnections)));
-    counts.Add ("railingHandrailEnds", static_cast<Int32> (GetRailingSubelementCount (memo.railingHandrailEnds)));
-    counts.Add ("railingHandrailConnections", static_cast<Int32> (GetRailingSubelementCount (memo.railingHandrailConnections)));
-    counts.Add ("railingToprailEnds", static_cast<Int32> (GetRailingSubelementCount (memo.railingToprailEnds)));
-    counts.Add ("railingToprailConnections", static_cast<Int32> (GetRailingSubelementCount (memo.railingToprailConnections)));
-    counts.Add ("railingRails", static_cast<Int32> (GetRailingSubelementCount (memo.railingRails)));
-    counts.Add ("railingToprails", static_cast<Int32> (GetRailingSubelementCount (memo.railingToprails)));
-    counts.Add ("railingHandrails", static_cast<Int32> (GetRailingSubelementCount (memo.railingHandrails)));
-    counts.Add ("railingPatterns", static_cast<Int32> (GetRailingSubelementCount (memo.railingPatterns)));
-    counts.Add ("railingInnerPosts", static_cast<Int32> (GetRailingSubelementCount (memo.railingInnerPosts)));
-    counts.Add ("railingPanels", static_cast<Int32> (GetRailingSubelementCount (memo.railingPanels)));
-    counts.Add ("railingBalusterSets", static_cast<Int32> (GetRailingSubelementCount (memo.railingBalusterSets)));
-    counts.Add ("railingBalusters", static_cast<Int32> (GetRailingSubelementCount (memo.railingBalusters)));
-    os.Add ("counts", counts);
+    GS::ObjectState arrays;
+    const auto add = [&] (const char* name, const void* ptr, UInt32 itemSize) {
+        if (!readArrays || ptr == nullptr) {
+            arrays.Add (name, ptr == nullptr ? GS::UniString ("null") : GS::UniString ("set"));
+            return;
+        }
+        arrays.Add (name, static_cast<Int32> (BMGetPtrSize (reinterpret_cast<GSPtr> (const_cast<void*> (ptr))) / itemSize));
+    };
+    add ("railingNodes", memo.railingNodes, sizeof (API_RailingNodeType));
+    add ("railingSegments", memo.railingSegments, sizeof (API_RailingSegmentType));
+    add ("railingPosts", memo.railingPosts, sizeof (API_RailingPostType));
+    add ("railingRailEnds", memo.railingRailEnds, sizeof (API_RailingRailEndType));
+    add ("railingRailConnections", memo.railingRailConnections, sizeof (API_RailingRailConnectionType));
+    add ("railingHandrailEnds", memo.railingHandrailEnds, sizeof (API_RailingRailEndType));
+    add ("railingHandrailConnections", memo.railingHandrailConnections, sizeof (API_RailingRailConnectionType));
+    add ("railingToprailEnds", memo.railingToprailEnds, sizeof (API_RailingRailEndType));
+    add ("railingToprailConnections", memo.railingToprailConnections, sizeof (API_RailingRailConnectionType));
+    add ("railingRails", memo.railingRails, sizeof (API_RailingRailType));
+    add ("railingToprails", memo.railingToprails, sizeof (API_RailingToprailType));
+    add ("railingHandrails", memo.railingHandrails, sizeof (API_RailingHandrailType));
+    add ("railingPatterns", memo.railingPatterns, sizeof (API_RailingPatternType));
+    add ("railingInnerPosts", memo.railingInnerPosts, sizeof (API_RailingInnerPostType));
+    add ("railingPanels", memo.railingPanels, sizeof (API_RailingPanelType));
+    add ("railingBalusterSets", memo.railingBalusterSets, sizeof (API_RailingBalusterSetType));
+    add ("railingBalusters", memo.railingBalusters, sizeof (API_RailingBalusterType));
+    os.Add (readArrays ? "counts" : "pointers", arrays);
     os.Add ("hasParams", memo.params != nullptr);
+    if (!readArrays) {
+        return os;
+    }
 
     const auto& rails = os.AddList<GS::ObjectState> ("rails");
-    for (UInt32 i = 0; i < GetRailingSubelementCount (memo.railingRails); ++i) {
+    for (UInt32 i = 0; memo.railingRails != nullptr && i < GetRailingSubelementCount (memo.railingRails); ++i) {
         rails (CreateRailingRailOS (memo.railingRails[i]));
     }
     const auto& handrails = os.AddList<GS::ObjectState> ("handrails");
-    for (UInt32 i = 0; i < GetRailingSubelementCount (memo.railingHandrails); ++i) {
+    for (UInt32 i = 0; memo.railingHandrails != nullptr && i < GetRailingSubelementCount (memo.railingHandrails); ++i) {
         handrails (CreateRailingHandrailOS (memo.railingHandrails[i]));
     }
     const auto& panels = os.AddList<GS::ObjectState> ("panels");
-    for (UInt32 i = 0; i < GetRailingSubelementCount (memo.railingPanels); ++i) {
+    for (UInt32 i = 0; memo.railingPanels != nullptr && i < GetRailingSubelementCount (memo.railingPanels); ++i) {
         panels (CreateRailingPanelOS (memo.railingPanels[i]));
     }
     const auto& balusterSets = os.AddList<GS::ObjectState> ("balusterSets");
-    for (UInt32 i = 0; i < GetRailingSubelementCount (memo.railingBalusterSets); ++i) {
+    for (UInt32 i = 0; memo.railingBalusterSets != nullptr && i < GetRailingSubelementCount (memo.railingBalusterSets); ++i) {
         balusterSets (CreateRailingBalusterSetOS (memo.railingBalusterSets[i]));
     }
     const auto& patterns = os.AddList<GS::ObjectState> ("patterns");
-    for (UInt32 i = 0; i < GetRailingSubelementCount (memo.railingPatterns); ++i) {
+    for (UInt32 i = 0; memo.railingPatterns != nullptr && i < GetRailingSubelementCount (memo.railingPatterns); ++i) {
         patterns (CreateRailingPatternOS (memo.railingPatterns[i]));
     }
     return os;
@@ -5813,18 +5866,44 @@ GS::Optional<GS::UniString> GetRailingSystemDefaultsCommand::GetInputParametersS
 {
     return R"({
         "type": "object",
+        "description": "Every step beyond the plain ACAPI_Element_GetDefaults read (the one the API example Do_CreateRailing uses) is opt-in, so the probe can be run step by step: the first version, which did all of them, crashed Archicad 29.",
         "properties": {
-            "favoriteName": {
-                "type": "string",
-                "description": "Optional name of a Railing Favorite to read (its settings, memo and subelement defaults) besides the tool defaults."
-            },
-            "includeParameters": {
+            "readMemoArrays": {
                 "type": "boolean",
-                "description": "List the GDL parameters (name, type, description, value) of every subelement default. The default is false (only their number)."
+                "description": "Count the items of the railing memo arrays of the defaults (BMGetPtrSize) and list the rails, handrails, panels, baluster sets and patterns in them. The default is false: only whether each array pointer is set."
+            },
+            "resolveLibraryPartNames": {
+                "type": "boolean",
+                "description": "Look up the library part name of every subelement symbol (ACAPI_LibraryPart_Search by unique id). The default is false: only the symbol guids."
+            },
+            "useExt": {
+                "type": "boolean",
+                "description": "Also read the defaults with ACAPI_Element_GetDefaultsExt (Railing, memo, no subelements), which the API does not document for the Railing. The default is false."
             },
             "probeSubElements": {
                 "type": "boolean",
-                "description": "Ask Archicad for every kind of Railing subelement default one by one (ACAPI_Element_GetDefaultsExt with one API_SubElement, with and without the subelement type in its header) and report the error codes. The default is true."
+                "description": "Ask ACAPI_Element_GetDefaultsExt for Railing subelement defaults one by one (one API_SubElement per call, its element type in the header). Not documented for the Railing. The default is false."
+            },
+            "subElementKinds": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "With probeSubElements: only these kinds (Node, Segment, Post, InnerPost, Rail, AdditionalRail, Handrail, AdditionalHandrail, Toprail, Panel, Pattern, BalusterSet, Baluster, RailEnd, HandrailEnd, ToprailEnd, RailConnection, HandrailConnection, ToprailConnection, Finish). Without it all kinds."
+            },
+            "retryWithoutType": {
+                "type": "boolean",
+                "description": "With probeSubElements: when a call fails, repeat it with an empty subelement header. The default is false."
+            },
+            "includeParameters": {
+                "type": "boolean",
+                "description": "List the GDL parameters (name, type, description, value) of every subelement default read. The default is false (only their number)."
+            },
+            "favoriteName": {
+                "type": "string",
+                "description": "Optional name of a Railing Favorite to read (ACAPI_Favorite_Get with its memo)."
+            },
+            "favoriteSubElements": {
+                "type": "boolean",
+                "description": "With favoriteName: also ask ACAPI_Favorite_Get for the Favorite's subElements. The default is false."
             }
         },
         "additionalProperties": false
@@ -5837,13 +5916,15 @@ GS::Optional<GS::UniString> GetRailingSystemDefaultsCommand::GetRawResponseSchem
         "type": "object",
         "description": "The Railing tool defaults as the API gives them. A diagnostic command: the structure follows the API structures (API_RailingType, API_ElementMemo, API_SubElement) and may grow.",
         "properties": {
-            "getDefaultsExt": { "type": "object", "description": "ACAPI_Element_GetDefaultsExt (Railing, memo, no subelements): ok and the error code when it failed." },
+            "steps": { "type": "array", "items": { "type": "string" }, "description": "The steps that ran, in order." },
             "getDefaults": { "type": "object", "description": "ACAPI_Element_GetDefaults (Railing, memo): ok and the error code when it failed." },
-            "railing": { "type": "object", "description": "API_RailingType of the defaults (Ext when it worked): node and segment templates with the library part of each subelement." },
-            "memo": { "type": "object", "description": "The memo of the Ext call: the number of items of every railing memo array and the rails, handrails, panels, baluster sets and patterns in it." },
-            "memoBasic": { "type": "object", "description": "The same for the memo of ACAPI_Element_GetDefaults." },
-            "subElementProbe": { "type": "array", "items": { "type": "object" }, "description": "One item per kind of Railing subelement default: kind, defaultDefault, errorWithType, errorWithoutType and the subelement default when one of the calls worked." },
-            "favorite": { "type": "object", "description": "With favoriteName: the Favorite's railing, memo and subElements as ACAPI_Favorite_Get gives them, or its error." }
+            "railing": { "type": "object", "description": "API_RailingType of the defaults (ACAPI_Element_GetDefaults): node and segment templates with the symbol of each subelement." },
+            "memo": { "type": "object", "description": "The railing memo arrays of ACAPI_Element_GetDefaults: pointers set or (readMemoArrays) their counts and items." },
+            "getDefaultsExt": { "type": "object", "description": "With useExt: ACAPI_Element_GetDefaultsExt (Railing, memo, no subelements)." },
+            "railingExt": { "type": "object" },
+            "memoExt": { "type": "object" },
+            "subElementProbe": { "type": "array", "items": { "type": "object" }, "description": "With probeSubElements: one item per kind: kind, defaultDefault, errorWithType, errorWithoutType and the subelement default when a call worked." },
+            "favorite": { "type": "object", "description": "With favoriteName: the Favorite's railing, memo and (favoriteSubElements) subElements, or its error." }
         },
         "additionalProperties": true
     })";
@@ -5861,49 +5942,74 @@ static GS::ObjectState CreateRailingCallOS (GSErrCode err)
 
 GS::ObjectState GetRailingSystemDefaultsCommand::Execute (const GS::ObjectState& parameters, GS::ProcessControl& /*processControl*/) const
 {
+    bool readMemoArrays = false;
+    parameters.Get ("readMemoArrays", readMemoArrays);
+    bool resolveNames = false;
+    parameters.Get ("resolveLibraryPartNames", resolveNames);
+    bool useExt = false;
+    parameters.Get ("useExt", useExt);
+    bool probeSubElements = false;
+    parameters.Get ("probeSubElements", probeSubElements);
+    GS::Array<GS::UniString> kindFilter;
+    const bool hasKindFilter = parameters.Get ("subElementKinds", kindFilter);
+    bool retryWithoutType = false;
+    parameters.Get ("retryWithoutType", retryWithoutType);
     bool includeParameters = false;
     parameters.Get ("includeParameters", includeParameters);
-    bool probeSubElements = true;
-    parameters.Get ("probeSubElements", probeSubElements);
+    bool favoriteSubElements = false;
+    parameters.Get ("favoriteSubElements", favoriteSubElements);
+
+    sResolveRailingSymbolNames = resolveNames;
+    const GS::OnExit resetNames ([] () { sResolveRailingSymbolNames = false; });
 
     GS::ObjectState response;
+    const auto& steps = response.AddList<GS::UniString> ("steps");
 
-    API_Element extElement = {};
-    API_ElementMemo extMemo = {};
-    const GS::OnExit extGuard ([&extMemo] () { ACAPI_DisposeElemMemoHdls (&extMemo); });
-    SetElemHeadType (extElement.header, API_RailingID);
-    const GSErrCode extErr = ACAPI_Element_GetDefaultsExt (&extElement, &extMemo, 0, nullptr);
-    response.Add ("getDefaultsExt", CreateRailingCallOS (extErr));
-
+    // 1. The plain read, as Do_CreateRailing of the API examples (and CreateRailings) does it.
+    steps (GS::UniString ("GetDefaults"));
     API_Element basicElement = {};
     API_ElementMemo basicMemo = {};
     const GS::OnExit basicGuard ([&basicMemo] () { ACAPI_DisposeElemMemoHdls (&basicMemo); });
     SetElemHeadType (basicElement.header, API_RailingID);
     const GSErrCode basicErr = ACAPI_Element_GetDefaults (&basicElement, &basicMemo);
     response.Add ("getDefaults", CreateRailingCallOS (basicErr));
-
-    if (extErr == NoError) {
-        response.Add ("railing", CreateRailingTypeOS (extElement.railing));
-        response.Add ("memo", CreateRailingMemoOS (extMemo));
-    } else if (basicErr == NoError) {
-        response.Add ("railing", CreateRailingTypeOS (basicElement.railing));
-    }
     if (basicErr == NoError) {
-        response.Add ("memoBasic", CreateRailingMemoOS (basicMemo));
+        response.Add ("railing", CreateRailingTypeOS (basicElement.railing));
+        response.Add ("memo", CreateRailingMemoOS (basicMemo, readMemoArrays));
     }
 
+    // 2. Opt-in: the Ext read, which the API documents only for CW, Stair, Window/Door, markers.
+    if (useExt) {
+        steps (GS::UniString ("GetDefaultsExt"));
+        API_Element extElement = {};
+        API_ElementMemo extMemo = {};
+        const GS::OnExit extGuard ([&extMemo] () { ACAPI_DisposeElemMemoHdls (&extMemo); });
+        SetElemHeadType (extElement.header, API_RailingID);
+        const GSErrCode extErr = ACAPI_Element_GetDefaultsExt (&extElement, &extMemo, 0, nullptr);
+        response.Add ("getDefaultsExt", CreateRailingCallOS (extErr));
+        if (extErr == NoError) {
+            response.Add ("railingExt", CreateRailingTypeOS (extElement.railing));
+            response.Add ("memoExt", CreateRailingMemoOS (extMemo, readMemoArrays));
+        }
+    }
+
+    // 3. Opt-in: the subelement defaults, one kind per call.
     if (probeSubElements) {
         const auto& probe = response.AddList<GS::ObjectState> ("subElementProbe");
         for (const RailingSubElementKind& kind : GetRailingSubElementKinds ()) {
+            if (hasKindFilter && !kindFilter.Contains (GS::UniString (kind.name))) {
+                continue;
+            }
+            steps (GS::UniString ("SubElement:") + kind.name);
             API_SubElement subElement = {};
             GSErrCode withType = NoError;
             GSErrCode withoutType = NoError;
-            const GSErrCode err = GetRailingSubElementDefault (kind, subElement, withType, withoutType);
+            const GSErrCode err = GetRailingSubElementDefault (kind, subElement, withType, withoutType, retryWithoutType);
             GS::ObjectState item;
             item.Add ("kind", GS::UniString (kind.name));
             item.Add ("defaultDefault", (kind.flags & APISubElemFlag_DefaultDefault) != 0);
             item.Add ("errorWithType", static_cast<Int32> (withType));
-            if (withType != NoError) {
+            if (withType != NoError && retryWithoutType) {
                 item.Add ("errorWithoutType", static_cast<Int32> (withoutType));
             }
             if (err == NoError) {
@@ -5914,11 +6020,15 @@ GS::ObjectState GetRailingSystemDefaultsCommand::Execute (const GS::ObjectState&
         }
     }
 
+    // 4. Optional: a Favorite, its subElements only on request.
     GS::UniString favoriteName;
     if (parameters.Get ("favoriteName", favoriteName) && !favoriteName.IsEmpty ()) {
+        steps (GS::UniString (favoriteSubElements ? "FavoriteWithSubElements" : "Favorite"));
         API_Favorite favorite (favoriteName);
         favorite.memo.New ();
-        favorite.subElements.New ();
+        if (favoriteSubElements) {
+            favorite.subElements.New ();
+        }
         const GSErrCode err = ACAPI_Favorite_Get (&favorite);
         GS::ObjectState favoriteOS;
         favoriteOS.Add ("name", favoriteName);
@@ -5928,12 +6038,14 @@ GS::ObjectState GetRailingSystemDefaultsCommand::Execute (const GS::ObjectState&
             favoriteOS.Add ("elementType", GetElementTypeNonLocalizedName (typeId));
             if (typeId == API_RailingID) {
                 favoriteOS.Add ("railing", CreateRailingTypeOS (favorite.element.railing));
-                favoriteOS.Add ("memo", CreateRailingMemoOS (favorite.memo.Get ()));
+                favoriteOS.Add ("memo", CreateRailingMemoOS (favorite.memo.Get (), readMemoArrays));
             }
-            const auto& subList = favoriteOS.AddList<GS::ObjectState> ("subElements");
-            if (favorite.subElements.HasValue ()) {
-                for (const API_SubElement& subElement : favorite.subElements.Get ()) {
-                    subList (CreateRailingSubElementOS (subElement, includeParameters));
+            if (favoriteSubElements) {
+                const auto& subList = favoriteOS.AddList<GS::ObjectState> ("subElements");
+                if (favorite.subElements.HasValue ()) {
+                    for (const API_SubElement& subElement : favorite.subElements.Get ()) {
+                        subList (CreateRailingSubElementOS (subElement, includeParameters));
+                    }
                 }
             }
         }
@@ -5984,6 +6096,7 @@ struct RailingDefaultsRequest {
     RailingGdlRequest panel;
     GS::Optional<double> balusterSpacing;
     RailingGdlRequest baluster;
+    bool writeRailList = false;     // opt-in: write memo.railingRails into the defaults
     bool railListWritten = false;   // set by ApplyRailingDefaultsRequest
 };
 
@@ -6329,7 +6442,7 @@ static void ApplyRailingGdlRequest (const RailingGdlRequest& request, const GS::
     if (subElement == nullptr) {
         if (!request.parameters.IsEmpty ()) {
             errors.Push (GS::ObjectState ("field", GS::UniString (field + ".parameters"),
-                "reason", GS::UniString::Printf ("Archicad gives no '%s' subelement default (ACAPI_Element_GetDefaultsExt with APISubElement_Railing*), where the GDL parameters of the Railing defaults live", kindName)));
+                "reason", GS::UniString::Printf ("no '%s' subelement default was read (needs experimental.useExt and experimental.subElements: ACAPI_Element_GetDefaultsExt with APISubElement_Railing*), where the GDL parameters of the Railing defaults live", kindName)));
         }
         return;
     }
@@ -6463,12 +6576,15 @@ static void ApplyRailingDefaultsRequest (RailingDefaultsRequest& request, API_El
     // The rail list: one rail per height, from the template of the added rails - only when the
     // defaults read have a rail list (memo.railingRails); one is never invented, because it is
     // not documented that ChangeDefaultsExt takes one.
-    if (request.railCount.HasValue () && memo.railingRails == nullptr) {
+    if (request.railCount.HasValue () && (!request.writeRailList || memo.railingRails == nullptr)) {
         errors.Push (GS::ObjectState ("field", GS::UniString ("rails.count"), "reason",
-            GS::UniString ("the Railing defaults have no rail list to write the rails into (memo.railingRails of ACAPI_Element_GetDefaultsExt is empty); "
-                           "only the default rail (defDefaultRail: heights[0]) and the template of added rails (defRails: heights[1]) were written")));
+            GS::UniString (!request.writeRailList
+                ? "the rail list is written only with experimental.writeRailList; API_RailingSegmentType has no number of rails, "
+                  "only the default rail (defDefaultRail: heights[0]) and the template of added rails (defRails: heights[1]) were written"
+                : "the Railing defaults have no rail list to write the rails into (memo.railingRails is empty); "
+                  "only the default rail (defDefaultRail: heights[0]) and the template of added rails (defRails: heights[1]) were written")));
     }
-    if (request.railCount.HasValue () && memo.railingRails != nullptr) {
+    if (request.railCount.HasValue () && request.writeRailList && memo.railingRails != nullptr) {
         request.railListWritten = true;
         GS::Array<API_RailingRailType> rails;
         for (UIndex i = 0; i < request.railHeights.GetSize (); ++i) {
@@ -6812,7 +6928,8 @@ GS::Optional<GS::UniString> SetRailingSystemDefaultsCommand::GetInputParametersS
                 "properties": {
                     "name": { "type": "string", "description": "Name of the Favorite." },
                     "folder": { "type": "array", "items": { "type": "string" }, "description": "Optional folder hierarchy in the Favorites palette." },
-                    "overwriteExisting": { "type": "boolean", "description": "Overwrite a Favorite of the same name. The default is false." }
+                    "overwriteExisting": { "type": "boolean", "description": "Overwrite a Favorite of the same name. The default is false." },
+                    "useExtDefaults": { "type": "boolean", "description": "Experimental (not verified live): save the Favorite from ACAPI_Element_GetDefaultsExt with the subelement defaults. The default is false." }
                 },
                 "additionalProperties": false,
                 "required": ["name"]
@@ -6820,6 +6937,16 @@ GS::Optional<GS::UniString> SetRailingSystemDefaultsCommand::GetInputParametersS
             "restoreDefaults": {
                 "type": "boolean",
                 "description": "Put the Railing tool defaults back as they were at the end, e.g. when only the favorite is wanted. The default is false."
+            },
+            "experimental": {
+                "type": "object",
+                "description": "Opt-in steps that are not verified live. Without them the defaults are read and written with ACAPI_Element_GetDefaults / ChangeDefaults (as the API example Do_CreateRailing reads them): the templates of API_RailingType only, so GDL parameters and the number of rails end in notKept with the reason. ACAPI_Element_GetDefaultsExt is not documented for the Railing and crashed Archicad 29 once (GetRailingSystemDefaults, 2026-10-20) - run the spike step by step first.",
+                "properties": {
+                    "useExt": { "type": "boolean", "description": "Read and write the defaults with ACAPI_Element_GetDefaultsExt / ChangeDefaultsExt." },
+                    "subElements": { "type": "boolean", "description": "With useExt: read and write the subelement defaults (APISubElement_Railing*), where the GDL parameters live." },
+                    "writeRailList": { "type": "boolean", "description": "Write the rail list (memo.railingRails, one rail per height) when the defaults read have one." }
+                },
+                "additionalProperties": false
             }
         },
         "additionalProperties": false
@@ -6901,6 +7028,17 @@ GS::ObjectState SetRailingSystemDefaultsCommand::Execute (const GS::ObjectState&
     }
     bool restoreDefaults = false;
     parameters.Get ("restoreDefaults", restoreDefaults);
+    // Opt-in steps (NOT verified live; GetDefaultsExt for the Railing crashed Archicad 29 in the
+    // first GetRailingSystemDefaults): without them the plain Get/ChangeDefaults of the API example.
+    bool useExt = false;
+    bool withSubElements = false;
+    const GS::ObjectState* experimental = parameters.Get ("experimental");
+    if (experimental != nullptr) {
+        experimental->Get ("useExt", useExt);
+        experimental->Get ("subElements", withSubElements);
+        experimental->Get ("writeRailList", request.writeRailList);
+    }
+    withSubElements = withSubElements && useExt;
 
     GS::ObjectState response;
 
@@ -6913,7 +7051,7 @@ GS::ObjectState SetRailingSystemDefaultsCommand::Execute (const GS::ObjectState&
             ACAPI_DisposeElemMemoHdls (&memo);
             DisposeSubElements (subElements);
         });
-        GSErrCode err = GetToolDefaultsWithSubElements (API_RailingID, element, memo, subElements, usedExt);
+        GSErrCode err = GetToolDefaultsWithSubElements (API_RailingID, element, memo, subElements, usedExt, useExt, withSubElements);
         if (err != NoError) {
             response = CreateErrorResponse (err, "Failed to read the Railing tool defaults.");
             return NoError;
@@ -6929,7 +7067,7 @@ GS::ObjectState SetRailingSystemDefaultsCommand::Execute (const GS::ObjectState&
             DisposeSubElements (snapshotSubElements);
         });
         if (restoreDefaults) {
-            GetToolDefaultsWithSubElements (API_RailingID, snapshot, snapshotMemo, snapshotSubElements, snapshotUsedExt);
+            GetToolDefaultsWithSubElements (API_RailingID, snapshot, snapshotMemo, snapshotSubElements, snapshotUsedExt, useExt, withSubElements);
         }
         const auto restore = [&] () -> GSErrCode {
             GS::UniString path;
@@ -6967,7 +7105,7 @@ GS::ObjectState SetRailingSystemDefaultsCommand::Execute (const GS::ObjectState&
             ACAPI_DisposeElemMemoHdls (&checkMemo);
             DisposeSubElements (checkSubElements);
         });
-        err = GetToolDefaultsWithSubElements (API_RailingID, check, checkMemo, checkSubElements, checkUsedExt);
+        err = GetToolDefaultsWithSubElements (API_RailingID, check, checkMemo, checkSubElements, checkUsedExt, useExt, withSubElements);
         RailingFieldResult result;
         for (const GS::ObjectState& item : writeErrors) {
             result.notKept.Push (item);
@@ -7001,7 +7139,9 @@ GS::ObjectState SetRailingSystemDefaultsCommand::Execute (const GS::ObjectState&
             favoriteOS->Get ("folder", folderParts);
             bool overwriteExisting = false;
             favoriteOS->Get ("overwriteExisting", overwriteExisting);
-            response.Add ("favorite", SaveToolDefaultsAsFavorite (favoriteName, API_RailingID, folderParts, overwriteExisting));
+            bool useExtDefaults = false;
+            favoriteOS->Get ("useExtDefaults", useExtDefaults);
+            response.Add ("favorite", SaveToolDefaultsAsFavorite (favoriteName, API_RailingID, folderParts, overwriteExisting, useExtDefaults));
         }
 
         if (restoreDefaults) {

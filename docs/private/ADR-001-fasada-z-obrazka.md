@@ -362,6 +362,12 @@ Zmeny (Tapir 1.7.2, private):
 - `CreateWalls.absoluteZCoordinate` (absolútna výška ako ostatné Create*; `zCoordinate` nezmenené).
 Akceptácia: `private-tests/test_railing_cw_defaults.py` (5 tyčí, sklo, plech, favorit, povrch CW, obnova predvolieb). Riziko: zmena aplikácie favoritov CW/zábradlí → po inštalácii zopakovať `test_i5_i6_cpp.py` a `test_pilot_a.py`.
 
+**Pád 2026-10-20 (b565598):** prvé volanie `GetRailingSystemDefaults` v spiku zhodilo ArchiCAD 29 (ConnectionResetError, GSReport). V b565598 bolo prvé API volanie príkazu `ACAPI_Element_GetDefaultsExt (API_RailingID, &memo, 0, nullptr)` – DevKit ho pre zábradlie nikde nepoužíva (Do_CreateRailing: len `ACAPI_Element_GetDefaults`) a dokumentácia Railing medzi typmi Ext neuvádza → **najpravdepodobnejšia príčina**. Ďalší kandidáti v poradí behu: `BMGetPtrSize` na memo poliach, ktoré vrátilo Ext (nemusia byť BM bloky), `ACAPI_LibraryPart_Search` s vyrobeným `ownUnID`, `GetDefaultsExt` s jedným `API_SubElement` Railing* (20 druhov × s/bez typu v hlavičke). Presné miesto ukáže GSReport (zásobník) alebo krokový spike. Oprava (commit nižšie): **všetko rizikové je opt-in, default = overená stará cesta**:
+- `GetRailingSystemDefaults`: default len `ACAPI_Element_GetDefaults` + šablóny (symboly len ako GUID) + memo polia len ako „null/set“; prepínače `readMemoArrays`, `resolveLibraryPartNames`, `useExt`, `probeSubElements` (+ `subElementKinds`, `retryWithoutType`, `includeParameters`), `favoriteSubElements`.
+- `SetRailingSystemDefaults`: default Get/ChangeDefaults; `experimental.useExt`, `experimental.subElements`, `experimental.writeRailList`; `favorite.useExtDefaults`.
+- `CreateRailings`/`CreateCurtainWalls`: `useExtDefaults` per položka (favorit cez Ext so subElements, CW predvoľby cez Ext); `CreateFavoritesFromDefaults.useExtDefaults`; `SetCurtainWallSystemDefaults.readBackExt`, `surfaceRetryBySubElement`, `favorite.useExtDefaults` (`surfaceDiagnostics` vždy – obe čítania CW sú zdokumentované).
+- Spike `spike_railing_defaults.py` ide po krokoch (`--list`, `--from`, `--only`), pred každým volaním zapíše do `%TEMP%/spike_railing_defaults.jsonl` riadok „started“ (fsync) → posledný „started“ bez odpovede = krok, ktorý ArchiCAD zhodil. Akceptačný test: bez `--experimental` len overené cesty.
+
 
 ### I8 – prevzatie G2 (2026-10-20) ✔
 Architekt prijal G2 pre všetky 4 fasády (M015_L1, M062_L2, M016_L2, HOF_B) s výhradami podľa `C:\FacadePilot\out\G2_prevzatie.md` a `kontrola_G2_kolo2.md` (stav po dočistení, commit b84fbe8; 3D zábery `facade/views3d`, 609e12f).

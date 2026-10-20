@@ -7821,7 +7821,7 @@ GS::ObjectState ModifyMeshesCommand::Execute (const GS::ObjectState& parameters,
 // the per-item "favoriteName" support of CreateElementsCommandBase. Windows and Doors keep
 // their own variant above: they are markered types that need ChangeDefaultsExt with the
 // favorite's marker sub-element, and their create path clones the tool defaults itself.
-GSErrCode ApplyFavoriteToElementDefaults (const GS::UniString& favoriteName, API_ElemTypeID expectedTypeId)
+GSErrCode ApplyFavoriteToElementDefaults (const GS::UniString& favoriteName, API_ElemTypeID expectedTypeId, bool useExt)
 {
     if (favoriteName.IsEmpty ()) {
         return NoError;
@@ -7835,7 +7835,7 @@ GSErrCode ApplyFavoriteToElementDefaults (const GS::UniString& favoriteName, API
     favorite.elemCategoryValues.New ();
     // A Curtain Wall or Railing favorite keeps a part of its settings in subelement defaults
     // (the rails, panels, balusters... of a Railing), which only ChangeDefaultsExt applies.
-    const bool extTool = HasExtToolDefaults (expectedTypeId);
+    const bool extTool = useExt && HasExtToolDefaults (expectedTypeId);
     if (extTool) {
         favorite.subElements.New ();
     }

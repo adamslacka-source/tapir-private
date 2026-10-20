@@ -3254,6 +3254,10 @@ var gCommands = [{
                         "type": "string",
                         "description": "Optional name of a favorite to base the new element on. Its settings are applied first, then the explicitly given fields override them."
                     },
+                    "useExtDefaults": {
+                        "type": "boolean",
+                        "description": "Experimental (not verified live): apply the favorite with ACAPI_Element_ChangeDefaultsExt including its subelement defaults and read the Curtain Wall defaults with ACAPI_Element_GetDefaultsExt (e.g. for the class surfaces). The default is false (the verified plain calls)."
+                    },
                     "coordinates": {
                         "type": "array",
                         "description": "The 2D coordinates of the reference line of the curtain wall on the floor plan. Each pair of consecutive coordinates becomes one straight segment, so two coordinates give a single-segment curtain wall.",
@@ -3361,6 +3365,10 @@ var gCommands = [{
                         "type": "string",
                         "enum": ["FixedLength", "BestDivision"],
                         "description": "Optional way the pattern is laid along a segment, as in ModifyRailingDetails."
+                    },
+                    "useExtDefaults": {
+                        "type": "boolean",
+                        "description": "Experimental (not verified live): apply the favorite with ACAPI_Element_ChangeDefaultsExt including its subelement defaults (rails, panels, posts...). ACAPI_Element_GetDefaultsExt is not documented for the Railing and crashed Archicad 29 in GetRailingSystemDefaults. The default is false (the verified ACAPI_Element_ChangeDefaults)."
                     }
                 },
                 "additionalProperties": false,
@@ -3633,7 +3641,8 @@ var gCommands = [{
                 "properties": {
                     "name": { "type": "string", "description": "Name of the Favorite." },
                     "folder": { "type": "array", "items": { "type": "string" }, "description": "Optional folder hierarchy in the Favorites palette." },
-                    "overwriteExisting": { "type": "boolean", "description": "Overwrite a Favorite of the same name. The default is false." }
+                    "overwriteExisting": { "type": "boolean", "description": "Overwrite a Favorite of the same name. The default is false." },
+                    "useExtDefaults": { "type": "boolean", "description": "Experimental (not verified live): read the defaults for the Favorite with ACAPI_Element_GetDefaultsExt. The default is false." }
                 },
                 "additionalProperties": false,
                 "required": ["name"]
@@ -3641,6 +3650,14 @@ var gCommands = [{
             "restoreDefaults": {
                 "type": "boolean",
                 "description": "Put the Curtain Wall tool defaults back as they were at the end, e.g. when only the favorite is wanted. The default is false (the defaults keep the change)."
+            },
+            "readBackExt": {
+                "type": "boolean",
+                "description": "Experimental (not verified live): read the defaults back for notKept with ACAPI_Element_GetDefaultsExt instead of ACAPI_Element_GetDefaults. The default is false."
+            },
+            "surfaceRetryBySubElement": {
+                "type": "boolean",
+                "description": "Experimental (not verified live): when a class surface was not kept, write the class once more through its subelement default (APISubElement_CWFrameClass / CWPanelClass). The default is false; surfaceDiagnostics are reported either way."
             }
         },
         "additionalProperties": false
@@ -3877,18 +3894,44 @@ var gCommands = [{
                 "description": "Reads the Railing tool defaults as the API gives them: the node and segment templates (posts, inner posts, pattern, panel, balusters, top rail, handrails, rails) with their library parts, the memo, every Railing subelement default ACAPI_Element_GetDefaultsExt gives (with their GDL parameters on request) and optionally the same of a Railing Favorite. A diagnostic command, also used to check that the defaults were restored.",
                 "inputScheme": {
         "type": "object",
+        "description": "Every step beyond the plain ACAPI_Element_GetDefaults read (the one the API example Do_CreateRailing uses) is opt-in, so the probe can be run step by step: the first version, which did all of them, crashed Archicad 29.",
         "properties": {
-            "favoriteName": {
-                "type": "string",
-                "description": "Optional name of a Railing Favorite to read (its settings, memo and subelement defaults) besides the tool defaults."
-            },
-            "includeParameters": {
+            "readMemoArrays": {
                 "type": "boolean",
-                "description": "List the GDL parameters (name, type, description, value) of every subelement default. The default is false (only their number)."
+                "description": "Count the items of the railing memo arrays of the defaults (BMGetPtrSize) and list the rails, handrails, panels, baluster sets and patterns in them. The default is false: only whether each array pointer is set."
+            },
+            "resolveLibraryPartNames": {
+                "type": "boolean",
+                "description": "Look up the library part name of every subelement symbol (ACAPI_LibraryPart_Search by unique id). The default is false: only the symbol guids."
+            },
+            "useExt": {
+                "type": "boolean",
+                "description": "Also read the defaults with ACAPI_Element_GetDefaultsExt (Railing, memo, no subelements), which the API does not document for the Railing. The default is false."
             },
             "probeSubElements": {
                 "type": "boolean",
-                "description": "Ask Archicad for every kind of Railing subelement default one by one (ACAPI_Element_GetDefaultsExt with one API_SubElement, with and without the subelement type in its header) and report the error codes. The default is true."
+                "description": "Ask ACAPI_Element_GetDefaultsExt for Railing subelement defaults one by one (one API_SubElement per call, its element type in the header). Not documented for the Railing. The default is false."
+            },
+            "subElementKinds": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "With probeSubElements: only these kinds (Node, Segment, Post, InnerPost, Rail, AdditionalRail, Handrail, AdditionalHandrail, Toprail, Panel, Pattern, BalusterSet, Baluster, RailEnd, HandrailEnd, ToprailEnd, RailConnection, HandrailConnection, ToprailConnection, Finish). Without it all kinds."
+            },
+            "retryWithoutType": {
+                "type": "boolean",
+                "description": "With probeSubElements: when a call fails, repeat it with an empty subelement header. The default is false."
+            },
+            "includeParameters": {
+                "type": "boolean",
+                "description": "List the GDL parameters (name, type, description, value) of every subelement default read. The default is false (only their number)."
+            },
+            "favoriteName": {
+                "type": "string",
+                "description": "Optional name of a Railing Favorite to read (ACAPI_Favorite_Get with its memo)."
+            },
+            "favoriteSubElements": {
+                "type": "boolean",
+                "description": "With favoriteName: also ask ACAPI_Favorite_Get for the Favorite's subElements. The default is false."
             }
         },
         "additionalProperties": false
@@ -3897,13 +3940,15 @@ var gCommands = [{
         "type": "object",
         "description": "The Railing tool defaults as the API gives them. A diagnostic command: the structure follows the API structures (API_RailingType, API_ElementMemo, API_SubElement) and may grow.",
         "properties": {
-            "getDefaultsExt": { "type": "object", "description": "ACAPI_Element_GetDefaultsExt (Railing, memo, no subelements): ok and the error code when it failed." },
+            "steps": { "type": "array", "items": { "type": "string" }, "description": "The steps that ran, in order." },
             "getDefaults": { "type": "object", "description": "ACAPI_Element_GetDefaults (Railing, memo): ok and the error code when it failed." },
-            "railing": { "type": "object", "description": "API_RailingType of the defaults (Ext when it worked): node and segment templates with the library part of each subelement." },
-            "memo": { "type": "object", "description": "The memo of the Ext call: the number of items of every railing memo array and the rails, handrails, panels, baluster sets and patterns in it." },
-            "memoBasic": { "type": "object", "description": "The same for the memo of ACAPI_Element_GetDefaults." },
-            "subElementProbe": { "type": "array", "items": { "type": "object" }, "description": "One item per kind of Railing subelement default: kind, defaultDefault, errorWithType, errorWithoutType and the subelement default when one of the calls worked." },
-            "favorite": { "type": "object", "description": "With favoriteName: the Favorite's railing, memo and subElements as ACAPI_Favorite_Get gives them, or its error." }
+            "railing": { "type": "object", "description": "API_RailingType of the defaults (ACAPI_Element_GetDefaults): node and segment templates with the symbol of each subelement." },
+            "memo": { "type": "object", "description": "The railing memo arrays of ACAPI_Element_GetDefaults: pointers set or (readMemoArrays) their counts and items." },
+            "getDefaultsExt": { "type": "object", "description": "With useExt: ACAPI_Element_GetDefaultsExt (Railing, memo, no subelements)." },
+            "railingExt": { "type": "object" },
+            "memoExt": { "type": "object" },
+            "subElementProbe": { "type": "array", "items": { "type": "object" }, "description": "With probeSubElements: one item per kind: kind, defaultDefault, errorWithType, errorWithoutType and the subelement default when a call worked." },
+            "favorite": { "type": "object", "description": "With favoriteName: the Favorite's railing, memo and (favoriteSubElements) subElements, or its error." }
         },
         "additionalProperties": true
     }
@@ -4134,7 +4179,8 @@ var gCommands = [{
                 "properties": {
                     "name": { "type": "string", "description": "Name of the Favorite." },
                     "folder": { "type": "array", "items": { "type": "string" }, "description": "Optional folder hierarchy in the Favorites palette." },
-                    "overwriteExisting": { "type": "boolean", "description": "Overwrite a Favorite of the same name. The default is false." }
+                    "overwriteExisting": { "type": "boolean", "description": "Overwrite a Favorite of the same name. The default is false." },
+                    "useExtDefaults": { "type": "boolean", "description": "Experimental (not verified live): save the Favorite from ACAPI_Element_GetDefaultsExt with the subelement defaults. The default is false." }
                 },
                 "additionalProperties": false,
                 "required": ["name"]
@@ -4142,6 +4188,16 @@ var gCommands = [{
             "restoreDefaults": {
                 "type": "boolean",
                 "description": "Put the Railing tool defaults back as they were at the end, e.g. when only the favorite is wanted. The default is false."
+            },
+            "experimental": {
+                "type": "object",
+                "description": "Opt-in steps that are not verified live. Without them the defaults are read and written with ACAPI_Element_GetDefaults / ChangeDefaults (as the API example Do_CreateRailing reads them): the templates of API_RailingType only, so GDL parameters and the number of rails end in notKept with the reason. ACAPI_Element_GetDefaultsExt is not documented for the Railing and crashed Archicad 29 once (GetRailingSystemDefaults, 2026-10-20) - run the spike step by step first.",
+                "properties": {
+                    "useExt": { "type": "boolean", "description": "Read and write the defaults with ACAPI_Element_GetDefaultsExt / ChangeDefaultsExt." },
+                    "subElements": { "type": "boolean", "description": "With useExt: read and write the subelement defaults (APISubElement_Railing*), where the GDL parameters live." },
+                    "writeRailList": { "type": "boolean", "description": "Write the rail list (memo.railingRails, one rail per height) when the defaults read have one." }
+                },
+                "additionalProperties": false
             }
         },
         "additionalProperties": false
@@ -6931,6 +6987,10 @@ var gCommands = [{
                         "overwriteExisting": {
                             "type": "boolean",
                             "description": "Optional. When a Favorite with this name exists, overwrite it with the defaults instead of returning an error. The default is false."
+                        },
+                        "useExtDefaults": {
+                            "type": "boolean",
+                            "description": "Experimental (not verified live), Curtain Wall and Railing only: read the defaults with ACAPI_Element_GetDefaultsExt and save a Railing with its subelement defaults (rails, panels, posts...). The default is false (ACAPI_Element_GetDefaults)."
                         }
                     },
                     "additionalProperties": false,

@@ -4,6 +4,13 @@ Curtain Wall class surfaces of SetCurtainWallSystemDefaults (ADR-001 nález I5).
 
     python test_railing_cw_defaults.py                 # Archicad on port 19723
     python test_railing_cw_defaults.py --port 19724
+    python test_railing_cw_defaults.py --experimental      # + the opt-in Ext / subelement paths
+
+Run spike_railing_defaults.py first (step by step, read only): the first GetRailingSystemDefaults
+crashed Archicad 29 on ACAPI_Element_GetDefaultsExt for the Railing (or right after it). Without
+--experimental only the verified plain calls are used (ACAPI_Element_GetDefaults / ChangeDefaults,
+Favorites without subElements) - then the GDL parameters and the number of rails are expected in
+notKept. Use --experimental only for the steps the spike passed.
 
 Needs Archicad with the Tapir add-on built from this commit (run spike_railing_defaults.py first:
 it is read only and says what the Railing defaults carry). Standard library only. Every test
@@ -59,6 +66,7 @@ results: list[tuple[str, bool, str]] = []
 created_elements: list[dict] = []
 created_favorites: list[str] = []
 URL = ''
+EXPERIMENTAL = False
 
 
 def check (name: str, ok: bool, detail: str = '') -> bool:
@@ -178,10 +186,12 @@ def railing_signature (railing_id: dict) -> dict:
 
 
 def create_railing (favorite: str, offset: float) -> dict | None:
-    created = tapir ('CreateRailings', {'railingsData': [{
-        'favoriteName': favorite,
-        'coordinates': [{'x': X0 + offset, 'y': 0.0}, {'x': X0 + offset + RAIL_LENGTH, 'y': 0.0}],
-        'zCoordinate': 0.0}]})
+    item = {'favoriteName': favorite,
+            'coordinates': [{'x': X0 + offset, 'y': 0.0}, {'x': X0 + offset + RAIL_LENGTH, 'y': 0.0}],
+            'zCoordinate': 0.0}
+    if EXPERIMENTAL:
+        item['useExtDefaults'] = True
+    created = tapir ('CreateRailings', {'railingsData': [item]})
     ids = element_ids (created)
     if not check (f"railing from '{favorite}' created", len (ids) == 1, short (created)):
         return None
@@ -189,12 +199,22 @@ def create_railing (favorite: str, offset: float) -> dict | None:
 
 
 def base_railing_input () -> dict:
-    return {
+    parameters = {
         'segment': {'height': 1.0},
         'posts': {'spacing': 1.5, 'distribution': 'BestDivision'},
         'handrail': {'visible': True, 'height': 1.0},
         'restoreDefaults': True,
     }
+    if EXPERIMENTAL:
+        parameters['experimental'] = {'useExt': True, 'subElements': True, 'writeRailList': True}
+    return parameters
+
+
+def favorite_input (name: str) -> dict:
+    favorite = {'name': name, 'overwriteExisting': True}
+    if EXPERIMENTAL:
+        favorite['useExtDefaults'] = True
+    return favorite
 
 
 def panel_material_parameter (probe: dict) -> str | None:
@@ -213,7 +233,7 @@ def test_r1_rails () -> None:
     parameters.update ({
         'rails': {'count': RAILS, 'bottom': RAIL_BOTTOM, 'top': RAIL_TOP, 'visible': True},
         'infill': {'kind': 'none'},
-        'favorite': {'name': FAV_RAILS, 'overwriteExisting': True},
+        'favorite': favorite_input (FAV_RAILS),
     })
     response = tapir ('SetRailingSystemDefaults', parameters)
     if not check ('R1 SetRailingSystemDefaults (5 rails) answers', 'kept' in response, short (response, 600)):
@@ -241,7 +261,8 @@ def test_r1_rails () -> None:
 
 
 def test_r2_r3_panels () -> tuple[dict | None, str | None]:
-    probe = tapir ('GetRailingSystemDefaults', {'includeParameters': True})
+    probe = tapir ('GetRailingSystemDefaults', {'includeParameters': True, 'useExt': True, 'probeSubElements': True,
+                                                'subElementKinds': ['Panel']}) if EXPERIMENTAL else {}
     material_param = panel_material_parameter (probe)
     glass = surface (r'glass|sklo|skl')
     metal = surface (r'steel|ocel|oce|metal|kov|alumin|zinc|plech')
@@ -254,7 +275,7 @@ def test_r2_r3_panels () -> tuple[dict | None, str | None]:
         panel: dict = {}
         if material_param and surf:
             panel['parameters'] = [{'name': material_param, 'value': surf['name']}]
-        parameters.update ({'infill': {'kind': 'panel', 'panel': panel}, 'favorite': {'name': fav, 'overwriteExisting': True}})
+        parameters.update ({'infill': {'kind': 'panel', 'panel': panel}, 'favorite': favorite_input (fav)})
         response = tapir ('SetRailingSystemDefaults', parameters)
         if not check (f'{label} SetRailingSystemDefaults answers', 'kept' in response, short (response, 600)):
             continue
@@ -307,10 +328,11 @@ def test_c1_cw_surface () -> None:
     if not check ('C1 two surfaces in the project', frame_surface is not None and panel_surface is not None, ''):
         return
     info (f"C1 frame surface {frame_surface['name']} ({frame_surface['index']}), panel surface {panel_surface['name']} ({panel_surface['index']})")
-    first = tapir ('SetCurtainWallSystemDefaults', {
+    cw_flags = {'readBackExt': True, 'surfaceRetryBySubElement': True} if EXPERIMENTAL else {}
+    first = tapir ('SetCurtainWallSystemDefaults', dict ({
         'frameClasses': [{'name': CW_FRAME, 'width': 0.06, 'depth': 0.15, 'offset': 0.05, 'surfaceName': frame_surface['name']}],
         'panelClasses': [{'name': CW_PANEL, 'thickness': 0.024, 'surfaceName': panel_surface['name']}],
-        'restoreDefaults': True})
+        'restoreDefaults': True}, **cw_flags))
     if not check ('C1 SetCurtainWallSystemDefaults answers', 'frameClasses' in first, short (first, 600)):
         return
     for diag in first.get ('surfaceDiagnostics', []):
@@ -322,19 +344,21 @@ def test_c1_cw_surface () -> None:
     if not check ('C1 class indices', CW_FRAME in index and CW_PANEL in index, short (index)):
         return
 
-    second = tapir ('SetCurtainWallSystemDefaults', {
+    second = tapir ('SetCurtainWallSystemDefaults', dict ({
         'frameClasses': [{'name': CW_FRAME, 'width': 0.06, 'depth': 0.15, 'offset': 0.05, 'surfaceName': frame_surface['name']}],
         'panelClasses': [{'name': CW_PANEL, 'thickness': 0.024, 'surfaceName': panel_surface['name']}],
         'primaryPattern': {'sizes': [1.5], 'logic': 'FixedSizes'},
         'secondaryPattern': {'sizes': [3.0], 'logic': 'FixedSizes'},
         'cells': [{'columnIndex': 0, 'rowIndex': 0, 'panelClassIndex': index[CW_PANEL],
                    'leftFrameClassIndex': index[CW_FRAME], 'bottomFrameClassIndex': index[CW_FRAME]}],
-        'favorite': {'name': FAV_CW, 'overwriteExisting': True},
-        'restoreDefaults': True})
+        'favorite': favorite_input (FAV_CW),
+        'restoreDefaults': True}, **cw_flags))
     check ('C1 favourite saved', remember_favorite (second, FAV_CW), short (second.get ('favorite')))
-    cw = tapir ('CreateCurtainWalls', {'curtainWallsData': [{
-        'favoriteName': FAV_CW, 'coordinates': [{'x': X0 + 100.0, 'y': 0.0}, {'x': X0 + 106.0, 'y': 0.0}],
-        'zCoordinate': 0.0, 'height': 3.0}]})
+    cw_item = {'favoriteName': FAV_CW, 'coordinates': [{'x': X0 + 100.0, 'y': 0.0}, {'x': X0 + 106.0, 'y': 0.0}],
+               'zCoordinate': 0.0, 'height': 3.0}
+    if EXPERIMENTAL:
+        cw_item['useExtDefaults'] = True
+    cw = tapir ('CreateCurtainWalls', {'curtainWallsData': [cw_item]})
     ids = element_ids (cw)
     if not check ('C1 curtain wall from the favourite created', len (ids) == 1, short (cw)):
         return
@@ -354,8 +378,9 @@ def test_c1_cw_surface () -> None:
 
 
 def railing_defaults_state () -> dict:
-    state = tapir ('GetRailingSystemDefaults', {'probeSubElements': True, 'includeParameters': True})
-    return {k: state.get (k) for k in ('railing', 'memo', 'memoBasic', 'subElementProbe')}
+    parameters = {'useExt': True, 'probeSubElements': True, 'includeParameters': True} if EXPERIMENTAL else {}
+    state = tapir ('GetRailingSystemDefaults', parameters)
+    return {k: state.get (k) for k in ('railing', 'memo', 'railingExt', 'memoExt', 'subElementProbe')}
 
 
 def cleanup (before: dict) -> None:
@@ -376,12 +401,14 @@ def cleanup (before: dict) -> None:
 
 
 def main () -> int:
-    global URL
+    global URL, EXPERIMENTAL
     parser = argparse.ArgumentParser ()
     parser.add_argument ('--host', default='http://127.0.0.1')
     parser.add_argument ('--port', type=int, default=19723)
+    parser.add_argument ('--experimental', action='store_true', help='also use the opt-in Ext / subelement paths (run the spike first)')
     args = parser.parse_args ()
     URL = f'{args.host}:{args.port}'
+    EXPERIMENTAL = args.experimental
 
     try:
         version = tapir ('GetAddOnVersion')

@@ -1160,6 +1160,10 @@ GS::Optional<GS::UniString> CreateFavoritesFromDefaultsCommand::GetInputParamete
                         "overwriteExisting": {
                             "type": "boolean",
                             "description": "Optional. When a Favorite with this name exists, overwrite it with the defaults instead of returning an error. The default is false."
+                        },
+                        "useExtDefaults": {
+                            "type": "boolean",
+                            "description": "Experimental (not verified live), Curtain Wall and Railing only: read the defaults with ACAPI_Element_GetDefaultsExt and save a Railing with its subelement defaults (rails, panels, posts...). The default is false (ACAPI_Element_GetDefaults)."
                         }
                     },
                     "additionalProperties": false,
@@ -1244,7 +1248,8 @@ static GS::ObjectState CreateFavoriteResult (const GS::UniString& name, const ch
 // are read with the Ext call, and a Railing with its subelement defaults (rails, panels, posts...),
 // which go into the Favorite's subElements; when Archicad refuses the Favorite with them it is
 // saved without them and the result says so (subElementsSaved: false).
-GS::ObjectState SaveToolDefaultsAsFavorite (const GS::UniString& name, API_ElemTypeID typeId, const GS::Array<GS::UniString>& folderParts, bool overwriteExisting)
+GS::ObjectState SaveToolDefaultsAsFavorite (const GS::UniString& name, API_ElemTypeID typeId, const GS::Array<GS::UniString>& folderParts, bool overwriteExisting,
+                                            bool useExtDefaults)
 {
     if (name.IsEmpty ()) {
         return CreateErrorResponse (APIERR_BADNAME, "Missing or empty 'name'.");
@@ -1258,10 +1263,10 @@ GS::ObjectState SaveToolDefaultsAsFavorite (const GS::UniString& name, API_ElemT
     API_Favorite favorite (name);
     favorite.memo.New ();
     GSErrCode err = NoError;
-    if (HasExtToolDefaults (typeId)) {
+    if (useExtDefaults && HasExtToolDefaults (typeId)) {
         GS::Array<API_SubElement> subElements;
         bool usedExt = false;
-        err = GetToolDefaultsWithSubElements (typeId, favorite.element, favorite.memo.Get (), subElements, usedExt);
+        err = GetToolDefaultsWithSubElements (typeId, favorite.element, favorite.memo.Get (), subElements, usedExt, true, true);
         if (!subElements.IsEmpty ()) {
             favorite.subElements = subElements;
         }
@@ -1372,7 +1377,10 @@ GS::ObjectState CreateFavoritesFromDefaultsCommand::Execute (const GS::ObjectSta
             GS::Array<GS::UniString> folderParts;
             item.Get ("folder", folderParts);
 
-            results (SaveToolDefaultsAsFavorite (name, typeId, folderParts, overwriteExisting));
+            bool useExtDefaults = false;
+            item.Get ("useExtDefaults", useExtDefaults);
+
+            results (SaveToolDefaultsAsFavorite (name, typeId, folderParts, overwriteExisting, useExtDefaults));
         }
 
         return NoError;

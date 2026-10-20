@@ -1259,7 +1259,8 @@ bool HasExtToolDefaults (API_ElemTypeID typeId)
     return typeId == API_CurtainWallID || typeId == API_RailingID;
 }
 
-GSErrCode GetRailingSubElementDefault (const RailingSubElementKind& kind, API_SubElement& subElement, GSErrCode& error, GSErrCode& errorWithoutType)
+GSErrCode GetRailingSubElementDefault (const RailingSubElementKind& kind, API_SubElement& subElement, GSErrCode& error, GSErrCode& errorWithoutType,
+                                       bool retryWithoutType)
 {
     API_Element railing = {};
     SetElemHeadType (railing.header, API_RailingID);
@@ -1272,6 +1273,11 @@ GSErrCode GetRailingSubElementDefault (const RailingSubElementKind& kind, API_Su
     errorWithoutType = NoError;
     if (error == NoError) {
         return NoError;
+    }
+    if (!retryWithoutType) {
+        ACAPI_DisposeElemMemoHdls (&subElement.memo);
+        subElement = {};
+        return error;
     }
 
     ACAPI_DisposeElemMemoHdls (&subElement.memo);
@@ -1288,14 +1294,15 @@ GSErrCode GetRailingSubElementDefault (const RailingSubElementKind& kind, API_Su
     return errorWithoutType;
 }
 
-GSErrCode GetToolDefaultsWithSubElements (API_ElemTypeID typeId, API_Element& element, API_ElementMemo& memo, GS::Array<API_SubElement>& subElements, bool& usedExt)
+GSErrCode GetToolDefaultsWithSubElements (API_ElemTypeID typeId, API_Element& element, API_ElementMemo& memo, GS::Array<API_SubElement>& subElements,
+                                          bool& usedExt, bool tryExt, bool withSubElements)
 {
     element = {};
     memo = {};
     SetElemHeadType (element.header, typeId);
     usedExt = false;
     GSErrCode err = APIERR_BADID;
-    if (HasExtToolDefaults (typeId)) {
+    if (tryExt && HasExtToolDefaults (typeId)) {
         err = ACAPI_Element_GetDefaultsExt (&element, &memo, 0, nullptr);
         usedExt = err == NoError;
     }
@@ -1310,12 +1317,12 @@ GSErrCode GetToolDefaultsWithSubElements (API_ElemTypeID typeId, API_Element& el
         }
     }
 
-    if (typeId == API_RailingID && usedExt) {
+    if (withSubElements && typeId == API_RailingID && usedExt) {
         for (const RailingSubElementKind& kind : GetRailingSubElementKinds ()) {
             API_SubElement subElement = {};
             GSErrCode withType = NoError;
             GSErrCode withoutType = NoError;
-            if (GetRailingSubElementDefault (kind, subElement, withType, withoutType) == NoError) {
+            if (GetRailingSubElementDefault (kind, subElement, withType, withoutType, false) == NoError) {
                 subElements.Push (subElement);
             }
         }
