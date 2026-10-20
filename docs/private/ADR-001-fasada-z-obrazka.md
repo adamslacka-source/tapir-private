@@ -346,3 +346,9 @@ Negatívne / náklady:
 - T2 `SetCurtainWallSystemDefaults`: triedy rámov a panelov zo vstupu, parapety/sklo podľa buniek, Favorite `FS cw.*` dá identický CW. Typ sklo/nepriehľadný API nemá – rozlišuje sa materiálom a povrchom.
 - T3 `ModifyRailingDetails`: výška segmentu áno. Rozostup stĺpikov na **existujúcom** zábradlí zo šablóny nie (chýba podprvok RailingPattern) – známe obmedzenie; pipeline zábradlia vždy stavia nanovo cez `CreateRailings` s `height`/`postSpacing`, čo funguje. Typ výplne a profil madla sa nemenia (záloha R1: základné Favorites).
 - T9: nosník a stĺp majú 3D geometriu. Bug `SetParamValueBool` opravený.
+
+
+### I8 – prevzatie G2 (2026-10-20) ✔
+Architekt prijal G2 pre všetky 4 fasády (M015_L1, M062_L2, M016_L2, HOF_B) s výhradami podľa `C:\FacadePilot\out\G2_prevzatie.md` a `kontrola_G2_kolo2.md` (stav po dočistení, commit b84fbe8; 3D zábery `facade/views3d`, 609e12f).
+Rozhodnutia: podlažia pilota A ostávajú jedna sada pre celú ulicu (N7/Q1 uzavreté); Favorites zábradlí s vodorovnými tyčami pripraví architekt ručne (R1) – po ich dodaní ich pipeline použije a automatika mení len výšku a trasu.
+Otvorené mimo G2: C++ medzery (povrch tried CW, CW s rôznym vzorom po stĺpcoch, stena so štítom/oblúkom, jednotná výška z v CreateWalls), nález č. 16, prahy merania overené len na fotkách Senca.
