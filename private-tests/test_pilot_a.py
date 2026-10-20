@@ -126,10 +126,22 @@ def offline() -> dict:
     check("adapter: M016 - side plane S joins the front at b (nárožie), corner pilaster with an L profile wraps it",
           m016["reference"].get("joins") == {"b": "S"} and m016["planes"][0]["joins"] == {"a": "F"}
           and any(it["id"] == "K1" and it.get("wrap") == "b" for it in m016["linear"]))
+    # G2 findings 3-4 (2026-10-19): the photo shows straight jambs of the door up to the head 9.09 and a separate lunette
+    # in a segmental arch above it (was: one arched door, springing 8.00 from domy.py) -> rectangular door + lunette = infill
+    # of the segmental ring A1 (FS_ArchGable 1.1) springing on the door head, threshold 6.78 = top of balcony BK2
     o6 = next(o for o in m016["openings"] if o["id"] == "O6")
-    check("M016 gable: arched door O6 (Arch Double Door 27) with its head in the arch gable A1 (FS_ArchGable)",
-          o6.get("head_in") == "A1" and m016["systems"][o6["system"]]["libpart"] == "Arch Double Door 27"
-          and m016["systems"][m016["objects"][0]["system"]]["template"] == "FS_ArchGable")
+    a1 = m016["objects"][0]
+    import gdl_expect
+    pa1 = {k: v["v"] for k, v in a1["params"].items()}
+    z2 = next(z for z in m016["zones"] if z["id"] == "Z2")
+    check("M016 gable: rectangular door O6 (Double Door with Transom 27) 6.78-9.09 from the photo, lunette = infill of the "
+          "segmental ring A1 (FS_ArchGable 1.1) springing on the door head = top of the rizalit Z2",
+          not o6.get("head_in") and m016["systems"][o6["system"]]["libpart"] == "Double Door with Transom 27"
+          and o6["rect"]["v"][2:] == [6.78, 9.09] and o6["rect"]["conf"] == "meranie"
+          and m016["systems"][a1["system"]]["template"] == "FS_ArchGable" and a1.get("over") == "O6" and pa1["bInfill"] is True
+          and abs(a1["origin"]["v"][1] + pa1["vSpring"] - 9.09) < 1e-3 and z2["rect"]["v"][3] == 9.09
+          and abs(gdl_expect.arch_chord(pa1) - 1.2) < 0.01,
+          f"O6 {o6['rect']['v']} {o6['system']}, A1 centre v {a1['origin']['v'][1]}, vSpring {pa1.get('vSpring')}, rIn {pa1['rIn']}, Z2 top {z2['rect']['v'][3]}")
 
     # validator rules of the zones (negative cases)
     import copy
@@ -147,8 +159,12 @@ def offline() -> dict:
     check("validator: a corner profile without wrap / beyond the corner is an error",
           any("corner profile" in e or "outside 0..L" in e for e in validate(bad)[0]))
     bad = copy.deepcopy(specs["M016_L2"])
-    bad["objects"][0]["params"]["rIn"]["v"] = 1.1
-    check("validator: arched head of O6 must fit the ring of A1 (rIn = half width)", any("half width = rIn" in e for e in validate(bad)[0]))
+    bad["objects"][0]["params"]["rIn"]["v"] = 1.3
+    check("validator: the lunette of A1 must fit the door O6 under it (inner chord half width = half width of O6)",
+          any("inner chord half width" in e for e in validate(bad)[0]))
+    bad = copy.deepcopy(specs["M016_L2"])
+    bad["objects"][0]["origin"]["v"][1] += 0.05
+    check("validator: the springing of A1 (centre + vSpring) must be the top of the zone Z2", any("springing" in e and "not on top of zone" in e for e in validate(bad)[0]))
     return offline_i6(specs)
 
 
@@ -362,6 +378,30 @@ def live_house(house: str, spec: dict, port: int) -> None:
         check(f"P10 {house} {r_['id']}: baluster spacing of the spec the favourite cannot carry is reported as an EXCEPTION (R1)",
               bool(exc) == need, f"spec {sp['baluster_spacing']['v']}, favourite {sp['favorite_baluster_spacing']}, exceptions {len(exc)}")
 
+    # P11 (G2 finding 11): project stories from the spec, every element on the story of its foot, walls top-linked
+    from build import Home, plan
+    stories = {x["index"]: x["level"] for x in ac.tapir("GetStories")["stories"]}
+    want_st = {x["floorIndex"]: round(spec["reference"]["z0"]["v"] + x["level"]["v"], 4) for x in spec["stories"]}
+    check(f"P11 {house}: project stories = spec stories (one set for the street, story 0 unchanged = morph model)",
+          all(abs(stories.get(i, 99) - lv) < 1e-4 for i, lv in want_st.items()) and max(stories) == max(want_st), f"{want_st} vs {stories}")
+    home = Home(spec, stories)
+    items = [it for it in sum((plan(spec, stories, fs_systems.resolve(ac, spec, PROJECT, OUT))[k] for k in
+                               ("walls", "linear", "objects", "cw", "slabs", "railings")), [])]
+    st_items = {k: v for k, v in st["elements"].items()}
+    det = existing(ac, [st_items[it["item"]]["guid"] for it in items if it["item"] in st_items and it["kind"] != "railing"])
+    bad_floor = [f"{it['item']} {det[st_items[it['item']]['guid']]['floorIndex']}!={it['payload']['floorIndex']}" for it in items
+                 if it["kind"] != "railing" and it["item"] in st_items and st_items[it["item"]]["guid"] in det
+                 and det[st_items[it["item"]]["guid"]]["floorIndex"] != it["payload"]["floorIndex"]]
+    floors = sorted({it["payload"]["floorIndex"] for it in items})
+    check(f"P11 {house}: every element on the story of its foot (walls, linear, objects, CW, slabs; railings via verify)", not bad_floor and len(floors) >= 2,
+          f"stories used {floors}; " + "; ".join(bad_floor[:5]))
+    tl = [r for r in trs if r["what"].startswith("top link")]
+    linked = [r for r in tl if r["what"].startswith("top link: relativeTopStory")]
+    check(f"P11 {house}: walls top-linked to the story under their top (rule 3), fixed height only on the top story (reported)",
+          len([r for r in tl if "relativeTopStory" in r["what"] or "none" in r["what"]]) == want["zones"] and all(r["status"] == "OK" for r in tl)
+          and all(r["ok"] == "True" for r in rows if r["quantity"].startswith("top link")) and bool(linked),
+          ", ".join(f"{r['item']} {r['model']}" for r in tl))
+
     g1 = write_g1(spec, ver["exceptions"], OUT)
     check(f"{house}: G1 table written", g1.exists(), str(g1))
     print(f"  {house}: {time.monotonic() - t0:.1f} s")
@@ -392,6 +432,20 @@ def cw_defaults_clean(port: int, specs: dict) -> None:
           probe.get("defaultsRestored") is True and bool(frames) and not left, f"{len(frames)} frame + {len(panels)} panel classes probed; left: {left}")
 
 
+def morphs_unmoved(port: int) -> None:
+    """P11: the morph model of the street (Morph / Mesh / Roof, story 0) did not move when the project stories were set
+    from the spec - against the snapshot taken before the first SetStories (morph_guard.py)."""
+    before = OUT / "_stories_check" / "before.json"
+    if not before.exists():
+        check("P11 morph model unmoved (snapshot before SetStories)", False, f"{before} missing")
+        return
+    import morph_guard
+    r = morph_guard.compare(json.loads(before.read_text(encoding="utf-8")), morph_guard.snapshot(port))
+    check("P11 morph model unmoved by the stories: Morph / Mesh / Roof 3D boxes max delta 0.0 cm, none missing, all on story 0",
+          all(v["missing"] == 0 and v["max_delta_cm"] == 0.0 and v["before"] == v["after"] and v["floors_after"] == [0] for v in r.values()),
+          "; ".join(f"{k}: {v['compared']}/{v['before']} max {v['max_delta_cm']} cm, floors {v['floors_after']}" for k, v in r.items()))
+
+
 def csv_rows(path: str) -> list[dict]:
     import csv
     with open(path, encoding="utf-8") as fh:
@@ -412,6 +466,7 @@ def main() -> int:
         for house, spec in specs.items():
             live_house(house, spec, args.port)
         cw_defaults_clean(args.port, specs)
+        morphs_unmoved(args.port)
         if args.save:
             from tapir_client import TapirClient
             ac = TapirClient(port=args.port, timeout=300)

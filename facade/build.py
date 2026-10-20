@@ -135,6 +135,16 @@ def opening_units(spec: dict) -> list[dict]:
     return units
 
 
+def unit_reveal(spec: dict, u: dict) -> float | None:
+    """Wall inset of the frame of a unit (opening: `reveal`; hole of a glazed field: `reveal` of the field) - the depth of
+    the reveal whose visible width on an oblique photo is the parallax of the edge (photo_measure.visible_reveal)."""
+    o = u["o"]
+    if o.get("cw"):
+        cw = next((c for c in spec.get("cw_fields", []) if c["id"] == o["cw"]), {})
+        return (cw.get("reveal") or {}).get("v")
+    return (o.get("reveal") or {}).get("v")
+
+
 def _zdroj(parts: list[tuple[str, dict | None]]) -> tuple[str, str]:
     """FS_zdroj text and FS_istota (lowest certainty) from (label, {src, conf}) pairs."""
     txt, confs = [], []
@@ -183,6 +193,22 @@ class Home:
             if self.levels[i] <= z_abs + 1e-3:
                 f = i
         return f, self.levels[f]
+
+    def top_link(self, floor: int, z_top: float) -> dict | None:
+        """Modeller rule 3 (top of a wall linked to a story, not a fixed height): the highest spec story at or below the
+        top, at least home + 1; topOffset = top - level of that story (negative when the top lies under home + 1). None
+        when there is no spec story above the home story (top story: fixed height, reported) or without spec stories."""
+        if not self.per:
+            return None
+        above = [i for i in self.idx if self.levels[i] > self.levels[floor] + 1e-6]
+        if not above:
+            return None
+        top = above[0]
+        for i in above:
+            if self.levels[i] <= z_top + 1e-3:
+                top = i
+        return {"relativeTopStory": int(self.idx.index(top) - self.idx.index(floor)), "topOffset": round(z_top - self.levels[top], 6),
+                "top_story": top}
 
 
 def story_payload(spec: dict, current: list[dict]) -> list[dict] | None:
@@ -241,10 +267,11 @@ def plan(spec: dict, story_levels: dict[int, float], sysinfo: dict | None = None
         wall_id = element_id(spec, zone, *confs)
         zdroj, istota = _zdroj([("poloha/rozmer", zone["rect"]), ("hrúbka", zone["thickness"]), ("odsadenie líca", zone.get("w")),
                                 ("skladba", wsys)])
+        top_link = home.top_link(floor, fr.z0 + zv1)
         wall = {"item": zone["id"], "kind": "wall", "payload": wall_payload, "element_id": wall_id, "layer": ref["layer"],
                 "props": {"FS_zdroj": zdroj, "FS_istota": istota, "FS_spec": f"{spec['id']}.{zone['id']}"},
-                "fav_hash": (wfav or {}).get("hash"), "geom": g, "zone": zone, "z_story": level}
-        wall["hash"] = _hash([wall_payload, wall_id, ref["layer"], wall["props"], wall["fav_hash"]])
+                "fav_hash": (wfav or {}).get("hash"), "geom": g, "zone": zone, "z_story": level, "top_link": top_link}
+        wall["hash"] = _hash([wall_payload, wall_id, ref["layer"], wall["props"], wall["fav_hash"]] + ([top_link] if top_link else []))
         walls.append(wall)
     wall_by_zone = {w["item"]: w for w in walls}
 
@@ -824,6 +851,12 @@ def build(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_roo
             drop(wall["item"], "rebuild (I7)" if wall["item"] in rebuild else "changed" if not force else "--force")
         ac.tapir("ChangeWindow", {"windowType": "3DModel"})     # modeller trap: create from the 3D window
         g = _created_guids(ac.tapir("CreateWalls", {"wallsData": [wall["payload"]]}), "CreateWalls")[0]
+        if wall.get("top_link"):                          # rule 3: CreateWalls with the height, then the top linked to the story
+            tl = wall["top_link"]
+            res = ac.tapir("ModifyWalls", {"wallsWithDetails": [{"elementId": {"guid": g}, "relativeTopStory": tl["relativeTopStory"],
+                                                                 "topOffset": tl["topOffset"]}]})
+            if errs := results_ok(res["executionResults"]):
+                raise TapirError(f"ModifyWalls (top link) {wall['item']}: {errs}")
         known[wall["item"]] = {"guid": g, "kind": "wall", "hash": wall["hash"], "element_id": wall["element_id"]}
         wall_guids[wall["item"]] = g
         created_now.append((g, wall))
@@ -873,7 +906,7 @@ def build(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_roo
         if not todo_free[kind]:
             continue
         ac.tapir("ChangeWindow", {"windowType": "3DModel"})
-        guids = _created_guids(ac.tapir(command, {key: [it["payload"] for it in todo_free[kind]]}, timeout=120), command)
+        guids = _created_guids(ac.tapir(command, {key: [it["payload"] for it in todo_free[kind]]}, timeout=300), command)
         cls = [{"elementId": {"guid": g}, "classificationId": it["classification"]} for g, it in zip(guids, todo_free[kind]) if it.get("classification")]
         if cls:                                           # objects come unclassified - FS_* properties need a classification
             res = ac.tapir("SetClassificationsOfElements", {"elementClassifications": cls})
@@ -941,6 +974,10 @@ def build(spec: dict, project: str = DEFAULT_PROJECT, port: int = 19723, out_roo
             sent = item["payload"][k_sent]
             if abs(det[k_read] - sent) > tol:
                 mismatches.append(f"{item['item']}: {k_read} {det[k_read]:.4f} != sent {sent:.4f}")
+        if item["kind"] == "wall":
+            tl = item.get("top_link") or {"relativeTopStory": 0, "topOffset": None}
+            if det.get("relativeTopStory") != tl["relativeTopStory"] or (tl["topOffset"] is not None and abs(det.get("topOffset", 99) - tl["topOffset"]) > tol):
+                mismatches.append(f"{item['item']}: top link {det.get('relativeTopStory')} / {det.get('topOffset')} != sent {tl['relativeTopStory']} / {tl['topOffset']}")
         if item["kind"] == "wall" and "compositeId" in item["payload"]:
             if det.get("structureType") != "Composite" or (det.get("compositeId") or {}).get("guid") != item["payload"]["compositeId"]["guid"]:
                 mismatches.append(f"{item['item']}: structure {det.get('structureType')} / composite {det.get('compositeId')} != sent")

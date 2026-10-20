@@ -455,6 +455,89 @@
     "gs_trim_inside": false
    },
    "system_params_note": "casings off as on Double Door with Transom 27 (3D bbox 3.7 cm larger than the hole with them, measured on the sample)"
+  },
+  "Door with Transom 27": {
+   "kind": "door",
+   "base_favorites": [],
+   "base_libpart": true,
+   "note": "G2 finding 10 (2026-10-19): single-leaf entrance door with a fanlight (M062 O4). No favourite in the template -> placed by CreateDoors.libraryPartName (T7) like 'Double Door with Transom 27'; the transom parameters are those of the 'Door with Sidelight ... and Transom 27' family (same macro) - read back by verify (types rows)",
+   "fields": {
+    "leaves": {
+     "fixed": 1,
+     "read": {
+      "param": "ifc_optypestr",
+      "map": {
+       "Single Door Single Swing": 1,
+       "Swing Fixed": 1
+      }
+     }
+    },
+    "transom": {
+     "fixed": true,
+     "read": {
+      "param": "ifc_TransomThickness",
+      "gt": 0
+     }
+    },
+    "sidelight": {
+     "fixed": "none",
+     "read": {
+      "const": "none"
+     }
+    },
+    "frame_surface": {
+     "write": {
+      "gs_frame_mat": "$surface",
+      "gs_leaf_mat": "$surface",
+      "gs_transom_mat": "$surface"
+     },
+     "read": {
+      "param": "gs_frame_mat",
+      "surface": true
+     }
+    }
+   },
+   "instance": {
+    "transom_h": {
+     "write": {
+      "gs_transom_height": "$v"
+     },
+     "read": {
+      "param": "gs_transom_height"
+     },
+     "note": "transom zone height from the top of the wall hole (ifc_TransomOffset = hole height - value)"
+    },
+    "transom_bars": {
+     "write": {
+      "iMullionStyle_02": {
+       "0": 1,
+       "1": 14
+      }
+     },
+     "read": {
+      "param": "iMullionStyle_02",
+      "map": {
+       "1": 0,
+       "14": 1
+      }
+     },
+     "note": "horizontal division of the main transom: 0 = 'No Grid' (1), 1 = 'Divided Frame' (14); the transom accepts 1, 2, 3, 14, 15, 16, 4 - 'Divided' (6) is reset by the parameter script"
+    },
+    "transom_bar_h": {
+     "write": {
+      "gs_horiz_div_height_02": "$v"
+     },
+     "read": {
+      "param": "gs_horiz_div_height_02"
+     },
+     "note": "height of the division inside the transom above the leaf; position NEOVERENÉ by geometry, checked on the overlay only"
+    }
+   },
+   "system_params": {
+    "gs_trim_outside": false,
+    "gs_trim_inside": false
+   },
+   "system_params_note": "as 'Double Door with Transom 27': casings off so that the 3D check of the hole stays exact"
   }
  }
 }

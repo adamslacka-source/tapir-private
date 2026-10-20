@@ -1,0 +1,11 @@
+{
+ "about": "Podlažia projektu Fasada_pilot_A.pln (ADR-001 kap. 9, G2 nález 11 / príčina 5): jedna sada pre celú ulicu - tri domy sú v jednom projekte, preto podlažia nie sú per dom. Každá spec ich preberá s úrovňou voči svojej päte z0; prvok dostane podlažie svojej päty (pravidlo modelera 2), rôzne úrovne podláh domov v rámci podlažia rieši odsadenie (pravidlo 4), steny sú vrchom viazané na podlažie (pravidlo 3).",
+ "stories": [
+  {"floorIndex": 0, "id": "1NP", "name": "1.NP", "level_abs": 0.0, "src": "S5", "conf": "pravidlo",
+   "note": "±0,000 projektu = úroveň podlažia morfového modelu ulice (všetky morfy, terén a strechy sú na floorIndex 0) - úroveň sa NESMIE meniť (morfy by sa posunuli). Podlahy 1.NP domov sú nižšie (prahy vstupov M015 −0,98, M062 −0,85, M016 −1,23; ODHAD z fotiek) - riešené odsadením prvkov"},
+  {"floorIndex": 1, "id": "2NP", "name": "2.NP", "level_abs": 1.95, "src": "S1", "conf": "odhad",
+   "note": "najnižšia podlaha 2.NP v ulici: vrch balkónovej dosky BK1 domu M016 (3,18 nad pätou −1,23; fotka). M015 / M062 majú 2.NP vyššie (parapety 2.NP 4,80 nad pätou → podlaha ~2,8) - odsadenie prvkov od podlažia"},
+  {"floorIndex": 2, "id": "3NP", "name": "3.NP (podkrovie)", "level_abs": 5.55, "src": "S1", "conf": "odhad",
+   "note": "podlaha podkrovia: prah dverí štítu O6 domu M016 (6,78 nad pätou −1,23; fotka, G2 nález 4). Rímsy / odkvapy M015, M062 (~6,2-6,3) ležia nad ňou - steny 2.NP sú vrchom viazané na toto podlažie s kladným odsadením"}
+ ]
+}

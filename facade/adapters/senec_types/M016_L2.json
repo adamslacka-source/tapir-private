@@ -113,33 +113,6 @@
    "src": "S6",
    "note": "glazed entrance portal and balcony door of the rizalit as a two-leaf door (Double Door with Transom 27 without transom); the fixed side fields are not separate - simplification (curtain wall I5)"
   },
-  "door.arch_2kr": {
-   "type": "door",
-   "libpart": "Arch Double Door 27",
-   "favorite": "FS door.arch_2kr",
-   "nominal": "wallhole",
-   "base_libpart": true,
-   "leaves": {
-    "v": 2,
-    "src": "S6",
-    "conf": "odhad",
-    "note": "two glazed leaves to the attic balcony"
-   },
-   "sidelight": {
-    "v": "none",
-    "src": "S6",
-    "conf": "odhad"
-   },
-   "frame_surface": {
-    "v": "Barva 02 - titanově bílá",
-    "src": "S6",
-    "conf": "meranie",
-    "note": "white frames"
-   },
-   "conf": "odhad",
-   "src": "S6",
-   "note": "balcony door of the arched gable: door + the arched lunette of the pilot as ONE arched door (semicircular head r 1.20 = half width), Arch Double Door 27 placed by library part name (T7)"
-  },
   "win.fixed": {
    "type": "window",
    "favorite": "Hliníkové okno - pevné",
@@ -415,6 +388,17 @@
     "src": null,
     "conf": "odhad",
     "note": "0.45 + rizalit 0.12: inside face aligned with Z1 / Z3"
+   },
+   "rect": {
+    "v": [
+     null,
+     null,
+     null,
+     9.09
+    ],
+    "src": "S1",
+    "conf": "meranie",
+    "note": "vrch rizalitu = pätka oblúka štítu 9,09 = vrch hlavice dverí O6 (fotka); pilot mal pätku 8,00"
    }
   },
   "Z3": {
@@ -454,24 +438,17 @@
    "system": "door.2kr_white"
   },
   "O6": {
-   "system": "door.arch_2kr",
-   "head_in": "A1",
+   "system": "door.2kr_white",
    "rect": {
     "v": [
      6.15,
      8.55,
-     7.1,
-     9.2
+     6.78,
+     9.09
     ],
-    "src": "S2",
-    "conf": "odhad",
-    "note": "door of the arched gable incl. its semicircular head (springing AV 8.00 + rIn 1.20); domy.py has the door to 8.00 + a recessed lunette r 1.20 above it, otvory.py 7.10 .. 9.10 - NEJEDNOZNAČNÉ, the photo is covered by the tree"
-   },
-   "shoulder_h": {
-    "v": 0.9,
-    "src": "S2",
-    "conf": "odhad",
-    "note": "springing AV 8.00 - 7.10"
+    "src": "S1",
+    "conf": "meranie",
+    "note": "G2 nálezy 3-4 (2026-10-19): fotka kontrola/fasada_M016_J_rektif.jpg - biely rám dverí má rovné ostenia; prah = spodok rámu 6,78 (medián 8 zvislíc s 7,10-8,50: 6,75-6,85; pod ním tmavý pás truhlíka / päty zábradlia), hlava = vrch bielej hlavice 9,09 (s 6,45 / 6,70 / 6,90); nad hlavicou tmavá luneta v segmentovom oblúku (A1). Šírka 6,15-8,55 = ostenia rámu (domy.py, overené okom). Pôvodne oblúkové dvere 7,10-9,20 (pätka 8,00) z domy.py/otvory.py"
    }
   },
   "O7": {
@@ -930,25 +907,25 @@
    "origin": {
     "v": [
      7.35,
-     8.0,
+     8.2147,
      0.12
     ],
-    "src": "S2",
+    "src": "S1",
     "conf": "odhad",
-    "note": "centre AC 7.35 on the springing AV 8.00 (domy.py, parallax-corrected from IMG_8439), on the face of the rizalit"
+    "note": "stred segmentového oblúka: s 7,35 = os dverí O6; pätka 9,09 (fotka) - vSpring 0.8753; vrchol lunety ~9,70 (fotka, konáre - ODHAD)"
    },
    "params": {
     "rIn": {
-     "v": 1.2,
-     "src": "S2",
+     "v": 1.4853,
+     "src": "S1",
      "conf": "odhad",
-     "note": "arch_shell inner radius 1.20 = half width of the gable door O6"
+     "note": "segmentový oblúk lunety: tetiva 2,40 (šírka O6) na pätke 9,09, vrchol ~9,70 (fotka, ODHAD) -> R = 1.4853"
     },
     "rOut": {
-     "v": 1.65,
+     "v": 1.8678,
      "src": "S2",
      "conf": "odhad",
-     "note": "AR 1.65: the arch spans the whole rizalit 5.70 .. 9.00"
+     "note": "vonkajší oblúk cez celú šírku rizalitu 5,70-9,00 na pätke (vrchol 10.08, ODHAD - nad lunetou strecha, konáre)"
     },
     "depth": {
      "v": 0.57,
@@ -963,19 +940,26 @@
      "note": "polygonal arc, 24 segments per half circle"
     },
     "bInfill": {
-     "v": false,
-     "src": "S2",
-     "conf": "odhad",
-     "note": "no closed lunette: the arched head of the door O6 fills the ring"
+     "v": true,
+     "src": "S1",
+     "conf": "meranie",
+     "note": "luneta nad dverami je samostatná (tmavé zasklenie nad hlavicou dverí, fotka) - výplň prstenca"
     },
     "infRecess": {
-     "v": 0.15,
+     "v": 0.27,
      "src": "S2",
      "conf": "odhad",
-     "note": "pilot lunette recess (not used)"
+     "note": "luneta v rovine rámu dverí O6 (hĺbka osadenia 0,27)"
+    },
+    "vSpring": {
+     "v": 0.8753,
+     "src": "S1",
+     "conf": "odhad",
+     "note": "pätka oblúka nad stredom (FS_ArchGable 1.1, segmentový oblúk)"
     }
    },
-   "note": "oblúkový štít rizalitu nad pätkou oblúka (prstenec r 1,20 .. 1,65)"
+   "note": "oblúkový štít rizalitu nad pätkou 9,09: segmentový prstenec + zapustená luneta nad dverami O6 (G2 nález 3)",
+   "over": "O6"
   }
  ],
  "pilot_mapping": {
@@ -983,7 +967,7 @@
   "sbox:band": "model: bands B1..B4 (front left, rizalit, right round the corner, east side)",
   "sbox:corner_column": "model: corner pilaster K1 (one column with an L profile round the corner)",
   "arch_shell:arch": "model: arch gable A1 (GDL FS_ArchGable)",
-  "splate:arch": "model: the recessed lunette of the pilot is the arched head of the door O6 (Arch Double Door 27) inside A1",
+  "splate:arch": "model: zapustená luneta pilota = výplň prstenca A1 (FS_ArchGable 1.1, bInfill) nad obdĺžnikovými dverami O6",
   "arch_shell:barrel_roof": "skip: valená strecha za oblúkovým štítom - strecha, nie fasáda",
   "window_frame": "model: frames are part of the window / door elements",
   "sill": "model: sills O2_sill..O13_sill (lin.sill_m016)",
@@ -993,13 +977,13 @@
  "simplifications": [
   {
    "ref": "zones[Z2], objects[A1]",
-   "text": "Rizalit je samostatná stena Z2 (0,12 m pred lícom, hrúbka 0,57) po pätku oblúka 8,00; oblúkový štít nad ňou je GDL objekt FS_ArchGable (polkruhový prstenec r 1,20–1,65 hĺbky steny). Stena s oblúkovým vrcholom sa cez API nedá (najbližšia natívna cesta podľa ADR D2: GDL pred morfom). Valená strecha za štítom nie je modelovaná.",
-   "proposal": "prijať; prípadne architekt nahradí stenou + SEO orezaním oblúkom"
+   "text": "Rizalit je samostatná stena Z2 (0,12 m pred lícom, hrúbka 0,57) po pätku oblúka 9,09 (fotka: vrch hlavice dverí O6); oblúkový štít nad ňou je GDL objekt FS_ArchGable 1.1 - segmentový prstenec (vnútorná tetiva 2,40, vrchol lunety ~9,70 ODHAD, vonkajší oblúk cez šírku rizalitu) so zapustenou lunetou. Stena s oblúkovým vrcholom sa cez API nedá (ADR D2: GDL pred morfom). Valená strecha za štítom nie je modelovaná.",
+   "proposal": "prijať; vrchol lunety a vonkajší oblúk overiť záberom bez stromu"
   },
   {
    "ref": "openings[O6]",
-   "text": "Dvere štítu sú jedny oblúkové dvojkrídlové dvere (Arch Double Door 27, pätka 8,00, polkruh r 1,20 = vrch 9,20) - pilot má dvere po 8,00 + zapustenú lunetu; otvory.py 7,10–9,10. Hlava oblúka stojí nad stenou Z2 v prstenci A1. NEJEDNOZNAČNÉ (strom).",
-   "proposal": "overiť záberom bez stromu (výška dverí, nadsvetlík v oblúku)"
+   "text": "Dvere štítu O6 = obdĺžnikové dvojkrídlové dvere (Double Door with Transom 27 bez nadsvetlíka, ako O5) 6,15-8,55 × 6,78-9,09; luneta nad nimi je výplň prstenca A1 (segmentový oblúk). Prah a hlava z fotky (G2 nálezy 3-4); vrchol lunety ODHAD (konáre).",
+   "proposal": "prijať; vrchol lunety overiť záberom bez stromu"
   },
   {
    "ref": "planes[S], linear[K1, B3]",
@@ -1044,8 +1028,8 @@
  ],
  "g1_proposals": {
   "zones[Z2].w": "prijať 0,12 m (predsadenie rizalitu, ODHAD pilota)",
-  "objects[A1].origin": "prijať pätku 8,00 a stred 7,35 (pilot)",
-  "openings[O6].rect": "overiť (strom)",
+  "objects[A1].origin": "prijať pätku 9,09 (fotka) a stred 7,35 (os dverí); vrchol lunety 9,70 ODHAD",
+  "openings[O6].rect": "prijať 6,78-9,09 (fotka); šírka 6,15-8,55",
   "linear[K1].s": "prijať nárožný pilaster 0,45 m (Street View)"
  },
  "i6": {
@@ -1337,10 +1321,10 @@
      "note": "ako BK1"
     },
     "v_top": {
-     "v": 6.7,
+     "v": 6.78,
      "src": "S1",
-     "conf": "odhad",
-     "note": "horná hrana dosky na koncoch pri stene (fotka 6,68-6,75); spodok dverí O6 na fotke ~6,88 (spec 7,10 ODHAD)"
+     "conf": "meranie",
+     "note": "G2 nález 4: vrch dosky = prah dverí O6 6,78 (fotka; pravidlo: balkónové dvere s prahom pri doske). Horná hrana čela dosky na koncoch pri stene je na fotke 6,64-6,75 - čelo videné zdola (kamera v 0,95), vrch dosky z fotky priamo nečitateľný; madlo R2 na fotke 7,80-7,83 (6,78 + 0,90 = 7,68; predtým 7,60)"
     }
    }
   ],
@@ -1392,11 +1376,6 @@
     "ref": "railings[R1, R2]",
     "text": "Zábradlia z Favorite 'Ocelové vertikální zábradlí' (tyčková výplň, madlo a stĺpiky z favoritu): oblúk ako 6 tetív (max 2 cm od oblúka), stĺpik v každom vrchole lomenej čiary (9 namiesto 2 na fotke); rozostup tyčiek 0,10 m z favoritu (ModifyRailingDetails ho nevie zmeniť), fotka ~0,12 - výnimka.",
     "proposal": "prijať; vlastný favorit s rozostupom 0,12 vytvorí architekt (R1)"
-   },
-   {
-    "ref": "openings[O6] (I6)",
-    "text": "Spodok dverí štítu O6 je na fotke ~6,88 (spec 7,10 ODHAD, NEJEDNOZNAČNÉ); medzi doskou BK2 (6,70) a prahom je tak schod 0,40 - O6 nemenené (zmluva oblúkového štítu), vykázané.",
-    "proposal": "spodok O6 posunúť na 6,88 po potvrdení"
    },
    {
     "ref": "pilot balcony (line 126)",

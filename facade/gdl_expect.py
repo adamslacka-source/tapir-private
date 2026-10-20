@@ -27,8 +27,10 @@ def local_bbox(template: str, p: dict) -> list[float]:
         z0 = -p["bandW"] if p["bBottom"] else 0.0
         z1 = p["opH"] + (p["bandW"] if p["bTop"] else 0.0)
         return [x0, x1, 0.0, p["bandD"], z0, z1]
-    if template == "FS_ArchGable":
-        return [-p["rOut"], p["rOut"], -p["depth"], 0.0, 0.0, p["rOut"]]
+    if template == "FS_ArchGable":                     # 1.1: springing vSpring above the centre (0 = semicircle)
+        vs = max(float(p.get("vSpring", 0.0) or 0.0), 0.0)
+        xo = math.sqrt(max(p["rOut"] ** 2 - vs * vs, 0.0))
+        return [-xo, xo, -p["depth"], 0.0, vs, p["rOut"]]
     if template == "FS_Louvers":                       # hotspot box of the template: y offs .. offs + max(lamD, frameD)
         d = max(p["lamD"], p["frameD"]) if p["bFrame"] else p["lamD"]
         return [0.0, p["A"], p["offs"], p["offs"] + d, 0.0, p["ZZYZX"]]
@@ -61,3 +63,9 @@ def plan_angle(frame_angle: float, outside: str) -> float:
 
 def arch_radii(template: str, p: dict) -> tuple[float, float] | None:
     return (p["rIn"], p["rOut"]) if template == "FS_ArchGable" else None
+
+
+def arch_chord(p: dict) -> float:
+    """Half width of the inner arc at the springing line (FS_ArchGable 1.1): the opening / lunette under the arch."""
+    vs = max(float(p.get("vSpring", 0.0) or 0.0), 0.0)
+    return math.sqrt(max(p["rIn"] ** 2 - vs * vs, 0.0))

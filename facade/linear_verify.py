@@ -137,8 +137,8 @@ def verify_linear(ac: TapirClient, spec: dict, want_linear: list[dict], guids: d
         d = details[lid]
         det = d["details"]
         floor = d["floorIndex"]
-        if floor != spec["reference"]["home_story"]["floorIndex"]:
-            problems.append(f"{lid}: home story {floor} != spec")
+        if floor != it["payload"].get("floorIndex", spec["reference"]["home_story"]["floorIndex"]):
+            problems.append(f"{lid}: home story {floor} != spec (story of its foot) {it['payload'].get('floorIndex')}")
         s0, s1 = sp["s"]["v"]
         pw = max(p[0] for p in prof["polygon_wv"])
         pw_back = min(p[0] for p in prof["polygon_wv"])

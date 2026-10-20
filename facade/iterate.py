@@ -46,9 +46,9 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE / "adapters"))
 import build as fb  # noqa: E402
 import spec_corrections as sc  # noqa: E402
-from build import opening_units  # noqa: E402
+from build import opening_units, unit_reveal  # noqa: E402
 from geom import REFERENCE_PLANE, rects_touch, zone_w  # noqa: E402
-from photo_measure import Photo, crop_png, remeasure_edge, rigid_shift  # noqa: E402
+from photo_measure import MIN_REVEAL_M, REVEAL_WIN, Photo, crop_png, masonry_edge, remeasure_edge, rigid_shift, visible_reveal  # noqa: E402
 from spec_validate import validate  # noqa: E402
 from tapir_client import TapirClient, TapirError  # noqa: E402
 
@@ -57,6 +57,7 @@ MAX_EDGE_SHIFT = 0.08      # m - a single edge further than this from the model 
 RIGID_HALF = 0.35          # m - search window of a rigid shift
 EDGE_HALF = 0.10           # m - search window of one edge
 OCCLUDE_TOL = 0.03         # m - an element edge this close to the photo edge "coincides"
+CONFIRM_RATIO = 1.5        # pilot B: a valley confirms a mullion only when >= this x the next valley (G2 cause 3)
 SYSTEMIC_MIN_HOSTS = 6
 SYSTEMIC_SAME_SIGN = 0.8
 EDGES_V = ("left", "right")
@@ -167,6 +168,7 @@ class Loop:
                   "verify_pass": p.verify_pass(ver), "photo_summary": p.photo_summary(ver), "evaluated": [], "findings": [], "fixes": [], "systemic": None}
             # evaluate the fixes of the previous round: each must lower its error, else revert
             reverted = 0
+            reverted_items = set()
             for fx in open_fixes:
                 ev = p.evaluate(spec, ver, fx)
                 fx.update(after=ev)
@@ -182,6 +184,7 @@ class Loop:
                         c = next(c for c in corr["corrections"] if c["id"] == cid)
                         c["status"], c["reverted_reason"] = "reverted", f"iterácia {k}: chyba {ev['error_cm']} cm nie je menšia ako {fx['error_before_cm']} cm"
                     reverted += 1
+                    reverted_items.add(fx["item"])
                     pending_rebuild |= set(fx.get("rebuild", []))
             open_fixes = []
             findings = p.findings(spec, ver)
@@ -194,7 +197,10 @@ class Loop:
             it["systemic"] = sysres
             fixes = []
             if k <= self.max_iter:
-                fixes = [f for f in classified if f["cls"] in ("build", "spec") and f.get("fix")]
+                # an item whose correction was reverted in this round was classified on the spec before the revert: its
+                # findings wait for the rebuild (next round), a fix now would be stale
+                fixes = [f for f in classified if f["cls"] in ("build", "spec") and f.get("fix")
+                         and not (f["cls"] == "spec" and f["fix"].get("item") in reverted_items)]
                 # one fix per target (several findings of one opening share it)
                 seen, uniq = set(), []
                 for f in fixes:
@@ -332,10 +338,14 @@ class PilotA:
                         "model_photo": e.get("model_projected", e.get("v_model_projected")), "photo": e.get("photo", e.get("v_photo")),
                         "delta_cm": e["delta_cm"], "tol_cm": e["tol_cm"], "contrast": e.get("contrast"), "range": e.get("range") or e.get("s")})
         for e in ver.get("auto_edges", []):
-            if e["status"] != "MIMO":
-                continue
-            out.append({"source": "auto", "item": e["item"], "host": e["item"], "edge": e["edge"], "name": f"{e['edge']} (automatická kontrola)",
-                        "model_photo": e["model"], "photo": e["photo"], "delta_cm": -e["delta_cm"], "tol_cm": 3.0, "contrast": e["contrast"]})
+            if e["status"] == "MIMO":
+                out.append({"source": "auto", "item": e["item"], "host": e["item"], "edge": e["edge"], "name": f"{e['edge']} (automatická kontrola)",
+                            "model_photo": e["model"], "photo": e["photo"], "delta_cm": -e["delta_cm"], "tol_cm": 3.0, "contrast": e["contrast"]})
+            elif e["status"] == "nejednoznačné":         # parallax: a second step where the masonry edge would be (G2 finding 1)
+                out.append({"source": "auto", "item": e["item"], "host": e["item"], "edge": e["edge"], "parallax": True,
+                            "name": f"{e['edge']} (automatická kontrola: rám × ostenie)", "model_photo": e["model"], "photo": e["second"],
+                            "delta_cm": round((e["model"] - e["second"]) * 100, 1), "tol_cm": 3.0, "contrast": e.get("second_step"),
+                            "note": e.get("note", "")})
         return out
 
     # -- classification
@@ -404,12 +414,39 @@ class PilotA:
             else:
                 g.update(reason=f"{g['reason']}; bez potvrdenia na susednom otvore v tej istej línii - neopravené")
                 g.pop("pending_fix", None)
+        self._merge_rect_fixes(spec, out, units, k)
         for g in out:
             if g["source"] in ("edge", "auto", "bar") and g.get("model_photo") is not None:
                 g["crop"] = str(self._crop(g, ph, i7_dir, k, spec, units, cam))
                 if g.get("fix"):
                     g["fix"]["crop"] = g["crop"]
         return out
+
+    def _merge_rect_fixes(self, spec: dict, out: list[dict], units: dict, k: int) -> None:
+        """Several certain edges of ONE opening (e.g. left = masonry beyond the frame, top = stone edge above the soffit)
+        are one correction of its rect: the loop applies one fix per target, so the edges are merged here (each edge from
+        its own measurement; a rigid shift is never merged with single edges)."""
+        by = {}
+        for g in out:
+            if g["cls"] == "spec" and g.get("fix") and g["fix"]["key"][0] == "rect" and g.get("evidence", {}).get("method") != "rigid_shift":
+                by.setdefault(g["fix"]["item"], []).append(g)
+        for oid, gs in by.items():
+            fixes = {id(g["fix"]): g["fix"] for g in gs}
+            if len(fixes) < 2:
+                continue
+            u = units[oid]
+            old = list(u["o"]["rect"]["v"])
+            new = list(old)
+            for fx in fixes.values():
+                for i, (a, b) in enumerate(zip(fx["rect_before"], fx["rect_after"])):
+                    if abs(a - b) > 1e-6:
+                        new[i] = b
+            note = f"I7 iterácia {k}: hrany {', '.join(sorted({c['edge'] for fx in fixes.values() for c in fx['check']}))} z fotky (zlúčené)"
+            merged = self._rect_fix(spec, u, new, k, note)
+            merged["error_cm"] = max(fx["error_cm"] for fx in fixes.values())
+            merged["check"] = [c for fx in fixes.values() for c in fx["check"]]
+            for g in gs:
+                g["fix"] = merged
 
     def _ambiguous(self, f, reason, ph, i7_dir, k, evidence=None, confirmed=False):
         return dict(f, cls="ambiguous", reason=reason, evidence=evidence or {}, fix=None, confirmed=confirmed)
@@ -437,7 +474,7 @@ class PilotA:
                 marks.append({"kind": kind, "at": c["pos"], "label": f"kand. {c['pos']:.3f} (skok {c['step']:.0f})", "colour": (255, 80, 80)})
         name = f"{self.spec_id}_{f['item']}_{e}_{f['source']}_it{k}.png".replace(" ", "_")
         title = (f"{self.spec_id} {f['item']} {f.get('name', e)}: model - fotka {f.get('delta_cm', 0):+.1f} cm -> {CLS_SK.get(f['cls'], f['cls'])}"
-                 f"{' (model potvrdený)' if f.get('confirmed') else ''}\n{f['reason'][:160]}")
+                 f"{' (model potvrdený)' if f.get('confirmed') else ' (neoverené voči fotke)' if f.get('unverified') else ''}\n{f['reason'][:160]}")
         return crop_png(ph, box, marks, i7_dir / name, title, zoom=3, rects=rects)
 
     def _occluders(self, ver, u, edge, pos, rng_photo, exclude: set) -> list[str]:
@@ -476,7 +513,7 @@ class PilotA:
             # two or more edges of this axis off (the opening's own and those of its sill / surround): try the pair. The
             # narrow search of verify may find another step near a moved edge, so the signs of the deltas do not have to
             # agree - the pair search itself decides (unique, both steps strong)
-            sel = [f for f in fs if f.get("edge") in pair and f["source"] in ("edge", "auto")]
+            sel = [f for f in fs if f.get("edge") in pair and f["source"] in ("edge", "auto") and not f.get("parallax")]
             if len(sel) < 2:
                 continue
             edges = []
@@ -543,6 +580,14 @@ class PilotA:
                 free = (not any(abs(units[t]["rect"][1] - s0) < 1e-3 for t in touching), not any(abs(units[t]["rect"][0] - s1) < 1e-3 for t in touching))
             else:
                 free = (not any(abs(units[t]["rect"][3] - v0) < 1e-3 for t in touching), not any(abs(units[t]["rect"][2] - v1) < 1e-3 for t in touching))
+            # parallax (G2 cause 1): the reveal of this edge faces the camera -> the masonry edge is the outer step of the pair
+            # (masonry corner, frame ~rw inward), never just the step nearest to the model
+            s_e = s0 if e == "left" else s1 if e == "right" else 0.5 * (s0 + s1)
+            v_e = v1 if e == "top" else v0 if e == "bottom" else 0.5 * (v0 + v1)
+            rw = visible_reveal(cam, e, s_e, v_e, w, unit_reveal(spec, u))
+            if rw is not None and rw >= MIN_REVEAL_M:
+                out.append(self._classify_reveal_edge(spec, ver, u, f, e, at, rw, rng_spec, rect_ph, free, w, cam, ph, exclude, photo_tol, k, i7_dir))
+                continue
             m = remeasure_edge(ph, e, at, rng_spec, explicit.get(e, {}).get("brighter") if f["source"] == "edge" else None, EDGE_HALF, rect_ph, free)
             ev = {"method": "remeasure_edge", "window_cm": EDGE_HALF * 100, **{kk: m.get(kk) for kk in ("status", "pos", "step", "reason", "candidates", "thirds", "continuation")}}
             g = dict(f, photo_wide=m.get("pos"), range_photo=list(rng_spec))
@@ -578,6 +623,43 @@ class PilotA:
                 g.update(cls="ambiguous", unclear=True, pending_fix=fix, fix=None, reason=m["reason"])
             out.append(g)
         return out
+
+    def _classify_reveal_edge(self, spec, ver, u, f, e, at, rw, rng_spec, rect_ph, free, w, cam, ph, exclude, photo_tol, k, i7_dir) -> dict:
+        """One edge on the visible-reveal side: photo_measure.masonry_edge (pair masonry corner / frame). A fix only for a
+        CERTAIN masonry step outside the spec opening within the expected reveal width; the model is 'confirmed' only by
+        the pair (frame ~rw inward) or a certain outer step at the model - a lone step is 'neoverené' (unverified)."""
+        oid = u["o"]["id"]
+        m = masonry_edge(ph, e, at, rw, rng_spec, rect_ph, free)
+        ev = {"method": "masonry_edge (paralaxa ostenia)", "rw_cm": round(rw * 100, 1),
+              **{kk: m.get(kk) for kk in ("status", "pos", "step", "frame", "role", "rw_measured", "reason", "outer", "inner", "thirds",
+                                          "spacing_thirds", "continuation")}}
+        g = dict(f, photo_wide=m.get("pos"), range_photo=list(rng_spec), reveal_cm=round(rw * 100, 1))
+        if m["status"] != "certain":
+            return self._ambiguous(g, f"ostenie ~{rw * 100:.1f} cm: {m['reason']}", ph, i7_dir, k, ev)
+        d = m["pos"] - at                                   # photo - model (photo plane)
+        if abs(d) <= photo_tol:
+            if m["role"] == "outermost":
+                return dict(self._ambiguous(g, f"jediný skok pri modeli ({d * 100:+.1f} cm), rám za ostením nečitateľný - murovaná hrana NEOVERENÁ "
+                                               f"(nepotvrdzuje sa modelom)", ph, i7_dir, k, ev), unverified=True)
+            return self._ambiguous(g, f"model na murovanej hrane ({d * 100:+.1f} cm): {m['reason']}", ph, i7_dir, k, ev, confirmed=True)
+        occ = self._occluders(ver, u, e, m["pos"], rng_spec, exclude)
+        if occ:
+            return self._ambiguous(g, f"hrana ostenia splýva s prvkom modelu / je ním zakrytá: {', '.join(occ[:3])}", ph, i7_dir, k, ev)
+        if abs(d) > MAX_EDGE_SHIFT + REVEAL_WIN[1] * rw:      # a frame read off by <= 8 cm + the reveal width
+            return self._ambiguous(g, f"murovaná hrana {d * 100:+.1f} cm od modelu - ďalej ako {MAX_EDGE_SHIFT * 100:.0f} cm + ostenie "
+                                      f"{REVEAL_WIN[1] * rw * 100:.1f} cm (iný prvok fasády)", ph, i7_dir, k, ev)
+        if np.sign(d) != outward_sign(e):
+            return self._ambiguous(g, f"istá hrana leží vnútri otvoru ({d * 100:+.1f} cm) - rám / krídlo, nie hrana murovaného otvoru", ph, i7_dir, k, ev)
+        axis = edge_axis(e)
+        new = list(u["o"]["rect"]["v"])
+        new[edge_index(e)] = round(spec_of_photo(cam, axis, m["pos"], w), 4)
+        fix = self._rect_fix(spec, u, new, k, f"I7 iterácia {k}: murovaná hrana {e} z fotky {m['pos']:.3f} (paralaxa: ostenie {rw * 100:.1f} cm "
+                                              f"očakávané, {(m.get('rw_measured') or 0) * 100:.1f} cm namerané; skok {m['step']:.0f}, odstup od rámu "
+                                              f"po tretinách {m.get('spacing_thirds')})")
+        fix["error_cm"] = round(abs(d) * 100, 2)
+        fix["check"] = [{"edge": e, "photo": m["pos"], "w": w}]
+        return dict(g, cls="spec", reason=f"model = spec na ráme, murovaná hrana {e} je na fotke o {d * 100:+.1f} cm ďalej od kamery ({m['reason']})",
+                    evidence=ev, fix=fix, zone=u["zone"])
 
     def _rect_fix(self, spec, u, new_rect, k, note) -> dict:
         """Correction(s) of the rect of a unit: opening -> types openings.<id>.rect (+ transom_h kept absolute);
@@ -842,38 +924,23 @@ class PilotB:
                                 fix={"key": ["rebuild", f["item"]], "rebuild": reb, "item": f["item"], "error_cm": abs(f["delta_cm"] or 0)}))
                 continue
             if f["source"] == "hedge":
-                out.append(dict(f, cls="ambiguous", reason="vodorovná hrana pilota B mimo tolerancie - automatická oprava nie je v I7 (vykázané)", evidence={}, fix=None))
+                out.append(dict(f, cls="ambiguous", reason="hrana pilota B (vodorovná / stĺp / stena) mimo tolerancie - automatická oprava nie je v I7 (vykázané)", evidence={}, fix=None))
                 continue
             cw = cws.get(f["item"])
             kk = int(f["edge"].split()[1]) - 1
             res = self.bar_rows(spec, cw, kk, cam)
             g = dict(f, evidence=res)
             tol = f["tol_cm"] / 100
-            readable = [r for r in res["rows"] if r["readable"]]
-            single = [r for r in readable if not r["double"]]
-            doubles = [r for r in readable if r["double"]]
-            near = [r for r in readable if abs(r["delta_m"]) <= tol]
-            far = [r for r in readable if abs(r["delta_m"]) > tol]
-            fmt = lambda rs: ", ".join(f"{r['row']}: {r['pos_px']} px ({r['delta_m'] * 100:+.1f} cm{', dvojitá ' + str(r['second_px']) + ' px' if r['double'] else ''})" for r in rs)
-            if len(readable) >= 2 and len(near) >= math.ceil(0.6 * len(readable)):
-                g["photo_wide_px"] = round(float(np.median([r["pos_px"] for r in near])), 1)
-                g.update(cls="ambiguous", confirmed=True, fix=None,
-                         reason=f"model potvrdený: najtmavšia lišta v {len(near)}/{len(readable)} pásoch poľa pri modeli ({fmt(near)}); "
-                                f"odchýlka verify je z pásu, kde je iná / dvojitá lišta ({fmt(far) or 'parapetný pás, slabý kontrast'}) - spec sa nemení")
-            elif len(single) >= 2 and not doubles and max(r["delta_m"] for r in single) - min(r["delta_m"] for r in single) <= 0.01:
-                med = float(np.median([r["delta_m"] for r in single]))
-                g["photo_wide_px"] = round(float(np.median([r["pos_px"] for r in single])), 1)
+            v = judge_bar_rows(res["rows"], tol)
+            g.update(cls=v["cls"], fix=None, reason=v["reason"], **{key_: v[key_] for key_ in ("confirmed", "unverified") if v.get(key_)})
+            if v.get("photo_wide_px") is not None:
+                g["photo_wide_px"] = v["photo_wide_px"]
+            if v["cls"] == "spec":
                 s_new = round(cam.s_of(g["photo_wide_px"], res["w"]), 4)
                 path = ["cw_fields", {"id": cw["id"]}, "u_axes", "v", kk]
-                g.update(cls="spec", reason=f"model = spec, stĺpik je vo všetkých {len(single)} pásoch o {med * 100:+.1f} cm inde ({fmt(single)})", fix={
-                    "key": path, "item": cw["id"], "corrections": [{"target": "spec", "path": path, "before": cw["u_axes"]["v"][kk], "after": s_new}],
-                    "rebuild": [], "src": f"I7.{k}", "error_cm": round(abs(med) * 100, 2),
-                    "check": [{"kind": "bar", "px": g["photo_wide_px"], "w": res["w"]}]})
-            elif not readable:
-                g.update(cls="ambiguous", fix=None, reason="lišta nečitateľná vo všetkých pásoch poľa (kontrast < 8)")
-            else:
-                g.update(cls="ambiguous", fix=None,
-                         reason=f"pásy poľa nesúhlasia / dvojitá lišta ({fmt(readable)}) - neopravené")
+                g["fix"] = {"key": path, "item": cw["id"], "corrections": [{"target": "spec", "path": path, "before": cw["u_axes"]["v"][kk], "after": s_new}],
+                            "rebuild": [], "src": f"I7.{k}", "error_cm": round(abs(v["median_m"]) * 100, 2),
+                            "check": [{"kind": "bar", "px": g["photo_wide_px"], "w": res["w"]}]}
             g["crop"] = str(self._crop(spec, g, cam, i7_dir, k))
             out.append(g)
         return out
@@ -885,6 +952,8 @@ class PilotB:
         s = cw["u_axes"]["v"][k]
         v0, v1 = cw["rect"]["v"][2], cw["rect"]["v"][3]
         vv = [v0] + cw.get("v_axes", {}).get("v", []) + [v1]
+        louv = [(o["origin"]["v"][0], o["origin"]["v"][0] + o["params"]["A"]["v"], o["origin"]["v"][1], o["origin"]["v"][1] + o["params"]["ZZYZX"]["v"])
+                for o in spec.get("objects", []) if o.get("kind") == "louvers"]
         rows = []
         for a, b in zip(vv[:-1], vv[1:]):
             xm, ya = cam.xy(s, b - 0.04, w)
@@ -893,7 +962,7 @@ class PilotB:
             y0_, y1_ = max(0, int(ya)), min(g.shape[0], int(yb))
             if y1_ - y0_ < 3 or x0 + 61 > g.shape[1]:
                 rows.append({"row": f"v {a:.2f}–{b:.2f}", "model_px": round(xm, 1), "pos_px": None, "depth": 0.0, "second_px": None,
-                             "second_depth": 0.0, "readable": False, "double": False, "delta_m": None})
+                             "second_depth": 0.0, "readable": False, "double": False, "delta_m": None, "ratio": 0.0, "louvred": False})
                 continue
             prof = g[y0_:y1_, x0:x0 + 61].mean(axis=0)
             prof = np.convolve(prof, np.ones(3) / 3, mode="same")
@@ -906,7 +975,9 @@ class PilotB:
             best = vals[0] if vals else (None, 0.0)
             second = next((v for v in vals[1:] if abs(v[0] - best[0]) >= 4), (None, 0.0)) if vals else (None, 0.0)
             ppm = cam.px_per_m(w)
+            covered = any(lv[0] - 0.10 <= s <= lv[1] + 0.10 and min(b, lv[3]) - max(a, lv[2]) >= 0.5 * (b - a) for lv in louv)
             rows.append({"row": f"v {a:.2f}–{b:.2f}", "model_px": round(xm, 1), "pos_px": best[0], "depth": round(best[1], 1),
+                         "ratio": round(best[1] / max(second[1], 0.1), 2) if best[0] is not None else 0.0, "louvred": covered,
                          "second_px": second[0], "second_depth": round(second[1], 1), "readable": best[1] >= 8.0,
                          "double": best[1] >= 8.0 and second[1] >= 0.6 * best[1] and second[0] is not None and abs(second[0] - best[0]) <= 15,
                          "delta_m": round((xm - best[0]) / ppm, 4) if best[0] is not None else None})
@@ -1015,6 +1086,50 @@ class PilotB:
         return False                                  # pilot B lists them in report_G2.md and G1 (simplifications of the adapter)
 
 
+def judge_bar_rows(rows: list[dict], tol: float) -> dict:
+    """Pilot B: verdict on one mullion from its bands (bar_rows). G2 cause 3: the model is never confirmed by picking the
+    candidate nearest to it. Only a band WITHOUT blinds (a valley in a band with blinds is the joint of two blind modules /
+    a guide rail - circular evidence) whose darkest valley is clearly the strongest (ratio >= CONFIRM_RATIO x the next
+    valley) counts: such a band near the model confirms it, off the model it is a measurement against it. A fix needs
+    every readable band to agree (single bars, spread <= 1 cm) AND at least one clear band without blinds.
+    Returns {cls: ambiguous | spec, confirmed, unverified, reason, photo_wide_px, median_m}."""
+    readable = [r for r in rows if r["readable"]]
+    single = [r for r in readable if not r["double"]]
+    doubles = [r for r in readable if r["double"]]
+    fmt = lambda rs: ", ".join(f"{r['row']}: {r['pos_px']} px ({r['delta_m'] * 100:+.1f} cm{', dvojitá ' + str(r['second_px']) + ' px' if r['double'] else ''}"
+                               f"{', žalúzia' if r.get('louvred') else ''}, pomer {r.get('ratio')})" for r in rs)
+    clean = [r for r in readable if not r.get("louvred")]
+    strong = [r for r in clean if r.get("ratio", 0.0) >= CONFIRM_RATIO]
+    s_near = [r for r in strong if abs(r["delta_m"]) <= tol]
+    s_far = [r for r in strong if abs(r["delta_m"]) > tol]
+    weak_far = [r for r in clean if abs(r["delta_m"]) > tol]
+    spec_ok = (len(single) >= 2 and not doubles and max(r["delta_m"] for r in single) - min(r["delta_m"] for r in single) <= 0.01
+               and any(not r.get("louvred") and r.get("ratio", 0.0) >= CONFIRM_RATIO for r in single))
+    if s_near and not s_far:
+        return {"cls": "ambiguous", "confirmed": True, "photo_wide_px": round(float(np.median([r["pos_px"] for r in s_near])), 1),
+                "reason": f"model potvrdený: v páse bez žalúzie jasne najtmavšia lišta (pomer ≥ {CONFIRM_RATIO}) pri modeli ({fmt(s_near)}); "
+                          f"odchýlka verify je z iného pásu - spec sa nemení"}
+    if not readable:
+        return {"cls": "ambiguous", "unverified": True, "reason": "lišta nečitateľná vo všetkých pásoch poľa (kontrast < 8) - neoverené"}
+    if not clean:
+        return {"cls": "ambiguous", "unverified": True,
+                "reason": f"nečitateľné, neoverené: lišta čitateľná len v pásoch so žalúziou ({fmt(readable)}) - škára / vodiaca lišta "
+                          f"žalúzie, nie dôkaz stĺpika; model sa nepotvrdzuje"}
+    if spec_ok:
+        med = float(np.median([r["delta_m"] for r in single]))
+        return {"cls": "spec", "median_m": med, "photo_wide_px": round(float(np.median([r["pos_px"] for r in single])), 1),
+                "reason": f"model = spec, stĺpik je vo všetkých {len(single)} pásoch o {med * 100:+.1f} cm inde ({fmt(single)})"}
+    if weak_far and not s_near:
+        return {"cls": "ambiguous",
+                "reason": f"nejednoznačné: pás bez žalúzie dáva lištu mimo modelu ({fmt(weak_far)}); oprava potrebuje súhlas všetkých "
+                          f"čitateľných pásov s jasnou lištou (pomer ≥ {CONFIRM_RATIO}) - neopravené, model neoverený"}
+    if not strong:
+        return {"cls": "ambiguous", "unverified": True,
+                "reason": f"nečitateľné, neoverené: v páse bez žalúzie nie je jasne najsilnejšia lišta (pomer < {CONFIRM_RATIO}: {fmt(clean)}); "
+                          f"výber kandidáta najbližšieho k modelu by bol potvrdenie modelu modelom"}
+    return {"cls": "ambiguous", "reason": f"pásy poľa nesúhlasia / dvojitá lišta ({fmt(readable)}) - neopravené"}
+
+
 class Cam:
     def __init__(self, c: dict):
         self.cx, self.cy, self.f, self.D0, self.s_c, self.v_c = (c[k] for k in ("cx", "cy", "f", "D0", "s_c", "v_c"))
@@ -1059,11 +1174,12 @@ def g2_report(pilot: str, specs: list[tuple[str, Path, Path]], path: Path, overl
         L += [f"## {sid}", "", "| Beh | Iterácie | Opravy | verify na konci | Čas |", "|---|---|---|---|---|"]
         for r in hist:
             L.append(f"| {r['run']} ({r['at']}) | {len(r['iterations'])} (max {r['max_iter']}) | {r['fixes_total']} | {'PASS' if r['verify_pass'] else 'FAIL'} | {r['seconds']} s |")
-        L += ["", "| Stav | build | spec | nejednoznačné (z toho model potvrdený) | max odchýlka model − fotka |", "|---|---|---|---|---|"]
+        L += ["", "| Stav | build | spec | nejednoznačné (z toho model potvrdený / neoverené) | max odchýlka model − fotka |", "|---|---|---|---|---|"]
         for label, fs in (("pred (1. beh, iterácia 1)", first), ("po (posledný beh)", final)):
             amb = [f for f in fs if f["cls"] == "ambiguous"]
             ph = [abs(f["delta_cm"]) for f in fs if f.get("delta_cm") is not None and f["source"] in ("edge", "auto", "bar", "unreadable")]
-            L.append(f"| {label} | {cnt(fs, 'build')} | {cnt(fs, 'spec')} | {len(amb)} ({sum(1 for f in amb if f.get('confirmed'))}) | "
+            L.append(f"| {label} | {cnt(fs, 'build')} | {cnt(fs, 'spec')} | {len(amb)} ({sum(1 for f in amb if f.get('confirmed'))} / "
+                     f"{sum(1 for f in amb if f.get('unverified'))}) | "
                      + (f"{max(ph):.1f} cm |" if ph else "– |"))
         s0_ = hist[0]["iterations"][0].get("photo_summary")
         s1_ = hist[-1]["iterations"][-1].get("photo_summary")
@@ -1102,7 +1218,7 @@ def g2_report(pilot: str, specs: list[tuple[str, Path, Path]], path: Path, overl
             L += ["| Prvok | Hrana | Model − fotka | Príčina | Výrez |", "|---|---|---|---|---|"]
             for f in amb:
                 L.append(f"| {f['item']} | {f.get('name') or f.get('edge')} | {f.get('delta_cm', 0):+.1f} cm | "
-                         f"{'**model potvrdený** – ' if f.get('confirmed') else ''}{f['reason'][:220]} | "
+                         f"{'**model potvrdený** – ' if f.get('confirmed') else '**neoverené** (nečitateľné, model sa nepotvrdzuje sám sebou) – ' if f.get('unverified') else ''}{f['reason'][:220]} | "
                          + (f"[png]({Path(f['crop']).as_posix()})" if f.get("crop") else "–") + " |")
         else:
             L.append("Nič.")
@@ -1133,10 +1249,24 @@ def run_a(houses: list[str], port: int, max_iter: int, log=print) -> list[dict]:
     return logs
 
 
+G2_A_NOTE = (
+    "**Konvencia spec po kontrole G2 (2026-10-19):** všetky štyri hrany otvoru sú hrany **murovaného otvoru**. Na šikmom zábere je "
+    "ostenie na strane od kamery viditeľné (M015, M062: kamera vpravo → ľavé ostenia, horné podhľady): murovaná hrana je vonkajší skok "
+    "páru (murovaná hrana, rám o viditeľnú šírku ostenia ďalej), nie skok najbližší k modelu (`photo_measure.masonry_edge`). Automatická "
+    "kontrola dá pri druhom skoku v očakávanej vzdialenosti ostenia stav `nejednoznačné`, nikdy OK. Výrezy: žltá = hrana modelu, zelená = "
+    "nameraná murovaná hrana.\n\n"
+    "**M062 – výklad O1–O3:** ľavá hrana O1 je čítaná na **rám** (ostenie je viditeľné len v hornej tretine, dolu ho zakrýva kmeň stromu – "
+    "slučka ho neprečíta isto, nejednoznačné s výrezom); O2/O3 majú spoločné ostenia, vrch zakrýva markíza (dve hrany). Výklad teda **nie je** "
+    "v konvencii murovaného otvoru – vykázané.\n\n"
+    "**Podlažia (pilot A):** jedna sada pre projekt: 1.NP ±0,000 (úroveň morfového modelu, nemenená), 2.NP +1,950, 3.NP (podkrovie) +5,550 "
+    "(`facade/adapters/senec_types/_project_stories.json`); každý prvok má podlažie podľa svojej päty, steny sú vrchom viazané na podlažie; "
+    "morfový model pred / po zmene podlaží Δ 0,0 cm (`private-tests/morph_guard.py`).")
+
+
 def write_g2_a(houses=("M015_L1", "M062_L2", "M016_L2")) -> Path:
     have = [h for h in houses if (OUT_A / h / "i7" / "iterations.json").exists()]
     return g2_report("A (Senec, Lichnerova)", [(h, OUT_A / h / "i7", sc.path_of(h)) for h in have], OUT_A / "report_G2.md",
-                     {h: [str(OUT_A / h / f"overlay_{h}.png"), str(OUT_A / h / f"overlay_edges_{h}.png")] for h in have})
+                     {h: [str(OUT_A / h / f"overlay_{h}.png"), str(OUT_A / h / f"overlay_edges_{h}.png")] for h in have}, extra=G2_A_NOTE)
 
 
 def run_b(port: int, max_iter: int, log=print) -> dict:
@@ -1151,7 +1281,12 @@ def write_g2_b() -> Path:
     from from_photo import ATTRIBUTION
     return g2_report("B (HAW Hof, budova B)", [("HOF_B", OUT_B / "HOF_B" / "i7", sc.path_of("HOF_B"))], OUT_B / "report_G2.md",
                      {"HOF_B": [str(OUT_B / "HOF_B" / n) for n in ("overlay_HOF_B.png", "overlay_detail_HOF_B.png", "overlay_detail_bez_zaluzii_HOF_B.png")]},
-                     extra=f"Výrezy fotky: {ATTRIBUTION}. Mierka fotky je ODHAD (zábradlie 1,05 m) – odchýlky voči fotke sú relatívne.")
+                     extra=f"Výrezy fotky: {ATTRIBUTION}. Mierka fotky je ODHAD (zábradlie 1,05 m) – odchýlky voči fotke sú relatívne.\n\n"
+                           "**Po kontrole G2 (2026-10-19):** „model potvrdený“ len vtedy, keď je v páse **bez žalúzie** lišta jasne najtmavšia "
+                           f"(≥ {CONFIRM_RATIO}× ďalší kandidát) pri modeli; pásy so žalúziou merajú škáry / vodiace lišty žalúzií (kruhový dôkaz) a "
+                           "nepotvrdzujú nič; inak **neoverené** (nečitateľné). Západná svetlá plocha = plná stena koncového poľa `STENA_Z` "
+                           "(hĺbka, hrúbka, materiál ODHAD); stĺp `STLP_L` má os v hĺbke, v ktorej sa odčítali jeho okraje (hĺbka NEOVERENÁ). "
+                           "Zábradlie: výnimka R1 (favorit s vodorovnými tyčami pripraví architekt).")
 
 
 def main(argv=None) -> int:

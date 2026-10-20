@@ -327,12 +327,397 @@
    "error_after_cm": 0.01,
    "kept": true,
    "evaluated_in": 2
+  },
+  {
+   "target": "types",
+   "path": [
+    "openings",
+    "O2",
+    "rect"
+   ],
+   "before": {
+    "v": [
+     3.42,
+     4.55,
+     0.13,
+     3.1887
+    ],
+    "src": "I7.1",
+    "conf": "meranie",
+    "note": "I7 iterácia 1: hrana top z fotky 3.192 (skok 77, tretiny [3.1927, 3.1913, 3.1903]); pôvodne [3.42, 4.55, 0.13, 3.13] (S1, meranie)"
+   },
+   "after": {
+    "v": [
+     3.3229,
+     4.55,
+     0.13,
+     3.1887
+    ],
+    "src": "I7.1",
+    "conf": "meranie",
+    "note": "I7 iterácia 1: murovaná hrana left z fotky 3.309 (paralaxa: ostenie 13.5 cm očakávané, 8.5 cm namerané; skok 8, odstup od rámu po tretinách [-0.082, -0.0862, -0.0855]); pôvodne [3.42, 4.55, 0.13, 3.1887] (I7.1, meranie)"
+   },
+   "id": "M015_L1.c5",
+   "src": "I7.1",
+   "conf": "meranie",
+   "cause": "spec",
+   "iteration": 1,
+   "status": "active",
+   "reason": "model = spec na ráme, murovaná hrana left je na fotke o -9.7 cm ďalej od kamery (murovaná hrana o 8.5 cm ďalej od kamery ako rám (očakávané ostenie 13.5 cm); tretiny súhlasia, končí na ostení)",
+   "evidence": {
+    "method": "masonry_edge (paralaxa ostenia)",
+    "rw_cm": 13.5,
+    "status": "certain",
+    "pos": 3.3092,
+    "step": 7.7,
+    "frame": 3.3941,
+    "role": "outer",
+    "rw_measured": 0.0849,
+    "reason": "murovaná hrana o 8.5 cm ďalej od kamery ako rám (očakávané ostenie 13.5 cm); tretiny súhlasia, končí na ostení",
+    "outer": [
+     {
+      "pos": 3.3092,
+      "step": 7.7
+     }
+    ],
+    "inner": [
+     {
+      "pos": 3.5388,
+      "step": 13.8
+     },
+     {
+      "pos": 3.4949,
+      "step": 10.5
+     },
+     {
+      "pos": 3.5612,
+      "step": 9.9
+     }
+    ],
+    "thirds": [
+     3.3164,
+     3.3077,
+     3.3068
+    ],
+    "spacing_thirds": [
+     -0.082,
+     -0.0862,
+     -0.0855
+    ],
+    "continuation": {
+     "beyond": [
+      27.4,
+      2.6
+     ],
+     "ratio": 3.56,
+     "continues": true,
+     "unclear": false
+    }
+   },
+   "crop": "C:\\FacadePilot\\out\\M015_L1\\i7\\M015_L1_O2_left_auto_it1.png",
+   "finding": {
+    "source": "auto",
+    "item": "O2",
+    "edge": "left",
+    "name": "left (automatická kontrola: rám × ostenie)",
+    "quantity": null,
+    "delta_cm": 9.7,
+    "tol_cm": 3.0
+   },
+   "error_before_cm": 9.72,
+   "error_after_cm": 0.0,
+   "kept": true,
+   "evaluated_in": 2
+  },
+  {
+   "target": "types",
+   "path": [
+    "i6",
+    "cw_fields",
+    {
+     "id": "O1"
+    },
+    "rect"
+   ],
+   "before": {
+    "v": [
+     1.0,
+     1.87,
+     0.15,
+     2.76
+    ],
+    "src": "S6",
+    "conf": "meranie",
+    "note": "dverový stĺpec výkladu O1 (kvetinárstvo): ľavá hrana, spodok a vrch = O1 (I1); pravá = stĺpik medzi dverami a výkladom s = 1,87 (S6; stred lišty na fotke 1,90)"
+   },
+   "after": {
+    "v": [
+     0.9158,
+     1.87,
+     0.15,
+     2.8211
+    ],
+    "src": "I7.1",
+    "conf": "meranie",
+    "note": "I7 iterácia 1: hrany left, top z fotky (zlúčené); pôvodne [1.0, 1.87, 0.15, 2.76] (S6, meranie)"
+   },
+   "id": "M015_L1.c6",
+   "src": "I7.1",
+   "conf": "meranie",
+   "cause": "spec",
+   "iteration": 1,
+   "status": "active",
+   "reason": "model = spec na ráme, murovaná hrana left je na fotke o -8.4 cm ďalej od kamery (murovaná hrana o 5.9 cm ďalej od kamery ako rám (očakávané ostenie 16.7 cm); tretiny súhlasia, končí na ostení)",
+   "evidence": {
+    "method": "masonry_edge (paralaxa ostenia)",
+    "rw_cm": 16.7,
+    "status": "certain",
+    "pos": 0.8987,
+    "step": 18.2,
+    "frame": 0.9581,
+    "role": "outer",
+    "rw_measured": 0.0594,
+    "reason": "murovaná hrana o 5.9 cm ďalej od kamery ako rám (očakávané ostenie 16.7 cm); tretiny súhlasia, končí na ostení",
+    "outer": [
+     {
+      "pos": 0.8987,
+      "step": 18.2
+     }
+    ],
+    "inner": [
+     {
+      "pos": 1.0961,
+      "step": 12.4
+     }
+    ],
+    "thirds": [
+     0.9084,
+     0.8989,
+     0.8953
+    ],
+    "spacing_thirds": [
+     -0.0552,
+     -0.0581,
+     -0.0581
+    ],
+    "continuation": {
+     "beyond": [
+      36.6,
+      3.4
+     ],
+     "ratio": 2.01,
+     "continues": true,
+     "unclear": false
+    }
+   },
+   "crop": "C:\\FacadePilot\\out\\M015_L1\\i7\\M015_L1_O1_left_auto_it1.png",
+   "finding": {
+    "source": "auto",
+    "item": "O1",
+    "edge": "left",
+    "name": "left (automatická kontrola: rám × ostenie)",
+    "quantity": null,
+    "delta_cm": 8.5,
+    "tol_cm": 3.0
+   },
+   "error_before_cm": 8.44,
+   "error_after_cm": 2.18,
+   "kept": true,
+   "evaluated_in": 2
+  },
+  {
+   "target": "types",
+   "path": [
+    "i6",
+    "cw_fields",
+    {
+     "id": "O1b"
+    },
+    "rect"
+   ],
+   "before": {
+    "v": [
+     1.87,
+     2.47,
+     0.78,
+     2.76
+    ],
+    "src": "S6",
+    "conf": "odhad",
+    "note": "výkladové pole O1 vpravo od dverí: spodok výkladu v = 0,78 (parapet čiastočne za kvetmi, ODHAD), vrch a pravá hrana = O1"
+   },
+   "after": {
+    "v": [
+     1.87,
+     2.47,
+     0.78,
+     2.8211
+    ],
+    "src": "I7.1",
+    "conf": "odhad",
+    "note": "výkladové pole O1 vpravo od dverí: spodok výkladu v = 0,78 (parapet čiastočne za kvetmi, ODHAD), vrch a pravá hrana = O1; I7 iterácia 1: spoločná hrana s O1 (2.76 -> 2.8211)"
+   },
+   "linked": "O1",
+   "id": "M015_L1.c7",
+   "src": "I7.1",
+   "conf": "meranie",
+   "cause": "spec",
+   "iteration": 1,
+   "status": "active",
+   "reason": "model = spec na ráme, murovaná hrana left je na fotke o -8.4 cm ďalej od kamery (murovaná hrana o 5.9 cm ďalej od kamery ako rám (očakávané ostenie 16.7 cm); tretiny súhlasia, končí na ostení)",
+   "evidence": {
+    "method": "masonry_edge (paralaxa ostenia)",
+    "rw_cm": 16.7,
+    "status": "certain",
+    "pos": 0.8987,
+    "step": 18.2,
+    "frame": 0.9581,
+    "role": "outer",
+    "rw_measured": 0.0594,
+    "reason": "murovaná hrana o 5.9 cm ďalej od kamery ako rám (očakávané ostenie 16.7 cm); tretiny súhlasia, končí na ostení",
+    "outer": [
+     {
+      "pos": 0.8987,
+      "step": 18.2
+     }
+    ],
+    "inner": [
+     {
+      "pos": 1.0961,
+      "step": 12.4
+     }
+    ],
+    "thirds": [
+     0.9084,
+     0.8989,
+     0.8953
+    ],
+    "spacing_thirds": [
+     -0.0552,
+     -0.0581,
+     -0.0581
+    ],
+    "continuation": {
+     "beyond": [
+      36.6,
+      3.4
+     ],
+     "ratio": 2.01,
+     "continues": true,
+     "unclear": false
+    }
+   },
+   "crop": "C:\\FacadePilot\\out\\M015_L1\\i7\\M015_L1_O1_left_auto_it1.png",
+   "finding": {
+    "source": "auto",
+    "item": "O1",
+    "edge": "left",
+    "name": "left (automatická kontrola: rám × ostenie)",
+    "quantity": null,
+    "delta_cm": 8.5,
+    "tol_cm": 3.0
+   },
+   "error_before_cm": 8.44,
+   "error_after_cm": 2.18,
+   "kept": true,
+   "evaluated_in": 2
+  },
+  {
+   "target": "types",
+   "path": [
+    "i6",
+    "cw_fields",
+    {
+     "id": "O3"
+    },
+    "rect"
+   ],
+   "before": {
+    "v": [
+     5.31,
+     6.33,
+     0.17,
+     3.1839
+    ],
+    "src": "I7.1",
+    "conf": "meranie",
+    "note": "I7 iterácia 1: hrana top z fotky 3.187 (skok 76, tretiny [3.1885, 3.1876, 3.1847]); pôvodne [5.31, 6.33, 0.17, 3.13] (S1, meranie)"
+   },
+   "after": {
+    "v": [
+     5.2276,
+     6.33,
+     0.17,
+     3.1839
+    ],
+    "src": "I7.1",
+    "conf": "meranie",
+    "note": "I7 iterácia 1: murovaná hrana left z fotky 5.216 (paralaxa: ostenie 9.1 cm očakávané, 8.0 cm namerané; skok 24, odstup od rámu po tretinách [-0.0813, -0.0795, -0.0798]); pôvodne [5.31, 6.33, 0.17, 3.1839] (I7.1, meranie)"
+   },
+   "id": "M015_L1.c8",
+   "src": "I7.1",
+   "conf": "meranie",
+   "cause": "spec",
+   "iteration": 1,
+   "status": "active",
+   "reason": "model = spec na ráme, murovaná hrana left je na fotke o -8.2 cm ďalej od kamery (murovaná hrana o 8.0 cm ďalej od kamery ako rám (očakávané ostenie 9.1 cm); tretiny súhlasia, končí na ostení)",
+   "evidence": {
+    "method": "masonry_edge (paralaxa ostenia)",
+    "rw_cm": 9.1,
+    "status": "certain",
+    "pos": 5.2165,
+    "step": 23.9,
+    "frame": 5.2969,
+    "role": "outer",
+    "rw_measured": 0.0804,
+    "reason": "murovaná hrana o 8.0 cm ďalej od kamery ako rám (očakávané ostenie 9.1 cm); tretiny súhlasia, končí na ostení",
+    "outer": [
+     {
+      "pos": 5.2165,
+      "step": 23.9
+     }
+    ],
+    "inner": [],
+    "thirds": [
+     5.2172,
+     5.217,
+     5.2147
+    ],
+    "spacing_thirds": [
+     -0.0813,
+     -0.0795,
+     -0.0798
+    ],
+    "continuation": {
+     "beyond": [
+      0.9,
+      2.6
+     ],
+     "ratio": 0.11,
+     "continues": false,
+     "unclear": false
+    }
+   },
+   "crop": "C:\\FacadePilot\\out\\M015_L1\\i7\\M015_L1_O3_left_auto_it1.png",
+   "finding": {
+    "source": "auto",
+    "item": "O3",
+    "edge": "left",
+    "name": "left (automatická kontrola: rám × ostenie)",
+    "quantity": null,
+    "delta_cm": 8.3,
+    "tol_cm": 3.0
+   },
+   "error_before_cm": 8.25,
+   "error_after_cm": 0.0,
+   "kept": true,
+   "evaluated_in": 2
   }
  ],
  "simplifications": [
   {
    "ref": "openings[O1] (I7: nejednoznačné hrany)",
-   "text": "I7 slučka hranu neopravila: right -6.2 cm - spoločné ostenie s O1b (dotýkajúce sa otvory) - hrana nie je hrana murovaného otvoru, raster sa kontroluje ako lišta; top -3.8 cm - jedna silná hrana, tretiny súhlasia; za ostením slabší skok (0.34 x) - škára v línii nadpražia alebo širší predmet; bez potvrdenia na susednom otvore v tej istej línii - neopravené",
+   "text": "I7 slučka hranu neopravila: right -6.2 cm - spoločné ostenie s O1b (dotýkajúce sa otvory) - hrana nie je hrana murovaného otvoru, raster sa kontroluje ako lišta",
    "proposal": "prijať model; hranu odčítať z ďalšieho záberu alebo zamerania"
   },
   {

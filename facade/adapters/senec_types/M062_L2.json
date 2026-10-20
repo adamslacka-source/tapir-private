@@ -303,6 +303,39 @@
    "favorite": "FS lin.sill_m062",
    "conf": "odhad",
    "src": "S6"
+  },
+  "door.entrance_tr": {
+   "type": "door",
+   "libpart": "Door with Transom 27",
+   "favorite": "FS door.entrance_m062",
+   "nominal": "wallhole",
+   "base_libpart": true,
+   "leaves": {
+    "v": 1,
+    "src": "S6",
+    "conf": "meranie",
+    "note": "one leaf (fotka)"
+   },
+   "transom": {
+    "v": true,
+    "src": "S6",
+    "conf": "meranie",
+    "note": "dvojdielny nadsvetlík nad krídlom: priečka krídlo / nadsvetlík v 2,12, delenie v 2,525, hlava 2,90 (fotka, profil jasu s 6,2 / 6,4 / 6,6)"
+   },
+   "sidelight": {
+    "v": "none",
+    "src": "S6",
+    "conf": "meranie"
+   },
+   "frame_surface": {
+    "v": "Barva 02 - titanově bílá",
+    "src": "S6",
+    "conf": "meranie",
+    "note": "biele dvere a rám"
+   },
+   "conf": "meranie",
+   "src": "S6",
+   "note": "G2 nález 10: domové dvere s dvojdielnym nadsvetlíkom = Door with Transom 27 (T7, libraryPartName) s jednou vodorovnou priečkou v nadsvetlíku; predtým Door 27 bez nadsvetlíka (I1 favorit)"
   }
  },
  "zones": {
@@ -366,7 +399,7 @@
    "system": "door.shop_sl_white"
   },
   "O4": {
-   "system": "door.entrance",
+   "system": "door.entrance_tr",
    "rect": {
     "v": [
      5.96,
@@ -412,7 +445,25 @@
      "tol": 0.03,
      "search": 0.05
     }
-   ]
+   ],
+   "transom_h": {
+    "v": 0.78,
+    "src": "S6",
+    "conf": "meranie",
+    "note": "priečka krídlo / nadsvetlík v 2,12 (fotka) - hlava otvoru 2,90"
+   },
+   "transom_bars": {
+    "v": 1,
+    "src": "S6",
+    "conf": "meranie",
+    "note": "nadsvetlík je dvojdielny (vodorovná priečka v 2,525, fotka)"
+   },
+   "transom_bar_h": {
+    "v": 0.405,
+    "src": "S6",
+    "conf": "odhad",
+    "note": "2,525 - 2,12; význam parametra knižnice NEOVERENÝ (ako M015 O3)"
+   }
   },
   "O5": {
    "system": "win.fixed",
@@ -670,8 +721,8 @@
   },
   {
    "ref": "openings[O4]",
-   "text": "Domové dvere s dvojdielnym nadsvetlíkom sú Door 27 bez nadsvetlíka (I1 favorit); spodok zakrytý kvetmi (ODHAD 0,20).",
-   "proposal": "systém dverí s nadsvetlíkom (Double Door with Transom je dvojkrídlový) - doplniť typ v ďalšom inkremente"
+   "text": "Domové dvere O4 = Door with Transom 27 s dvojdielnym nadsvetlíkom (G2 nález 10); spodok zakrytý kvetmi (ODHAD 0,20); poloha priečky v nadsvetlíku je parameter knižnice s NEOVERENÝM významom.",
+   "proposal": "prijať"
   },
   {
    "ref": "linear[L1]",

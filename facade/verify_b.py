@@ -113,6 +113,17 @@ def expected_box(spec: dict, it: dict) -> list[float] | None:
     return None
 
 
+def v_edge(g: np.ndarray, x_guess: float, y0: int, y1: int, sign: int, half: int = 14) -> tuple[float, float]:
+    """Vertical edge near x_guess: strongest step of the given sign (+1 = brighter to the right) of the column profile
+    (median over the rows y0..y1); returns (x px, strength)."""
+    x0 = int(round(x_guess)) - half
+    x0 = max(0, x0)
+    prof = np.median(g[y0:y1, x0:x0 + 2 * half + 1], axis=0)
+    d = np.diff(prof) * sign
+    i = int(np.argmax(d))
+    return x0 + i + 0.5, float(d[i])
+
+
 def _font(size):
     for name in ("arial.ttf", "DejaVuSans.ttf"):
         try:
@@ -335,12 +346,42 @@ def verify(spec: dict, project: str, port: int, out_root: Path, overlay: bool = 
             med = float(np.median(samples))
             edge_rows.append({"item": item, "edge": name, "n": len(samples), "median_cm": round(med * 100, 2),
                               "max_cm": round(max(abs(x) for x in samples) * 100, 2), "ok": abs(med) <= ptol})
+    # vertical edges (G2 findings 6-7): the round column (silhouette of all its 3D vertices through the camera) and the
+    # west end wall (left edge at the downpipe), between the walkways (rows where nothing stands in front of them)
+    proj_by = {it["item"]: b for it, (_, b) in zip(order, proj)}
+    for item, name, which, sign, bands in (("STLP_L", "ľavá hrana stĺpa", "min", +1, ((2650, 2900), (3400, 3700))),
+                                           ("STLP_L", "pravá hrana stĺpa", "max", -1, ((2650, 2900), (3400, 3700))),
+                                           ("STENA_Z", "ľavá hrana steny (zvod v rohu)", "min", +1, ((2620, 2880), (3400, 3700)))):
+        if item not in proj_by or not proj_by[item]:
+            continue
+        allp = np.vstack([b for b, _ in proj_by[item]])
+        xs = cam.xy(allp)[:, 0]
+        xm = float(xs.min() if which == "min" else xs.max())
+        w_e = float(allp[np.argmin(xs) if which == "min" else np.argmax(xs), 2])
+        samples = []
+        for y0, y1 in bands:
+            xp, stg = v_edge(g, xm, y0, y1, sign, 14)
+            dm = (xm - xp) / cam.px_per_m(w_e)
+            samples.append(dm)
+            photo.append({"item": item, "edge": name, "model_px": round(xm, 1), "photo_px": round(float(xp), 1), "y_px": f"{y0}-{y1}",
+                          "delta_cm": round(float(dm) * 100, 2), "tol_cm": ptol * 100, "contrast": round(stg, 1), "ok": abs(dm) <= ptol, "sample": True})
+        med = float(np.median(samples))
+        edge_rows.append({"item": item, "edge": name, "n": len(samples), "median_cm": round(med * 100, 2),
+                          "max_cm": round(max(abs(x) for x in samples) * 100, 2), "ok": abs(med) <= ptol})
+    # G2 cause 4: what is NOT checked against the photo is said so (never 'Δ0' from model = spec)
+    checked = {p["item"] for p in photo}
+    unverified = sorted(it["item"] for it in items if it["item"] not in checked)
+    kinds = {}
+    for it in items:
+        if it["item"] not in checked:
+            kinds[it["kind"]] = kinds.get(it["kind"], 0) + 1
     # (e) overlays
     out_dir = out_root / spec["id"]
     out_dir.mkdir(parents=True, exist_ok=True)
     paths = {}
     if overlay:
-        title = f"{spec['id']}: model (ArchiCAD 3D, kamera fotky) cez rektifikovanú fotku | azúrová LOP, červená pásy/strecha/konzoly, zelená ochodze, žltá žalúzie"
+        title = (f"{spec['id']}: model (ArchiCAD 3D, kamera fotky) cez rektifikovanú fotku | azúrová LOP, červená pásy/strecha/konzoly, zelená ochodze, "
+                 f"žltá žalúzie | neoverené voči fotke: " + ", ".join(f"{k} {n}" for k, n in sorted(kinds.items())))
         paths["overlay"] = out_dir / "overlay_HOF_B.png"
         draw_overlay(rect, proj, cam, paths["overlay"], 0.25, None, title)
         paths["detail"] = out_dir / "overlay_detail_HOF_B.png"
@@ -368,7 +409,8 @@ def verify(spec: dict, project: str, port: int, out_root: Path, overlay: bool = 
               "photo_fail": [f"{p['item']} {p['edge']} {p['delta_cm']} cm" for p in mull if not p["ok"]] + [f"{e['item']} {e['edge']} {e['median_cm']} cm" for e in edge_rows if not e["ok"]],
               "photo_samples_max_cm": max(abs(p["delta_cm"]) for p in photo if p.get("sample")) if edge_rows else None,
               "photo_median_cm": float(np.median(ph)) if ph else None, "problems": problems, "paths": {k: str(v) for k, v in paths.items()},
-              "seconds": round(time.monotonic() - t0, 1), "cw_photo": cw_res.get("photo")}
+              "seconds": round(time.monotonic() - t0, 1), "cw_photo": cw_res.get("photo"),
+              "photo_unverified": unverified, "photo_unverified_by_kind": kinds}
     (out_dir / "report_b.json").write_text(json.dumps({"result": result, "types": trows}, indent=1, ensure_ascii=False, default=str), encoding="utf-8")
     return result
 

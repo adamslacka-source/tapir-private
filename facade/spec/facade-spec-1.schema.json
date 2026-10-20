@@ -1042,6 +1042,10 @@
             "type": "string",
             "description": "wall zone the object sits on (arch gable: on top of it)"
           },
+          "over": {
+            "type": "string",
+            "description": "arch gable: the opening right under the arch (its head = the springing, its half width = the inner chord)"
+          },
           "origin": {
             "type": "object",
             "required": [

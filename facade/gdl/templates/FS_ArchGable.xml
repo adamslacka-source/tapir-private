@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Symbol IsArchivable="false" IsPlaceable="true" MainGUID="0D4E8A11-E960-5E08-9731-5DF1AA3F460A" MigrationValue="Normal" Owner="0" Version="46">
-<!-- FS_ArchGable 1.0 - arched gable / archivolt above a wall (ADR-001 D5): the part of a wall above the springing
-     line whose top is a semicircle. Units: metres. Origin = centre of the arch on the springing line in the
-     outside wall face; x = along the facade, z = up, y = out of the wall plane (the body lies in y [-depth, 0]).
-     Ring between rIn and rOut (rIn = radius of the arched opening below it, e.g. an arch door head); optional
-     half-disc infill inside rIn, recessed by infRecess (a closed lunette). Polygonal arcs with nSeg segments. -->
+<!-- FS_ArchGable 1.1 - arched gable / archivolt above a wall (ADR-001 D5): the part of a wall above the springing
+     line whose top is an arc. Units: metres. Origin = centre of the arcs in the outside wall face; x = along the
+     facade, z = up, y = out of the wall plane (the body lies in y [-depth, 0]). The springing line lies vSpring
+     above the centre (0 = semicircle, > 0 = segmental arch: inner chord half width sqrt(rIn^2 - vSpring^2)).
+     Ring between rIn and rOut above the springing line; optional infill inside rIn (the segment between the
+     springing chord and the inner arc), recessed by infRecess (a closed lunette). Polygonal arcs with nSeg segments. -->
 <Ancestry SectVersion="1" SectionFlags="0" SubIdent="0" Template="false">
 	<MainGUID>F938E33A-329D-4A36-BE3E-85E126820996</MainGUID>
 	<MainGUID>103E8D2C-8230-42E1-9597-46F84CCE28C0</MainGUID>
@@ -52,12 +53,16 @@
 			<Description><![CDATA["Depth of the body into the wall"]]></Description>
 			<Value>0.57</Value>
 		</Length>
+		<Length Name="vSpring">
+			<Description><![CDATA["Springing line above the arc centre (0 = semicircle)"]]></Description>
+			<Value>0</Value>
+		</Length>
 		<Integer Name="nSeg">
 			<Description><![CDATA["Segments of a half circle"]]></Description>
 			<Value>24</Value>
 		</Integer>
 		<Boolean Name="bInfill">
-			<Description><![CDATA["Half-disc infill inside the ring (closed lunette)"]]></Description>
+			<Description><![CDATA["Infill inside the ring (closed lunette)"]]></Description>
 			<Value>0</Value>
 		</Boolean>
 		<Length Name="infRecess">
@@ -76,23 +81,27 @@
 </ParamSection>
 
 <Script_1D SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
-! FS_ArchGable 1.0 - master script
+! FS_ArchGable 1.1 - master script
 n = MAX(nSeg, 2)
+vs = MAX(vSpring, 0)
+aO = ASN(MIN(vs / rOut, 1))
+aI = ASN(MIN(vs / rIn, 1))
+xO = SQR(MAX(rOut * rOut - vs * vs, 0))
 ]]></Script_1D>
 
 <Script_2D SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
-HOTSPOT2 -rOut, 0
-HOTSPOT2 rOut, 0
-HOTSPOT2 -rOut, -depth
-HOTSPOT2 rOut, -depth
+HOTSPOT2 -xO, 0
+HOTSPOT2 xO, 0
+HOTSPOT2 -xO, -depth
+HOTSPOT2 xO, -depth
 PROJECT2 3, 270, 2
 ]]></Script_2D>
 
 <Script_3D SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[
-HOTSPOT -rOut, 0, 0
-HOTSPOT rOut, 0, 0
-HOTSPOT -rOut, -depth, 0
-HOTSPOT rOut, -depth, 0
+HOTSPOT -xO, 0, vs
+HOTSPOT xO, 0, vs
+HOTSPOT -xO, -depth, vs
+HOTSPOT xO, -depth, vs
 HOTSPOT 0, 0, rOut
 HOTSPOT 0, -depth, rOut
 
@@ -100,11 +109,11 @@ HOTSPOT 0, -depth, rOut
 IF matRing > 0 THEN MATERIAL matRing
 ROTX 90
 FOR i = 0 TO n
-	a = 180 * i / n
+	a = aO + (180 - 2 * aO) * i / n
 	PUT rOut * COS(a), rOut * SIN(a), 15
 NEXT i
 FOR i = n TO 0 STEP -1
-	a = 180 * i / n
+	a = aI + (180 - 2 * aI) * i / n
 	PUT rIn * COS(a), rIn * SIN(a), 15
 NEXT i
 PRISM_ NSP / 3, depth, GET(NSP)
@@ -115,7 +124,7 @@ IF bInfill AND depth > infRecess THEN
 	ADDY -infRecess
 	ROTX 90
 	FOR i = 0 TO n
-		a = 180 * i / n
+		a = aI + (180 - 2 * aI) * i / n
 		PUT rIn * COS(a), rIn * SIN(a), 15
 	NEXT i
 	PRISM_ NSP / 3, depth - infRecess, GET(NSP)
@@ -129,6 +138,7 @@ VALUES "rOut" RANGE (0, ]
 VALUES "depth" RANGE (0, ]
 VALUES "nSeg" RANGE [2, 96]
 VALUES "infRecess" RANGE [0, ]
+VALUES "vSpring" RANGE [0, ]
 ]]></Script_PR>
 
 <Script_UI SectVersion="20" SectionFlags="0" SubIdent="0"><![CDATA[

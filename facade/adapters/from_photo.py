@@ -75,6 +75,7 @@ READ = {
     "walk_upper_bar": 2337, "walk_lower_bar": 3149, "rail_upper_top": 2113, "rail_lower_top": 2923,
     "cw_left": 647, "pier_l": (7003, 7125), "pier_r_side": 7298, "pier_r": (7395, 7508), "cw_right_start": 7510,
     "column_l": (52, 165), "column_l_top": 1875, "downpipes": (272, 6712),
+    "west_wall_left": 296,         # G2 finding 6: left edge of the light opaque plane west of the CW (right edge of the downpipe at the corner)
     "bay_door_leaf_top": 3470, "bay_door_leaf_bot": 3955, "bay_lintel": (3205, 3305),
     "tree_x": 8350,                # right of it the upper floors are hidden by leaves
     "walk_corner": 25,             # corner post of the walkways at the left end
@@ -737,9 +738,15 @@ def extract(root: Path, photo: Path) -> dict:
     c1 = vedge(READ["column_l"][1], 2650, 2900, -1)[0]
     ctop = h_edge(g, int(0.5 * (c0 + c1)), READ["column_l_top"], +1, 20, 16)[0]
     z_col = (lv["red1_top"] - cam.v_c) * f / (cam.cy - ctop)          # depth: the column top meets the soffit at its facade height
-    col = {"px": [c0, c1], "top_px": ctop, "Z": z_col, "w_axis": D0 - z_col, "d": (c1 - c0) * z_col / f,
+    # G2 finding 7: a cylinder seen off-axis (the camera is ~23 m to the right) projects WIDER than its diameter by
+    # 1 / cos(theta), theta = angle of the line of sight to the axis -> diameter = image width * Z / f * cos(theta)
+    cos_t = math.cos(math.atan(abs(0.5 * (c0 + c1) - cam.cx) / f))
+    col = {"px": [c0, c1], "top_px": ctop, "Z": z_col, "w_axis": D0 - z_col, "d": (c1 - c0) * z_col / f * cos_t, "cos_theta": cos_t,
            "s_axis": float(cam.s(0.5 * (c0 + c1), D0 - z_col))}
     rec["column"] = col
+    # G2 finding 6: the light opaque plane between the downpipe at the corner and the first CW field (rows between the
+    # walkways, where nothing is in front of it): pipe (dark) -> plane (light) = brighter after
+    rec["west_wall"] = {"left_px": [vedge(READ["west_wall_left"], y0, y1, +1, 12)[0] for y0, y1 in ((2620, 2880), (3400, 3700))]}
     plate = []
     for x in range(1500, 6400, 280):
         prof = hprof(g, x - 20, x + 20, int(rails["upper"]["edge_px"]) + 15, int(rails["upper"]["edge_px"]) + 50)
@@ -1000,13 +1007,28 @@ def assemble(X: dict) -> dict:
                         "note": "oceľová konzola ochodze"})
     # round column under the overhang (left)
     d = round(col["d"], 3)
-    s_c0 = S(col["px"][0], col["w_axis"])
+    s_c0 = round(S(0.5 * (col["px"][0] + col["px"][1]), col["w_axis"]) - d / 2, 3)   # axis from the silhouette centre
     lin.append({"id": "STLP_L", "kind": "column", "system": "lin.stlp", "axis": "v",
-                "s": rng(s_c0, s_c0 + d, "meranie", "S1", "okraje stĺpa (kamera fotky v hĺbke stĺpa)"),
+                "s": rng(s_c0, round(s_c0 + d, 3), "meranie", "S1", "os = stred obrysu stĺpa na fotke v hĺbke osi; priemer = šírka obrysu × Z/f × cos(uhol pohľadu) - šikmý pohľad valec rozširuje"),
                 "v": rng(0.0, soffit_v, "pravidlo", "S1", "od terénu po podhľad"),
-                "w": val(round(col["w_axis"] - d / 2 - d / 2, 3), "odhad", None,
-                         "hĺbka z výšky hlavy stĺpa: podhľad za fasádou vo výške pri fasáde (ODHAD, ~1,9 m za čelom)"),
+                # G2 finding 7: the s of the edges is read at the depth of the AXIS (w_axis) - the profile (w 0 .. d) is
+                # centred on it (was: front at w_axis, the axis d/2 deeper -> projected ~0.25 m off the photo column)
+                "w": val(round(col["w_axis"] - d / 2, 3), "odhad", None,
+                         "os stĺpa v hĺbke z výšky hlavy stĺpa (hlava pri podhľade vo výške podhľadu pri fasáde; podhľad stúpa k čelu - ODHAD, "
+                         "~1,6 m za čelom); s okrajov z fotky v tejto hĺbke - s a w sú z jednej fotky viazané, hĺbka NEOVERENÁ"),
                 "note": "betónový okrúhly stĺp pod presahom vľavo"})
+    # G2 finding 6: the light opaque plane west of the CW - a solid end bay of the south facade (the west side of the
+    # building cannot be seen from the camera at cx: it faces away from it). Wall from the ground to the soffit, outside
+    # face in the plane of the CW glazing (ODHAD), from the downpipe at the corner to the first CW field / slab edge strip
+    ww_px = float(np.median(rec["west_wall"]["left_px"]))
+    s_ww0 = S(ww_px, CW_DEPTH_W)
+    s_ww1 = round(min(c["rect"]["v"][0] for c in spec_cw if c["rect"]["v"][0] < 10.0), 3)
+    zones.append({"id": "STENA_Z", "kind": "wall", "rect": {"v": round_list([s_ww0, s_ww1, 0.0, soffit_v]), "src": "S1", "conf": "meranie",
+                  "note": f"svetlá nepriehľadná plocha západne od LOP: ľavá hrana = pravá hrana zvodu v rohu ({ww_px:.0f} px, medián 2 pásov medzi "
+                          "ochodzami), pravá = začiatok prvého poľa LOP; po podhľad"},
+                  "thickness": val(0.30, "odhad", None, "hrúbka plnej steny koncového poľa (ODHAD)"), "system": "wall.betón",
+                  "w": val(CW_DEPTH_W, "odhad", None, "líce v rovine zasklenia LOP (ODHAD - z jedného čelného záberu sa hĺbka nedá odčítať)"),
+                  "role": "main", "note": "plná stena západného koncového poľa južnej fasády (G2 nález 6); materiál / povrch ODHAD"})
 
     # ---- walls: piers and the lintels of the recessed bay -----------------------------------------------------------
     for zid, (a_, b_) in (("PILIER_L", pl), ("PILIER_P", pr)):
@@ -1141,8 +1163,10 @@ def assemble(X: dict) -> dict:
         {"ref": "fotka.vpravo", "text": "pravých ~13 % (x > 8350 px) v 1.-2.NP zakrýva strom: stĺpiky z prízemia (pravidlo), výška žalúzií ako v podlaží; fasáda pokračuje za okraj fotky (model končí na okraji)",
          "proposal": "doplniť z ďalšej fotky"},
         {"ref": "odkvapové zvody", "text": "2 zvislé rúry (x 272 a 6712 px, s lievikom pri podhľade) - zvody, nie stĺpy; nemodelované (TZB)", "proposal": "prijať"},
-        {"ref": "vľavo", "text": "biela plocha vľavo od LOP (pod presahom) nejednoznačná (stena v hĺbke / obloha) - nemodelovaná; ochodze sa na ľavom konci vracajú bočným zábradlím",
-         "proposal": "overiť"},
+        {"ref": "zones[STENA_Z]", "text": "svetlá nepriehľadná plocha západne od LOP (medzi zvodom v rohu a prvým poľom, od terénu po podhľad, ~1,7 m) = plná stena koncového poľa južnej fasády: bočná (západná) stena z kamery v strede záberu viditeľná nie je, obloha je vľavo od zvodu iná (modrá). Hĺbka líca (rovina zasklenia), hrúbka 0,30 a materiál sú ODHAD; ochodze idú pred ňou a vracajú sa bočným zábradlím",
+         "proposal": "prijať; hĺbku a materiál overiť druhým záberom"},
+        {"ref": "linear[STLP_L]", "text": "okrúhly stĺp: s okrajov z fotky v hĺbke osi, os ~1,6 m za čelom z výšky hlavy stĺpa (podhľad) - s a hĺbka sú z jednej fotky viazané; hĺbka NEOVERENÁ (podhľad stúpa k čelu o 0,23 m)",
+         "proposal": "overiť polohu stĺpa druhým záberom alebo pôdorysom"},
         {"ref": "pásy", "text": "červené pásy a sivá skrinka sú nosníky s profilom; povrch triedy rámu LOP sa nezachová (nález I5) - rámy majú farbu materiálu", "proposal": "prijať"},
     ]
     props = {

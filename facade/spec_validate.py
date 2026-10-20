@@ -543,8 +543,21 @@ def _check_objects(spec: dict, openings: list, frames: dict, item_ids: set, chec
                 errors.append(f"objects[{bid}]: zone '{ob.get('zone')}' does not exist")
                 continue
             zs0, zs1, _, zv1 = z["rect"]["v"]
-            if abs(ov - zv1) > 0.001 or abs(ow - zone_w(z)) > 0.001:
-                errors.append(f"objects[{bid}]: springing ({ov}, w {ow}) is not on top of zone {z['id']} ({zv1}, w {zone_w(z)})")
+            vs = float(p.get("vSpring", 0.0) or 0.0)            # FS_ArchGable 1.1: springing vSpring above the arc centre
+            if vs < 0 or vs >= p["rIn"]:
+                errors.append(f"objects[{bid}]: vSpring {vs} must be in [0, rIn {p['rIn']})")
+            if abs(ov + vs - zv1) > 0.001 or abs(ow - zone_w(z)) > 0.001:
+                errors.append(f"objects[{bid}]: springing ({ov + vs:.4f} = centre {ov} + vSpring {vs}, w {ow}) is not on top of zone {z['id']} ({zv1}, w {zone_w(z)})")
+            under = by_id.get(ob.get("over", ""))               # the opening under the arch (lunette above its head)
+            if ob.get("over") and under is None:
+                errors.append(f"objects[{bid}]: over '{ob.get('over')}' is not an opening")
+            elif under is not None:
+                us0, us1, _, uv1 = under["rect"]["v"]
+                for what, got, want in (("inner chord half width = half width of " + under["id"], gdl_expect.arch_chord(p), 0.5 * (us1 - us0)),
+                                        ("centre s = centre of " + under["id"], os_, 0.5 * (us0 + us1)),
+                                        ("springing = top of " + under["id"], ov + vs, uv1)):
+                    if abs(got - want) > 0.01:
+                        errors.append(f"objects[{bid}]: arch over {under['id']} - {what}: {got:.3f} != {want:.3f}")
             if bb[0] < zs0 - 0.001 or bb[1] > zs1 + 0.001:
                 errors.append(f"objects[{bid}]: arch {bb[0]:.3f}..{bb[1]:.3f} wider than zone {z['id']} {zs0}..{zs1}")
             if p["rIn"] >= p["rOut"]:

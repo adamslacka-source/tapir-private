@@ -442,9 +442,10 @@ def build_spec(house: str, root: Path = DEFAULT_ROOT, i6: bool = False, correcti
                       "z0": {"v": P["z0"], "src": "S2", "conf": "meranie", "note": "terrain at the facade base from survey BODY.stx (pata_oprava 2026-10-09)"},
                       "outside": "right_of_ab", "layer": f"FASADA – {house}",
                       "home_story": {"floorIndex": 0, "src": "S5", "conf": "pravidlo",
-                                     "note": "same home story as the morph of the house; wall height is fixed (no top link) because the project stories are template stories"}},
+                                     "note": "default only: every element gets the story of its foot from the project stories (stories[], "
+                                             "senec_types/_project_stories.json); walls are top-linked to the story under their top"}},
         "sources": sources,
-        "stories": [{"id": "1NP", "level": {"v": 0.0, "src": None, "conf": "odhad", "note": "ground floor taken at the facade foot; real floor level unknown"}}],
+        "stories": project_stories(P["z0"]),
         "zones": zones,
         "openings": openings,
         "systems": SYSTEMS,
@@ -468,6 +469,19 @@ def build_spec(house: str, root: Path = DEFAULT_ROOT, i6: bool = False, correcti
     sc.finish_spec(spec, corr, c_applied + s_applied, c_stale + s_stale)
     spec["assumptions"] = assumptions_of(spec)
     return spec
+
+
+def project_stories(z0: float) -> list[dict]:
+    """Stories of the pilot A project (one set for the street, senec_types/_project_stories.json) relative to the facade foot
+    z0 of this house: level = absolute level - z0, so that every house sets the same project stories (build.story_payload).
+    G2 finding 11: every element gets the story of its foot, walls are top-linked (modeller rules 2 and 3)."""
+    data = json.loads((TYPES_DIR / "_project_stories.json").read_text(encoding="utf-8"))
+    out = []
+    for st in data["stories"]:
+        out.append({"id": st["id"], "floorIndex": st["floorIndex"], "name": st["name"],
+                    "level": {"v": round(st["level_abs"] - z0, 6), "src": st["src"], "conf": st["conf"],
+                              "note": f"absolútne {st['level_abs']:+.3f} (projekt), päta fasády {z0:+.3f}; {st['note']}"}})
+    return out
 
 
 def assumptions_of(spec: dict) -> list[dict]:

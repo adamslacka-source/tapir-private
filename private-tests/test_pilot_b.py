@@ -107,6 +107,18 @@ def offline() -> dict:
     check("B2 walkways + railings, consoles, red bands, roof edge, column, piers",
           len([s for s in spec["slabs"] if s["kind"] == "walkway"]) == 2 and len(spec["railings"]) == 2 and kinds.get("bracket", 0) >= 60
           and kinds.get("band", 0) == 6 and kinds.get("eaves") == 1 and kinds.get("column") == 1 and len(spec["zones"]) >= 4, f"{kinds}")
+    # G2 findings 6-7 (2026-10-19): the light opaque plane west of the CW is modelled as the end wall STENA_Z (left edge =
+    # downpipe at the corner, measured), the round column has its axis at the depth its s was read at
+    zw = next((z for z in spec["zones"] if z["id"] == "STENA_Z"), None)
+    stl = next(it for it in spec["linear"] if it["id"] == "STLP_L")
+    d_col = stl["s"]["v"][1] - stl["s"]["v"][0]
+    check("B2 west end wall STENA_Z (G2 nález 6): measured left edge (downpipe), up to the first CW field, ground to soffit, depth ODHAD",
+          zw is not None and zw["rect"]["conf"] == "meranie" and 1.4 < zw["rect"]["v"][1] - zw["rect"]["v"][0] < 2.0
+          and abs(zw["rect"]["v"][1] - min(c["rect"]["v"][0] for c in cws)) < 1e-3 and zw["w"]["conf"] == "odhad",
+          f"{zw['rect']['v'] if zw else None}, w {zw['w']['v'] if zw else None}")
+    check("B2 column STLP_L (G2 nález 7): axis at the depth of the reading (profile centred on w_axis), depth ODHAD",
+          abs((stl["w"]["v"] + d_col / 2) - meas["column"]["w_axis"]) < 0.002 and stl["w"]["conf"] == "odhad",
+          f"w {stl['w']['v']} + d/2 {d_col / 2:.3f} vs w_axis {meas['column']['w_axis']:.3f}")
     vals = list(walk_values(spec))
     bad = [r_ for r_, v in vals if v["conf"] not in ("odhad", "default") and not v.get("src")]
     check("B2 every value carries src + conf (odhad/default may have src null)", not bad and len(vals) > 500, f"{len(vals)} values; {bad[:3]}")

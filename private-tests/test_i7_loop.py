@@ -99,6 +99,75 @@ def offline() -> None:
                              {"edge": "right", "at": s1 + 0.2, "rng": pe["right"]["range"], "brighter": "right"}], I.RIGID_HALF)
     check("O3 rigid shift on the photo: O6 jambs predicted +0.20 m -> found d = -0.20 m (+-1 cm), unique", res["status"] == "certain" and abs(res["d"] + 0.2) <= 0.01,
           json.dumps(res))
+    offline_g2(spec, ph)
+
+
+def offline_g2(spec_m015: dict, ph_m015) -> None:
+    """G2 fixes (kontrola_G2.md, causes 1-3): parallax of the reveals, no OK on the wrong edge, no 'model confirmed' by the
+    candidate nearest to the model."""
+    from photo_measure import Photo, masonry_edge, project, visible_reveal
+    from verify import auto_edge_check
+    # O4 synthetic: wall | reveal strip (rw 0.10 m) | frame | glass; the reveal on the left faces the camera
+    S, v1 = 100.0, 4.0
+    lum = np.full((400, 400), 180.0)
+    xm, xf = 150, 160                                         # masonry corner / frame line (px)
+    lum[:, xm:xf] = 135.0                                     # shaded reveal
+    lum[:, xf:xf + 8] = 240.0                                 # white frame
+    lum[:, xf + 8:] = 40.0                                    # glass
+    rect = {"S": S, "u0": 0.0, "v1": v1}
+    ph = Photo.from_lum(lum, S, 0.0, v1)
+    s_m, s_f, rng = xm / S, xf / S, (0.8, 3.2)
+    on_frame = auto_edge_check(lum, rect, ph, "left", s_f, rng, 0.10)
+    m = masonry_edge(ph, "left", s_f, 0.10, rng)
+    check("O4 two steps (frame vs reveal) and the model on the frame: the automatic check is 'nejednoznačné', never OK; "
+          "the loop's parallax measurement finds the masonry edge (outer step of the pair) +-1 cm",
+          on_frame["status"] == "nejednoznačné" and abs(on_frame["second"] - s_m) <= 0.01
+          and m["status"] == "certain" and m["role"] == "outer" and abs(m["pos"] - s_m) <= 0.01,
+          f"auto {on_frame['status']} (second {on_frame.get('second')}), masonry {m['status']} {m.get('pos')} ({m.get('role')}), truth {s_m}")
+    no_rev = auto_edge_check(lum, rect, ph, "left", s_f, rng, None)
+    check("O4 the same edge without the parallax rule (old check) said OK on the frame - the case of G2 finding 1",
+          no_rev["status"] == "OK", json.dumps(no_rev))
+    on_mas = auto_edge_check(lum, rect, ph, "left", s_m, rng, 0.10)
+    m2 = masonry_edge(ph, "left", s_m, 0.10, rng)
+    check("O4 model on the masonry corner, frame ~rw inward: OK and the pair confirms it (role 'pair')",
+          on_mas["status"] == "OK" and m2["status"] == "certain" and m2["role"] == "pair" and abs(m2["pos"] - s_m) <= 0.01,
+          f"auto {on_mas['status']}, masonry {m2['status']} {m2.get('pos')} ({m2.get('role')})")
+    # O5 real photo M015: O2 left read on the frame (s0 3.42, I1/I5 value) -> ambiguous; masonry ~3.32 (kontrola_G2 nález 1)
+    cam = next(x for x in spec_m015["sources"] if x.get("rect"))["rect"]["camera"]
+    lumr = ph_m015.lum
+    rr = next(x for x in spec_m015["sources"] if x.get("rect"))["rect"]
+    zw = next(z for z in spec_m015["zones"] if z["id"] == "Z2").get("w", {}).get("v", 0.0)
+    v0, v1_ = 0.13, 3.1887
+    rw = visible_reveal(cam, "left", 3.42, 0.5 * (v0 + v1_), zw, 0.30)
+    at = project(cam, 3.42, 0.5 * (v0 + v1_), zw)[0]
+    rng2 = (v0 + 0.15 * (v1_ - v0), v1_ - 0.15 * (v1_ - v0))
+    a2 = auto_edge_check(lumr, rr, ph_m015, "left", at, rng2, rw)
+    m3 = masonry_edge(ph_m015, "left", at, rw, rng2)
+    check("O5 M015 O2 left at the frame (3.42): automatic check 'nejednoznačné'; masonry edge certain within 3 cm of the "
+          "independent reading 3.32 (kontrola_G2)", a2["status"] == "nejednoznačné" and m3["status"] == "certain" and abs(m3["pos"] - 3.32) <= 0.03,
+          f"rw {rw * 100:.1f} cm, auto {a2['status']}, masonry {m3.get('pos')} ({m3['reason'][:90]})")
+    o6 = next(o for o in spec_m015["openings"] if o["id"] == "O6")
+    s0, _, ov0, ov1 = o6["rect"]["v"]
+    z1w = next(z for z in spec_m015["zones"] if z["id"] == "Z1").get("w", {}).get("v", 0.0)
+    rw6 = visible_reveal(cam, "left", s0, 0.5 * (ov0 + ov1), z1w, o6["reveal"]["v"])
+    at6 = project(cam, s0, 0.5 * (ov0 + ov1), z1w)[0]
+    rng6 = (ov0 + 0.15 * (ov1 - ov0), ov1 - 0.15 * (ov1 - ov0))
+    a6 = auto_edge_check(lumr, rr, ph_m015, "left", at6, rng6, rw6)
+    check("O5 M015 O6 left already on the masonry (I3): automatic check OK, no false 'nejednoznačné'", a6["status"] == "OK", json.dumps(a6, ensure_ascii=False)[:200])
+    # O6 pilot B: 'model confirmed' only through a clear band without blinds (ratio >= 1.5)
+    row = lambda d, ratio, louv=False, double=False: {"row": "v", "pos_px": 100, "readable": True, "double": double, "delta_m": d, "ratio": ratio,
+                                                      "louvred": louv, "second_px": 104}
+    weak = I.judge_bar_rows([row(0.001, 1.08, double=True), row(0.001, 1.2, True)], 0.05)
+    clear = I.judge_bar_rows([row(0.004, 1.6), row(0.03, 1.1, True)], 0.05)
+    louv = I.judge_bar_rows([row(0.001, 3.0, True), row(0.002, 2.5, True)], 0.05)
+    cw15 = I.judge_bar_rows([row(0.051, 1.08, double=True), row(0.008, 1.6, True), row(0.003, 2.5, True)], 0.05)
+    check("O6 pilot B: candidates of similar strength (ratio < 1.5) near the model -> 'neoverené', never 'model potvrdený'",
+          not weak.get("confirmed") and weak.get("unverified") and weak["cls"] == "ambiguous", weak["reason"][:120])
+    check("O6 pilot B: a clear bar (ratio >= 1.5) in a band without blinds near the model -> model confirmed", clear.get("confirmed") is True, clear["reason"][:120])
+    check("O6 pilot B: bands with blinds never confirm the model (joints of the blind modules), even with a clear valley",
+          not louv.get("confirmed") and louv.get("unverified"), louv["reason"][:120])
+    check("O6 pilot B: CW_1NP_15 pattern (parapet band +5.1 cm, double bar; near only in bands with blinds) -> nejednoznačné, not confirmed",
+          cw15["cls"] == "ambiguous" and not cw15.get("confirmed") and not cw15.get("unverified"), cw15["reason"][:140])
 
 
 # -- live helpers -------------------------------------------------------------------------------------------------------
@@ -169,10 +238,55 @@ def real_a(port: int) -> None:
         check(f"K3 {lg['spec']} parter {sorted(named[lg['spec']])}: each edge read 'on the frame' is corrected from the photo (certain) "
               "or ambiguous with a crop", bool(sel) and ok,
               "; ".join(f"{f['item']} {f.get('edge')} {f.get('delta_cm'):+.1f} cm -> {f['cls']}" for f in sel))
+    g2_a_checks()
     p = OUT / "report_G2.md"
     txt = p.read_text(encoding="utf-8") if p.exists() else ""
     check("K5 report_G2.md of pilot A written (fixes, what remains, numbers before / after per house)",
           all(h in txt for h in ("M015_L1", "M062_L2", "M016_L2")) and "Čo ostáva" in txt and "pred (1. beh" in txt, str(p))
+
+
+def g2_a_checks() -> None:
+    """G2 acceptance on the final spec (kontrola_G2.md): M015 left edges O1-O3 on the masonry edge (<= 3 cm, measured by
+    the parallax pair on the photo, not the frame); M016 threshold of O6 = photo +-3 cm and on the balcony BK2 (<= 1 cm)."""
+    from from_senec import build_spec
+    from photo_measure import Photo, masonry_edge, project, visible_reveal
+    from build import opening_units, unit_reveal
+    from geom import zone_w
+    spec = build_spec("M015_L1", i6=True)
+    rr = next(x for x in spec["sources"] if x.get("rect"))["rect"]
+    ph = Photo(Path(spec["generated"]["root"]) / rr["image"], rr["S"], rr["u0"], rr["v1"])
+    cam = rr["camera"]
+    zones = {z["id"]: z for z in spec["zones"]}
+    units = {u["o"]["id"]: u for u in opening_units(spec)}
+    res = []
+    for oid in ("O1", "O2", "O3"):
+        u = units[oid]
+        s0, s1, v0, v1 = u["hole"]
+        zw = zone_w(zones[u["zone"]])
+        rw = visible_reveal(cam, "left", s0, 0.5 * (v0 + v1), zw, unit_reveal(spec, u))
+        at = project(cam, s0, 0.5 * (v0 + v1), zw)[0]
+        m = masonry_edge(ph, "left", at, rw, (v0 + 0.15 * (v1 - v0), v1 - 0.15 * (v1 - v0)))
+        res.append((oid, s0, m["status"], m.get("role"), None if m.get("pos") is None else round((m["pos"] - at) * 100, 1)))
+    check("K6 M015 left edges O1-O3 on the masonry edge (G2 nález 1): the parallax pair puts the masonry at the model (<= 3 cm), "
+          "the frame ~ostenie inward", all(st == "certain" and role in ("pair", "outer") and d is not None and abs(d) <= 3.0 for _, _, st, role, d in res),
+          "; ".join(f"{o} s0 {s0} {st} {role} {d:+.1f} cm" if d is not None else f"{o} {st}" for o, s0, st, role, d in res))
+    m16 = build_spec("M016_L2", i6=True)
+    o6 = next(o for o in m16["openings"] if o["id"] == "O6")
+    bk2 = next(b for b in m16["balconies"] if b["id"] == "BK2")
+    r16 = next(x for x in m16["sources"] if x.get("rect"))["rect"]
+    ph16 = Photo(Path(m16["generated"]["root"]) / r16["image"], r16["S"], r16["u0"], r16["v1"])
+    # threshold on the photo: bright frame -> dark band below, per column of the door (right of the sign), median
+    ys = []
+    for s_ in np.arange(7.15, 8.51, 0.05):
+        x = int(round(ph16.x(s_)))
+        col = ph16.lum[:, x - 1:x + 2].mean(axis=1)
+        y0, y1 = int(ph16.y(7.05)), int(ph16.y(6.60))
+        st = col[y0:y1 - 1] - col[y0 + 1:y1]
+        ys.append(ph16.v(y0 + int(np.argmax(st)) + 1.0))
+    thr = float(np.median(ys))
+    check("K6 M016 O6 threshold = photo +-3 cm and the door sits on the balcony BK2 (<= 1 cm) (G2 nálezy 3-4)",
+          abs(o6["rect"]["v"][2] - thr) <= 0.03 and abs(o6["rect"]["v"][2] - bk2["v_top"]["v"]) <= 0.01 and not o6.get("head_in"),
+          f"O6 bottom {o6['rect']['v'][2]}, photo {thr:.3f} (median of {len(ys)} columns), BK2 top {bk2['v_top']['v']}; head {o6['rect']['v'][3]}")
 
 
 # -- K1 artificial spec error -------------------------------------------------------------------------------------------
@@ -277,6 +391,13 @@ def real_b(port: int) -> None:
     ok = bool(cw15) and all((f["cls"] == "spec" and f.get("fix")) or (f["cls"] == "ambiguous" and f.get("crop")) for f in cw15)
     check("K3 HOF_B CW_1NP_15 bar 1 (5.1 cm, double bar): corrected with evidence or ambiguous with a crop", ok,
           "; ".join(f"{f['edge']} {f['delta_cm']} cm -> {f['cls']}: {f['reason'][:150]}" for f in cw15))
+    conf = [f for f in lg2["final_findings"] if f.get("confirmed")]
+    bad = [f["item"] + " " + f["edge"] for f in conf
+           if not any(r.get("readable") and not r.get("louvred") and r.get("ratio", 0) >= I.CONFIRM_RATIO and abs(r["delta_m"]) * 100 <= f["tol_cm"]
+                      for r in (f.get("evidence") or {}).get("rows", []))]
+    unv = [f for f in lg2["final_findings"] if f.get("unverified")]
+    check("K6 HOF_B (G2 nález 5): 'model potvrdený' only with a clear bar (ratio >= 1.5) in a band without blinds; the rest is "
+          "'neoverené' or nejednoznačné", not bad, f"confirmed {len(conf)}, unverified {len(unv)}; bad {bad}")
     check("K4 HOF_B: second run of the loop = 0 fixes, verify (rows) PASS", lg2["fixes_total"] == 0 and lg2["verify_pass"],
           f"run 1: {lg1['fixes_total']}, run 2: {lg2['fixes_total']}")
     p = I.OUT_B / "report_G2.md"

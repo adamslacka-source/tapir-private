@@ -18,6 +18,13 @@ judged before anything in the spec is changed:
                  steps at the spec width apart): score(d) = sum of the signed steps at edge + d; unique best d
   bars           a frame bar (mullion) is the darkest narrow valley: measured in every band of the floor separately;
                  two valleys of similar depth within a few cm in a band = double bar
+  parallax       (G2 finding 1) on an oblique photo the reveal on the side AWAY from the camera is visible: between the
+                 masonry corner (wall face) and the frame (`reveal` deeper) lies a strip of width
+                 rw = |P(edge, w_face - reveal) - P(edge, w_face)| (camera projection). The edge of the masonry opening
+                 (the spec convention on all four edges) is then the OUTER step of a pair (masonry, frame) whose spacing
+                 is ~rw - never simply the step nearest to the model. `visible_reveal` gives rw, `reveal_pair` reads
+                 the pair around a model edge, `masonry_edge` judges the masonry step (unique, thirds agree, ends at
+                 the jambs). The reveal depth is ODHAD, so the spacing is accepted in REVEAL_WIN x rw.
 
 Pure numpy / PIL; positions in the rectified photo plane (m), the caller converts to spec values through the camera.
 """
@@ -38,6 +45,12 @@ SECOND_RATIO = 0.6       # a second passing candidate stronger than this x the b
 BORDER_M = 0.01          # m - candidate closer than this to the window border = not found
 CONTINUE_RATIO = 0.5     # the step beyond the jambs at >= this x the step on the edge = the edge runs on (wider object)
 UNCLEAR_RATIO = 0.3      # between this and CONTINUE_RATIO: unclear (a stone joint in line with a lintel, or a wider object)
+# parallax of the reveals (G2 finding 1)
+MIN_REVEAL_M = 0.02      # m - a visible reveal narrower than this is within the photo tolerance: no pair logic
+REVEAL_WIN = (0.3, 1.25) # spacing masonry -> frame accepted as this range x the expected rw (reveal depth is ODHAD; measured
+                         # on M015 / M062: 0.35-0.9 x rw - a wider window catches signs / stone joints beyond the masonry)
+REVEAL_MIN_STEP = 6.0    # wall -> reveal is a step between two faces of one material: weaker than a frame edge
+REVEAL_REL = 0.25        # ... but at least this x the step of the frame
 
 
 # ---- images ---------------------------------------------------------------------------------------------------------
@@ -52,6 +65,16 @@ class Photo:
         self.lab = _lab(self.rgb)
         self.S, self.u0, self.v1 = float(S), float(u0), float(v1)
         self.h, self.w = self.lum.shape
+
+    @classmethod
+    def from_lum(cls, lum: np.ndarray, S: float, u0: float, v1: float) -> "Photo":
+        """Luminance-only photo (verify already holds the image as a grey array): profiles, no colour / crops."""
+        ph = cls.__new__(cls)
+        ph.path, ph.rgb, ph.lab = None, None, None
+        ph.lum = np.asarray(lum, dtype=np.float32)
+        ph.S, ph.u0, ph.v1 = float(S), float(u0), float(v1)
+        ph.h, ph.w = ph.lum.shape
+        return ph
 
     def x(self, s: float) -> float:
         return (s - self.u0) * self.S
@@ -237,6 +260,117 @@ def rigid_shift(ph: Photo, edges: list[dict], half: float = 0.35) -> dict:
          f"slabá hrana pri posune ({min(each):.0f})" if min(each) < MIN_STEP else "posun na okraji okna")
     return {"status": status, "d": round(float(grid[i]), 4), "score": round(best, 1), "second": round(second, 1),
             "per_edge": [round(x, 1) for x in each], "reason": reason}
+
+
+# ---- parallax of the reveals (masonry edge vs frame) -------------------------------------------------------------------
+def project(cam: dict | None, s: float, v: float, w: float) -> tuple[float, float]:
+    """Facade point (s, v, w) -> rectified photo plane (pilot A camera convention: pinhole at (cam.s, cam.v), distance
+    D from the plane w = 0; cam.s None = horizontal position unknown, s kept)."""
+    if not cam:
+        return s, v
+    t = cam["D"] / (cam["D"] - w)
+    return (s if cam.get("s") is None else cam["s"] + (s - cam["s"]) * t), cam["v"] + (v - cam["v"]) * t
+
+
+def visible_reveal(cam: dict | None, edge: str, s: float, v: float, w_face: float, reveal: float | None) -> float | None:
+    """Width (photo plane, m) of the reveal visible between the masonry corner (s, v at the wall face w_face) and the
+    frame `reveal` deeper. > 0: the frame appears INSIDE the opening by that much (the reveal on this edge faces the
+    camera and is seen); <= 0: hidden side (the masonry corner covers the frame). None: not computable (no camera, no
+    reveal, or a vertical edge with the camera position s unknown)."""
+    if not cam or reveal is None or reveal <= 0:
+        return None
+    if edge in ("left", "right") and cam.get("s") is None:
+        return None
+    face = project(cam, s, v, w_face)
+    frame = project(cam, s, v, w_face - reveal)
+    k = 0 if edge in ("left", "right") else 1
+    return round(float((frame[k] - face[k]) * -outward(edge)), 4)
+
+
+def reveal_pair(ph: Photo, edge: str, at: float, rw: float, rng, near: float = 0.05, min_model: float = REVEAL_MIN_STEP) -> dict:
+    """Steps around a model edge `at` when the reveal on this edge is visible (rw > 0). Returns
+      model    the strongest step within +-near of the model edge (or None)
+      outer    steps OUTWARD of it at a spacing in REVEAL_WIN x rw (>= REVEAL_MIN_STEP and >= REVEAL_REL x the model
+               step): a masonry edge beyond a model edge that sits on the frame
+      inner    steps INWARD of it at the same spacing: the frame behind a model edge that sits on the masonry corner
+    Strength of every step = |brightness step| of the profile averaged along the middle of the edge."""
+    out = outward(edge)
+    half = REVEAL_WIN[1] * rw + near + 0.03
+    pos, st = step_profile(ph, edge, at, rng, half)
+    if len(st) < 5:
+        return {"model": None, "outer": [], "inner": [], "rw": rw}
+    peaks = [{"pos": round(p, 4), "step": round(s, 1)} for p, s in _peaks(pos, st, None) if s >= REVEAL_MIN_STEP]
+    cand = [c for c in peaks if abs(c["pos"] - at) <= near and c["step"] >= min_model]
+    model = max(cand, key=lambda c: c["step"]) if cand else None
+    ref = model["pos"] if model else at
+    lim = max(REVEAL_MIN_STEP, REVEAL_REL * model["step"]) if model else REVEAL_MIN_STEP
+    lo, hi = REVEAL_WIN[0] * rw, REVEAL_WIN[1] * rw
+    outer = sorted([c for c in peaks if lo <= (c["pos"] - ref) * out <= hi and c["step"] >= lim], key=lambda c: -c["step"])
+    inner = sorted([c for c in peaks if lo <= (ref - c["pos"]) * out <= hi and c["step"] >= lim], key=lambda c: -c["step"])
+    return {"model": model, "outer": outer, "inner": inner, "rw": round(rw, 4), "window": [round(lo, 4), round(hi, 4)]}
+
+
+def masonry_edge(ph: Photo, edge: str, at: float, rw: float, rng, rect=None, free: tuple[bool, bool] = (True, True)) -> dict:
+    """The edge of the masonry opening near a model edge on the VISIBLE-reveal side (G2 finding 1, cause 1): the outer
+    step of the pair (masonry corner, frame rw inward). Status
+      certain    one masonry step (rival < SECOND_RATIO x), its thirds agree, it ends at the jambs; pos = masonry edge,
+                 frame = the inner step of the pair (None when only the outer step is readable)
+      ambiguous  no step at all / two outer steps of similar strength / thirds disagree / the step runs on beyond the
+                 opening (a sign, an awning)
+    The model step itself is the masonry edge when nothing readable lies outward and the frame lies inward at ~rw
+    (pair = evidence, 'pair': True); a single step with neither is 'outermost' - readable, but not proven masonry."""
+    pr = reveal_pair(ph, edge, at, rw, rng)
+    res = {"rw": pr["rw"], "window": pr.get("window"), "model_step": pr["model"], "outer": pr["outer"][:4], "inner": pr["inner"][:4]}
+    if pr["model"] is None and not pr["outer"]:
+        return dict(res, status="ambiguous", pos=None, step=0.0, reason=f"pri hrane modelu ani o ostenie ďalej nie je skok jasu >= {REVEAL_MIN_STEP:.0f} (nečitateľná)")
+    if pr["outer"]:
+        best = pr["outer"][0]
+        rivals = [c for c in pr["outer"][1:] if abs(c["pos"] - best["pos"]) > 0.02 and c["step"] >= SECOND_RATIO * best["step"]]
+        if rivals:
+            return dict(res, status="ambiguous", pos=best["pos"], step=best["step"],
+                        reason=f"dve hrany ostenia: {best['pos']:.3f} (skok {best['step']:.0f}) a {rivals[0]['pos']:.3f} (skok {rivals[0]['step']:.0f})")
+        frame = pr["model"]["pos"] if pr["model"] else None
+        role = "outer"
+    else:
+        best = pr["model"]
+        frame = pr["inner"][0]["pos"] if pr["inner"] else None
+        role = "pair" if frame is not None else "outermost"
+    res.update(pos=best["pos"], step=best["step"], frame=frame, role=role,
+               rw_measured=round(abs(frame - best["pos"]), 4) if frame is not None else None)
+    # thirds: with a frame the SPACING masonry - frame per third is compared (a residual tilt of the rectified photo moves
+    # both lines alike); without one the positions themselves
+    thirds = edge_thirds(ph, edge, best["pos"], rng, None)
+    res["thirds"] = thirds
+    if frame is not None:
+        f3 = edge_thirds(ph, edge, frame, rng, None)
+        res["frame_thirds"] = f3
+        spacing = [round(a - b, 4) for a, b in zip(thirds, f3)] if len(thirds) == len(f3) == 3 else []
+        res["spacing_thirds"] = spacing
+        if len(spacing) < 3 or max(spacing) - min(spacing) > CONSIST_M:
+            # evidence for G2: the strongest step outward of the model in every third separately (an occluder - tree, sign -
+            # usually covers only a part of the edge)
+            r0, r1 = _mid(rng, 1.0)
+            per = []
+            for kk in range(3):
+                p3 = reveal_pair(ph, edge, at, rw, (r0 + kk * (r1 - r0) / 3, r0 + (kk + 1) * (r1 - r0) / 3))
+                per.append(p3["outer"][0]["pos"] if p3["outer"] else None)
+            res["outer_thirds"] = per
+            return dict(res, status="ambiguous", reason=f"tretiny ostenia nesúhlasia (odstup od rámu {', '.join(f'{x * 100:+.1f}' for x in spacing) or '-'} cm; "
+                                                        f"hrana {', '.join(f'{t:.3f}' for t in thirds)}; skok ďalej od kamery po tretinách zdola: "
+                                                        f"{' / '.join('-' if x is None else f'{x:.3f}' for x in per)})")
+    elif len(thirds) < 3 or max(thirds) - min(thirds) > CONSIST_M:
+        return dict(res, status="ambiguous", reason=f"tretiny hrany ostenia nesúhlasia ({', '.join(f'{t:.3f}' for t in thirds)})")
+    if rect is not None:
+        # a sign / awning runs on beyond BOTH ends of the opening; a joint of the cladding in line with one jamb is normal
+        cont = continuation(ph, edge, best["pos"], rect, rng, free, None, best["step"])
+        res["continuation"] = cont
+        ends = [x for x in cont["beyond"] if x is not None]
+        if ends and all(x >= CONTINUE_RATIO * best["step"] for x in ends):
+            return dict(res, status="ambiguous", reason=f"hrana ostenia pokračuje za oba konce otvoru (skok {cont['beyond']} vs {best['step']:.0f}) - patrí širšiemu predmetu")
+    what = {"outer": f"murovaná hrana o {abs(best['pos'] - (frame or best['pos'])) * 100:.1f} cm ďalej od kamery ako rám (očakávané ostenie {rw * 100:.1f} cm)",
+            "pair": f"hrana modelu je vonkajšia hrana páru, rám o {abs(frame - best['pos']) * 100 if frame else 0:.1f} cm vnútri (očakávané ostenie {rw * 100:.1f} cm)",
+            "outermost": "jediný skok, ďalej od kamery nič - najvonkajšia čitateľná hrana (rám ostenia nečitateľný)"}[role]
+    return dict(res, status="certain", reason=f"{what}; tretiny súhlasia, končí na ostení")
 
 
 # ---- crops (evidence) -------------------------------------------------------------------------------------------------
