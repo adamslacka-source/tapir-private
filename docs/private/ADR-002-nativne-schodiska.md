@@ -114,3 +114,14 @@ Lomené so zabiehaním:
 * Po vytvorení kontrola polohy 1. bodu (x, y) aj absolútneho z (`GetZPos(floorInd, basePoint.z)`) proti prvému create; odchýlka → `APIEdit_Drag`.
 * Minimum hĺbky 0,25: v `API_StairRulesData` je len `treadDepthMin` (+ `Applied`) – vypína ho `applyRules:false`, pri recreate sa znova vypne. Minimum šírky 0,60 v `API_StairRulesData` **nie je** (šírku obmedzujú nanajvýš `walkingLineOffsetMin` a `winderTurnOffsetMin`, tiež vypínané) – ak ArchiCAD 0,60 vynucuje aj potom, je to mimo API (NEOVERENÉ, test k).
 * `DeleteElements` (súkromný build): položka bez `elementId` alebo prvok, ktorý pred mazaním neexistuje → `success:false` (upstream vracia úspech zámerne: „never in the project to begin with"). Pozn.: schéma `#/Elements` položku `{"guid": …}` odmieta (`additionalProperties:false`), takže úspech s ňou znamená, že validácia schémy neprebehla – NEOVERENÉ.
+
+## 11. Zobrazenie schodísk v pôdoryse (2026-10-22)
+
+API (`APIdefs_Elements.h`): `API_StairType::fpdLayout` / `rcpdLayout` (r. 15826) typu `API_StairLayoutData` (r. 14309): `visibility` (`API_StoryVisibility`), `isAutoOnStoryVisibility`, `gridTypeAbove/Top/Middle/Bottom/Below` (`API_StairGridTypeID`, r. 13506–13550 s textami z dialógu), `storyVisibility` (`API_StairStoryVisibilityID`, r. 13749–13761), `showWalkingLine`, `showNumbering`, `showUpDownText`, `showDescription`, `showStructure`, poloha a uhol lomovej čiary.
+
+* `CreateStairs.floorPlanDisplay{…}` (aplikuje sa aj pri recreate), nový príkaz `SetStairFloorPlanDisplay{elements[], floorPlanDisplay{…}}` – `ACAPI_Element_Change` s maskou len na `fpdLayout` / `rcpdLayout`, bez mema; bez recreate náhrady (šablóna z umiestneného prvku by zmenila konštrukciu). `GetStairBaseLineData` vracia `floorPlanDisplay` a `ceilingPlanDisplay`.
+* Hodnoty `API_StairGridTypeID` majú v JSON mená podľa dialógu: `WithBreakMarkVisibleHidden` = `APIStairGrid_WithSingleBreaklineFull` („With Break Mark: Visible - Hidden"), `AboveBreakMarkVisible` = `APIStairGrid_AboveBreakline`, atď. (schéma `StairGridType`).
+* Header **žiadnu kombináciu neodporúča**. Pre „domovské podlažie celé s lomovou čiarou, podlažie nad len časť nad lomovou čiarou, ostatné nič":
+  `storyVisibility: AllRelevantStories, gridTypeBottom: WithBreakMarkVisibleHidden (alebo WithBreakMarkAllVisible = celé viditeľné), gridTypeTop: AboveBreakMarkVisible, gridTypeAbove/Below: NotRelevant`.
+  Ktoré podlažie je pre jednopodlažné schodisko „top relevant" (domovské alebo to, na ktoré prichádza), header nehovorí – NEOVERENÉ. Ak sa na podlaží nad ním nezobrazí nič, použiť `storyVisibility: HomeAndOneStoryUp` + `gridTypeAbove: AboveBreakMarkVisible`.
+* Morfy: `ModifyMorphs` už vie `showContour` / `showFill` (`API_StoryVisibility`) a `isAutoOnStoryVisibility` (`API_MorphType`) – stačí `{"showContour": {"showOnHome": true, "showAllAbove": false, "showAllBelow": false, "showRelAbove": 0, "showRelBelow": 0}, "showFill": {…rovnako}, "isAutoOnStoryVisibility": false}`.

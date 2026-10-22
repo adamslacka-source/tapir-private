@@ -2942,6 +2942,36 @@ var gCommands = [{
                             "type": "boolean",
                             "description": "Optional. API_StairType::extraBottomTread. Exact effect on the first step NOT verified - see ADR-002."
                         },
+                        "floorPlanDisplay": {
+    "type": "object",
+    "description": "Floor plan display of the stair (API_StairLayoutData of fpdLayout, and of rcpdLayout with applyTo). Only the given fields are written.",
+    "properties": {
+        "applyTo": { "type": "array", "items": { "type": "string", "enum": ["FloorPlan", "CeilingPlan"] }, "description": "Default: FloorPlan only." },
+        "storyVisibility": { "type": "string", "enum": ["HomeStoryOnly", "HomeAndOneStoryUp", "HomeAndOneStoryDown", "HomeAndOneStoryUpAndDown", "OneStoryUp", "OneStoryDown", "AllStories", "AllRelevantStories", "AllRelevantAndOneStoryUp", "AllRelevantAndOneStoryDown"], "description": "API_StairStoryVisibilityID - the 'Show on stories' setting." },
+        "visibility": { "$ref": "#/StoryVisibility" },
+        "isAutoOnStoryVisibility": { "type": "boolean" },
+        "gridTypeAbove": { "$ref": "#/StairGridType" },
+        "gridTypeTop": { "$ref": "#/StairGridType" },
+        "gridTypeMiddle": { "$ref": "#/StairGridType" },
+        "gridTypeBottom": { "$ref": "#/StairGridType" },
+        "gridTypeBelow": { "$ref": "#/StairGridType" },
+        "showWalkingLine": { "type": "boolean" },
+        "showNumbering": { "type": "boolean" },
+        "showUpDownText": { "type": "boolean" },
+        "showDescription": { "type": "boolean" },
+        "showStructure": { "type": "boolean" },
+        "breakLinePositionType": { "type": "string", "enum": ["FloorPlanCutPlaneHeight", "CustomHeight", "AtNthRiser"] },
+        "upperBreakLineCustomPosition": { "type": "number" },
+        "lowerBreakLineCustomPosition": { "type": "number" },
+        "upperBreakLineNthRiserPosition": { "type": "integer", "minimum": 0 },
+        "lowerBreakLineNthRiserPosition": { "type": "integer", "minimum": 0 },
+        "breakLineAngleType": { "type": "string", "enum": ["AngleToVertical", "AngleToHorizontal", "NumberOfGoings"] },
+        "breakLineAngle": { "type": "number" },
+        "breakLineAngleNumberOfGoings": { "type": "integer", "minimum": 0 },
+        "breakLineDistance": { "type": "number", "minimum": 0.0 }
+    },
+    "additionalProperties": false
+},
                         "structureVisible": {
                             "type": "boolean",
                             "description": "Optional. API_StairType::structureVisibility - false hides the whole stair structure."
@@ -2986,6 +3016,71 @@ var gCommands = [{
         "required": [
             "elements"
         ]
+    }
+            },{
+                "name": "SetStairFloorPlanDisplay",
+                "version": "1.7.2",
+                "description": "Changes the floor plan (and optionally reflected ceiling plan) display of existing Stairs: shown stories, layout on the relevant / above / below stories (break mark), walking line, numbering, up/down text, structure and break line position. Reads the result back.",
+                "inputScheme": {
+        "type": "object",
+        "properties": {
+            "elements": {
+                "type": "array",
+                "description": "The Stair elements.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "elementId": { "$ref": "#/ElementId" }
+                    },
+                    "additionalProperties": false,
+                    "required": ["elementId"]
+                }
+            },
+            "floorPlanDisplay": {
+    "type": "object",
+    "description": "Floor plan display of the stair (API_StairLayoutData of fpdLayout, and of rcpdLayout with applyTo). Only the given fields are written.",
+    "properties": {
+        "applyTo": { "type": "array", "items": { "type": "string", "enum": ["FloorPlan", "CeilingPlan"] }, "description": "Default: FloorPlan only." },
+        "storyVisibility": { "type": "string", "enum": ["HomeStoryOnly", "HomeAndOneStoryUp", "HomeAndOneStoryDown", "HomeAndOneStoryUpAndDown", "OneStoryUp", "OneStoryDown", "AllStories", "AllRelevantStories", "AllRelevantAndOneStoryUp", "AllRelevantAndOneStoryDown"], "description": "API_StairStoryVisibilityID - the 'Show on stories' setting." },
+        "visibility": { "$ref": "#/StoryVisibility" },
+        "isAutoOnStoryVisibility": { "type": "boolean" },
+        "gridTypeAbove": { "$ref": "#/StairGridType" },
+        "gridTypeTop": { "$ref": "#/StairGridType" },
+        "gridTypeMiddle": { "$ref": "#/StairGridType" },
+        "gridTypeBottom": { "$ref": "#/StairGridType" },
+        "gridTypeBelow": { "$ref": "#/StairGridType" },
+        "showWalkingLine": { "type": "boolean" },
+        "showNumbering": { "type": "boolean" },
+        "showUpDownText": { "type": "boolean" },
+        "showDescription": { "type": "boolean" },
+        "showStructure": { "type": "boolean" },
+        "breakLinePositionType": { "type": "string", "enum": ["FloorPlanCutPlaneHeight", "CustomHeight", "AtNthRiser"] },
+        "upperBreakLineCustomPosition": { "type": "number" },
+        "lowerBreakLineCustomPosition": { "type": "number" },
+        "upperBreakLineNthRiserPosition": { "type": "integer", "minimum": 0 },
+        "lowerBreakLineNthRiserPosition": { "type": "integer", "minimum": 0 },
+        "breakLineAngleType": { "type": "string", "enum": ["AngleToVertical", "AngleToHorizontal", "NumberOfGoings"] },
+        "breakLineAngle": { "type": "number" },
+        "breakLineAngleNumberOfGoings": { "type": "integer", "minimum": 0 },
+        "breakLineDistance": { "type": "number", "minimum": 0.0 }
+    },
+    "additionalProperties": false
+}
+        },
+        "additionalProperties": false,
+        "required": ["elements", "floorPlanDisplay"]
+    },
+                "outputScheme": {
+        "type": "object",
+        "properties": {
+            "stairs": {
+                "type": "array",
+                "description": "Per stair: the elementId after the change (ACAPI_Element_Change may give a new one) and the read-back floor plan / ceiling plan display; or an error.",
+                "items": { "type": "object" }
+            }
+        },
+        "additionalProperties": false,
+        "required": ["stairs"]
     }
             },{
                 "name": "ProbeElementAccess",

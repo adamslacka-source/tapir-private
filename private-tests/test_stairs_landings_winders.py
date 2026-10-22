@@ -449,6 +449,39 @@ try:
 except Exception as e:
     Check ('DeleteElements error reporting', False, str (e))
 
+# --- (l) floor plan display: home story + relevant stories (break mark) ---------------------
+DISPLAY = {
+    'storyVisibility': 'AllRelevantStories',
+    'gridTypeBottom': 'WithBreakMarkVisibleHidden',
+    'gridTypeTop': 'AboveBreakMarkVisible',
+    'gridTypeMiddle': 'Multistory2DVisibleInbetweenBreakMarks',
+    'gridTypeAbove': 'NotRelevant',
+    'gridTypeBelow': 'NotRelevant',
+    'showWalkingLine': True,
+}
+_, stairL = CreateStair ('(l) floorPlanDisplay at create', {
+    'baseLinePoints': [{'x': xe + 36.0, 'y': y0}, {'x': xe + 36.0, 'y': y0 + 17 * GOING}],
+    'floorPlanDisplay': DISPLAY,
+})
+if stairL and 'error' not in stairL:
+    fpd = stairL.get ('floorPlanDisplay', {})
+    Check ('(l) floor plan display read back', all (fpd.get (k) == v for k, v in DISPLAY.items ()),
+           json.dumps ({k: fpd.get (k) for k in list (DISPLAY) + ['visibility', 'isAutoOnStoryVisibility']}))
+elementL2, stairL2 = CreateStair ('(l2) stair for SetStairFloorPlanDisplay', {
+    'baseLinePoints': [{'x': xe + 38.5, 'y': y0}, {'x': xe + 38.5, 'y': y0 + 17 * GOING}],
+})
+if stairL2 and 'error' not in stairL2:
+    try:
+        r = Tapir ('SetStairFloorPlanDisplay', {'elements': [elementL2], 'floorPlanDisplay': dict (DISPLAY, storyVisibility='HomeAndOneStoryUp', gridTypeAbove='AboveBreakMarkVisible')})
+        one = r['stairs'][0]
+        ok = 'error' not in one and one['floorPlanDisplay']['storyVisibility'] == 'HomeAndOneStoryUp' and one['floorPlanDisplay']['gridTypeAbove'] == 'AboveBreakMarkVisible'
+        Check ('(l2) SetStairFloorPlanDisplay changed and read back', ok, json.dumps (one)[:400])
+        if 'elementId' in one and one['elementId']['guid'] != elementL2['elementId']['guid']:
+            Info ('(l2) new GUID after the change', one['elementId']['guid'])
+            created.append ({'elementId': one['elementId']})
+    except Exception as e:
+        Check ('(l2) SetStairFloorPlanDisplay', False, str (e))
+
 # --- (j) INFO: Smooth monolith heel (Eden: always 100 mm below the start) ---------------
 for i, structure in enumerate ((
         {'structType': 'Monolith', 'bottomType': 'Smooth'},

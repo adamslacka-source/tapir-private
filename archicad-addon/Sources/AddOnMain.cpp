@@ -469,6 +469,11 @@ GSErrCode Initialize (void)
             "Creates Stair elements based on the given baseline and parameters. Optional turns (landing, winders, divided landing) at inner baseline points, "
             "segment types of baseline edges, riser/tread rules, top story link and baseline / walking line position."
         );
+        err |= RegisterCommand<SetStairFloorPlanDisplayCommand> (
+            elementCommands, "1.7.2",
+            "Changes the floor plan (and optionally reflected ceiling plan) display of existing Stairs: shown stories, layout on the relevant / "
+            "above / below stories (break mark), walking line, numbering, up/down text, structure and break line position. Reads the result back."
+        );
         err |= RegisterCommand<ProbeElementAccessCommand> (
             elementCommands, "1.7.2",
             "Diagnostic, read-only: looks the given elements up (ACAPI_Element_GetHeader / ACAPI_Element_Get) outside and inside an undoable command "

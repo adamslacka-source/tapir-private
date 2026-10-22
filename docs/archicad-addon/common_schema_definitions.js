@@ -8012,6 +8012,11 @@ var gSchemaDefinitions = {
             "polygonCoordinates"
         ]
     },
+    "StairGridType": {
+        "type": "string",
+        "description": "Stair floor plan layout on a story (API_StairGridTypeID): NotRelevant, WithBreakMarkVisibleHidden (With Break Mark: Visible - Hidden), NoBreakMarkVisible, BelowBreakMarkVisible, AboveBreakMarkVisible, Multistory2DVisibleInbetweenBreakMarks, Multistory2DHiddenVisibleHidden, NoBreakMarkHidden, AboveBreakMarkHidden, BelowBreakMarkHidden, Multistory2DAllVisible, Multistory2DHiddenVisibleNone, Multistory2DNoneVisibleHidden, WithBreakMarkAllVisible, WithBreakMarkHiddenVisible.",
+        "enum": ["NotRelevant", "WithBreakMarkVisibleHidden", "NoBreakMarkVisible", "BelowBreakMarkVisible", "AboveBreakMarkVisible", "Multistory2DVisibleInbetweenBreakMarks", "Multistory2DHiddenVisibleHidden", "NoBreakMarkHidden", "AboveBreakMarkHidden", "BelowBreakMarkHidden", "Multistory2DAllVisible", "Multistory2DHiddenVisibleNone", "Multistory2DNoneVisibleHidden", "WithBreakMarkAllVisible", "WithBreakMarkHiddenVisible"]
+    },
     "StoryVisibility": {
         "type": "object",
         "description": "Per-story visibility settings (API_StoryVisibility): the home story, plus how many stories above/below also show this element.",
