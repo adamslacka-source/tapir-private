@@ -4336,6 +4336,33 @@ GS::UniString DescribeStairPolyline (const API_StairPolylineData& line)
     return text;
 }
 
+// The read-back baseline coords are local to API_StairType::basePlane (confirmed live
+// 2026-10-22: a recreate from them with the pre-create element put the first point at the
+// project origin). Global = basePoint + x * axisX + y * axisY.
+API_Coord StairLocalToGlobal (const API_Plane3D& plane, const API_Coord& c)
+{
+    API_Coord g;
+    g.x = plane.basePoint.x + c.x * plane.axisX.x + c.y * plane.axisY.x;
+    g.y = plane.basePoint.y + c.x * plane.axisX.y + c.y * plane.axisY.y;
+    return g;
+}
+
+bool GetStairFirstPointGlobal (const API_Guid& guid, API_Coord& result)
+{
+    API_Element stair = {};
+    stair.header.guid = guid;
+    if (ACAPI_Element_Get (&stair) != NoError) {
+        return false;
+    }
+    API_ElementMemo memo = {};
+    const GS::OnExit guard ([&memo] () { ACAPI_DisposeElemMemoHdls (&memo); });
+    if (ACAPI_Element_GetMemo (guid, &memo, APIMemoMask_All) != NoError || memo.stairBaseLine.coords == nullptr || memo.stairBaseLine.polygon.nCoords < 1) {
+        return false;
+    }
+    result = StairLocalToGlobal (stair.stair.basePlane, (*memo.stairBaseLine.coords)[1]);
+    return true;
+}
+
 void ApplyStairTurn (API_StairPolylineVertexData& v, const StairTurnRequest& turn)
 {
     v.turnType = turn.turnType;
@@ -5079,7 +5106,16 @@ GS::Optional<GS::ObjectState> CreateStairsCommand::ChangeAfterCreation (API_Elem
         if (auto applyErr = ApplyStairTurnsAndSegments (newMemo.stairBaseLine, points, turns, segments); applyErr.HasValue ()) {
             return fail (APIERR_BADPARS, applyErr.Get (), plainGuid);
         }
-        API_Element newElement = element;
+        // The template is the placed plain stair as Archicad stores it: its basePlane carries the
+        // origin the local read-back coords refer to (the pre-create struct does not).
+        API_Element newElement = {};
+        newElement.header.guid = plainGuid;
+        err = ACAPI_Element_Get (&newElement);
+        if (err != NoError) {
+            return fail (err, "Reading the created Stair back failed.", plainGuid);
+        }
+        API_Coord plainFirst = {};
+        const bool hasPlainFirst = GetStairFirstPointGlobal (plainGuid, plainFirst);
         newElement.header.guid = APINULLGuid;
         err = ACAPI_Element_Create (&newElement, &newMemo);
         if (err != NoError) {
@@ -5087,6 +5123,33 @@ GS::Optional<GS::ObjectState> CreateStairsCommand::ChangeAfterCreation (API_Elem
         }
         ACAPI_Element_Delete ({ plainGuid });
         element.header = newElement.header;
+
+        // Position check against the plain stair (and the input point); a shift is corrected by a drag.
+        API_Coord newFirst = {};
+        if (hasPlainFirst && GetStairFirstPointGlobal (element.header.guid, newFirst)) {
+            const double dx = plainFirst.x - newFirst.x;
+            const double dy = plainFirst.y - newFirst.y;
+            if (std::hypot (dx, dy) > 0.0005) {
+                GS::Array<API_Neig> toEdit = { API_Neig (element.header.guid) };
+                API_EditPars editPars = {};
+                editPars.typeID = APIEdit_Drag;
+                editPars.endC.x = dx;
+                editPars.endC.y = dy;
+                editPars.endC.z = 0.0;
+                editPars.withDelete = true;
+                err = ACAPI_Element_Edit (&toEdit, editPars);
+                if (err != NoError) {
+                    return fail (err, GS::UniString::Printf ("The Stair with the turns was created %.3f / %.3f m off and moving it back failed.", -dx, -dy), element.header.guid);
+                }
+                if (!toEdit.IsEmpty () && toEdit[0].guid != APINULLGuid) {
+                    element.header.guid = toEdit[0].guid;
+                }
+                if (GetStairFirstPointGlobal (element.header.guid, newFirst) && std::hypot (plainFirst.x - newFirst.x, plainFirst.y - newFirst.y) > 0.0005) {
+                    return fail (APIERR_GENERAL, GS::UniString::Printf ("The Stair with the turns is still %.3f / %.3f m off after moving it back.",
+                        newFirst.x - plainFirst.x, newFirst.y - plainFirst.y), element.header.guid);
+                }
+            }
+        }
     }
 
     if (auto verifyErr = VerifyStairTurnsAndSegments (element.header.guid, points, turns, segments); verifyErr.HasValue ()) {
@@ -5318,6 +5381,20 @@ GS::ObjectState GetStairBaseLineDataCommand::Execute (const GS::ObjectState& par
         os.Add ("rules", rules);
 
         os.Add ("baseLine", CreateStairPolylineObjectState (memo.stairBaseLine));
+        {
+            GS::ObjectState plane;
+            plane.Add ("basePoint", Create3DCoordinateObjectState (s.basePlane.basePoint));
+            plane.Add ("axisX", Create3DCoordinateObjectState (API_Coord3D { s.basePlane.axisX.x, s.basePlane.axisX.y, s.basePlane.axisX.z }));
+            plane.Add ("axisY", Create3DCoordinateObjectState (API_Coord3D { s.basePlane.axisY.x, s.basePlane.axisY.y, s.basePlane.axisY.z }));
+            os.Add ("basePlane", plane);
+            const auto& globalCoords = os.AddList<GS::ObjectState> ("baseLineGlobalCoords");
+            if (memo.stairBaseLine.coords != nullptr) {
+                const GSSize handleCount = BMGetHandleSize (reinterpret_cast<GSConstHandle> (memo.stairBaseLine.coords)) / static_cast<GSSize> (sizeof (API_Coord));
+                for (Int32 k = 1; k <= memo.stairBaseLine.polygon.nCoords && k < handleCount; ++k) {
+                    globalCoords (Create2DCoordinateObjectState (StairLocalToGlobal (s.basePlane, (*memo.stairBaseLine.coords)[k])));
+                }
+            }
+        }
         os.Add ("walkingLine", CreateStairPolylineObjectState (memo.stairWalkingLine));
 
         const GSSize nTreads = StairPtrCount (memo.stairTreads);
@@ -5398,6 +5475,12 @@ GS::ObjectState GetStairBaseLineDataCommand::Execute (const GS::ObjectState& par
             }
             if (s.stepNum > 1 && walkingLength > 0.0) {
                 os.Add ("goingFromRisers", walkingLength / static_cast<double> (s.stepNum - 1));
+            }
+            // Confirmed live 2026-10-22 on a straight stair (baseline 17 x 0.34 = 5.78 m, 18 risers):
+            // the walking line is 5.50 m long (0.3235 per going), the baseline gives the 0.34 asked.
+            const double baseLength = PolylineLength (memo.stairBaseLine);
+            if (s.stepNum > 1 && baseLength > 0.0) {
+                os.Add ("goingFromBaseLine", baseLength / static_cast<double> (s.stepNum - 1));
             }
         }
         stairs (os);
@@ -9154,4 +9237,116 @@ GSErrCode ApplyFavoriteToElementDefaults (const GS::UniString& favoriteName, API
     TAPIR_Element_SetPropertiesOfDefaultElem (favorite.element.header, *favorite.properties);
 
     return NoError;
+}
+
+// ============================================================================
+// ProbeElementAccess (diagnostic, read-only): whether elements can be found outside and inside an
+// undoable command, with the current database / window. Written for the Eden report of
+// 2026-10-22 (SetDetailsOfElements / MoveElements / ModifyWalls answer APIERR_BADID for every
+// existing element while GetDetailsOfElements finds them - all three look the element up inside
+// ACAPI_CallUndoableCommand). The undoable scope changes nothing and returns APIERR_CANCEL.
+// ============================================================================
+
+ProbeElementAccessCommand::ProbeElementAccessCommand () :
+    CommandBase (CommonSchema::Used)
+{
+}
+
+GS::String ProbeElementAccessCommand::GetName () const
+{
+    return "ProbeElementAccess";
+}
+
+GS::Optional<GS::UniString> ProbeElementAccessCommand::GetInputParametersSchema () const
+{
+    return R"({
+        "type": "object",
+        "properties": {
+            "elements": {
+                "type": "array",
+                "description": "The elements to look up.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "elementId": { "$ref": "#/ElementId" }
+                    },
+                    "additionalProperties": false,
+                    "required": ["elementId"]
+                }
+            }
+        },
+        "additionalProperties": false,
+        "required": ["elements"]
+    })";
+}
+
+GS::Optional<GS::UniString> ProbeElementAccessCommand::GetRawResponseSchema () const
+{
+    return R"({
+        "type": "object",
+        "properties": {
+            "outside": { "type": "object", "description": "Current database / window and per-element lookup results outside an undoable command." },
+            "inside": { "type": "object", "description": "The same inside ACAPI_CallUndoableCommand (rolled back)." },
+            "undoableCommandResult": { "type": "integer" }
+        },
+        "additionalProperties": false,
+        "required": ["outside", "inside"]
+    })";
+}
+
+static GS::ObjectState ProbeElementAccessSnapshot (const GS::Array<API_Guid>& guids)
+{
+    GS::ObjectState os;
+    API_DatabaseInfo db = {};
+    const GSErrCode dbErr = ACAPI_Database_GetCurrentDatabase (&db);
+    os.Add ("databaseErr", static_cast<Int32> (dbErr));
+    os.Add ("databaseTypeId", static_cast<Int32> (db.typeID));
+    os.Add ("databaseIndex", static_cast<Int32> (db.index));
+    os.Add ("databaseUnId", APIGuidToString (db.databaseUnId.elemSetId));
+    API_WindowInfo win = {};
+    const GSErrCode winErr = ACAPI_Window_GetCurrentWindow (&win);
+    os.Add ("windowErr", static_cast<Int32> (winErr));
+    os.Add ("windowTypeId", static_cast<Int32> (win.typeID));
+    const auto& results = os.AddList<GS::ObjectState> ("elements");
+    for (const API_Guid& guid : guids) {
+        GS::ObjectState r;
+        r.Add ("guid", APIGuidToString (guid));
+        API_Elem_Head head = {};
+        head.guid = guid;
+        r.Add ("getHeaderErr", static_cast<Int32> (ACAPI_Element_GetHeader (&head)));
+        API_Element element = {};
+        element.header.guid = guid;
+        const GSErrCode getErr = ACAPI_Element_Get (&element);
+        r.Add ("getErr", static_cast<Int32> (getErr));
+        if (getErr == NoError) {
+            r.Add ("type", GetElementTypeNonLocalizedName (GetElemTypeId (element.header)));
+            r.Add ("floorIndex", static_cast<Int32> (element.header.floorInd));
+            r.Add ("layerIndex", static_cast<Int32> (GetAttributeIndex (element.header.layer)));
+        }
+        results (r);
+    }
+    return os;
+}
+
+GS::ObjectState ProbeElementAccessCommand::Execute (const GS::ObjectState& parameters, GS::ProcessControl& /*processControl*/) const
+{
+    GS::Array<GS::ObjectState> elements;
+    parameters.Get ("elements", elements);
+    GS::Array<API_Guid> guids;
+    for (const GS::ObjectState& e : elements) {
+        const GS::ObjectState* elementId = e.Get ("elementId");
+        if (elementId != nullptr) {
+            guids.Push (GetGuidFromObjectState (*elementId));
+        }
+    }
+    GS::ObjectState response;
+    response.Add ("outside", ProbeElementAccessSnapshot (guids));
+    GS::ObjectState inside;
+    const GSErrCode undoErr = ACAPI_CallUndoableCommand ("Probe Element Access", [&] () -> GSErrCode {
+        inside = ProbeElementAccessSnapshot (guids);
+        return APIERR_CANCEL;
+    });
+    response.Add ("inside", inside);
+    response.Add ("undoableCommandResult", static_cast<Int32> (undoErr));
+    return response;
 }

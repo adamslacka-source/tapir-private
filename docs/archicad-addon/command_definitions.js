@@ -2988,6 +2988,39 @@ var gCommands = [{
         ]
     }
             },{
+                "name": "ProbeElementAccess",
+                "version": "1.7.2",
+                "description": "Diagnostic, read-only: looks the given elements up (ACAPI_Element_GetHeader / ACAPI_Element_Get) outside and inside an undoable command (rolled back) and reports the error codes with the current database and window.",
+                "inputScheme": {
+        "type": "object",
+        "properties": {
+            "elements": {
+                "type": "array",
+                "description": "The elements to look up.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "elementId": { "$ref": "#/ElementId" }
+                    },
+                    "additionalProperties": false,
+                    "required": ["elementId"]
+                }
+            }
+        },
+        "additionalProperties": false,
+        "required": ["elements"]
+    },
+                "outputScheme": {
+        "type": "object",
+        "properties": {
+            "outside": { "type": "object", "description": "Current database / window and per-element lookup results outside an undoable command." },
+            "inside": { "type": "object", "description": "The same inside ACAPI_CallUndoableCommand (rolled back)." },
+            "undoableCommandResult": { "type": "integer" }
+        },
+        "additionalProperties": false,
+        "required": ["outside", "inside"]
+    }
+            },{
                 "name": "GetStairBaseLineData",
                 "version": "1.7.2",
                 "description": "Returns the baseline and walking line of Stair elements as the API gives them (coords, raw edge and vertex data with turn and segment types), the main stair settings and rules, and the tread / riser counts. A diagnostic command for stairs with landings and winders.",

@@ -178,6 +178,19 @@ def CreateStair (name, data):
     stair = StairData (element)
     Check (name + ': created', 'error' not in stair, element['elementId']['guid'])
     print ('       ' + Summary (stair))
+    # Position: the stored baseline (local to basePlane) mapped back to global must start at
+    # the first input point (the recreate used to move it to the project origin).
+    if 'error' not in stair and stair.get ('baseLineGlobalCoords') and params.get ('turns'):
+        g = stair['baseLineGlobalCoords']
+        p = params['baseLinePoints']
+        ok = all (abs (a['x'] - b['x']) < 0.002 and abs (a['y'] - b['y']) < 0.002 for a, b in zip (g, p)) and len (g) == len (p)
+        Check (name + ': stays at its input position', ok, 'global {} vs input {}'.format (
+            [(round (c['x'], 3), round (c['y'], 3)) for c in g], [(c['x'], c['y']) for c in p]))
+    # MoveElements on the (possibly recreated) stair GUID must work.
+    if 'error' not in stair:
+        r = Tapir ('MoveElements', {'elementsWithMoveVectors': [{'elementId': element['elementId'], 'moveVector': {'x': 0.0, 'y': 0.0, 'z': 0.0}}]})
+        rs = r.get ('executionResults', [])
+        Check (name + ': MoveElements on the returned GUID', bool (rs) and rs[0].get ('success'), json.dumps (rs))
     return element, stair
 
 
@@ -291,9 +304,9 @@ elementE, stairE = CreateStair ('(e) going 0.34 with applyRules false', {
     'treadDepth': 0.34,
 })
 if stairE and 'error' not in stairE:
-    going = stairE.get ('goingFromRisers')
-    Check ('(e) going 0.34 (walking line / (risers - 1))', going is not None and abs (going - 0.34) < 0.005,
-           'measured {} / treadDepth field {:.4f}'.format (going, stairE['treadDepth']))
+    going = stairE.get ('goingFromBaseLine')
+    Check ('(e) going 0.34 (baseline / (risers - 1), straight stair)', going is not None and abs (going - 0.34) < 0.005,
+           'baseline {} / walking line {} / treadDepth field {:.4f}'.format (going, stairE.get ('goingFromRisers'), stairE['treadDepth']))
     Check ('(e) riser 3.10/18', abs (stairE['riserHeight'] - HEIGHT / RISERS) < 0.001, '{:.4f}'.format (stairE['riserHeight']))
     Check ('(e) read back zCoordinate 0 / zTop 3.10', abs (stairE['zCoordinate']) < 0.001 and abs (stairE['zTop'] - HEIGHT) < 0.001,
            'z {} .. {}'.format (stairE.get ('zCoordinate'), stairE.get ('zTop')))
@@ -355,6 +368,49 @@ if stairH and 'error' not in stairH:
     zMin, zMax = ZRange (elementH)
     Check ('(h) 3D from 0.00 to 3.10', zMin is not None and zMin > -0.005 and abs (zMax - HEIGHT) < 0.01, '{} .. {}'.format (zMin, zMax))
     Info ('(h) structures', json.dumps (stairH.get ('structures')))
+
+# --- (i) U stair with landings off the origin (Eden report: recreate moved it to 0,0) -----
+xi, yi = 1105.0, 1003.0
+CreateStair ('(i) U stair with landings at (1105, 1003)', {
+    'baseLinePoints': [
+        {'x': xi, 'y': yi},
+        {'x': xi, 'y': yi + f1 + WIDTH / 2},
+        {'x': xi - (WIDTH / 2 + f1 + WIDTH / 2), 'y': yi + f1 + WIDTH / 2},
+        {'x': xi - (WIDTH / 2 + f1 + WIDTH / 2), 'y': yi},
+    ],
+    'treadDepth': SCH1_GOING,
+    'turns': [{'pointIndex': 1, 'type': 'Landing'}, {'pointIndex': 2, 'type': 'Landing'}],
+})
+# Same without lockTreadDepth (Eden: the turned baseline collapsed to a straight 1.7 m flight).
+params_i2 = {
+    'baseLinePoints': [
+        {'x': xi + 6.0, 'y': yi},
+        {'x': xi + 6.0, 'y': yi + f1 + WIDTH / 2},
+        {'x': xi + 6.0 - (WIDTH / 2 + f1 + WIDTH / 2), 'y': yi + f1 + WIDTH / 2},
+        {'x': xi + 6.0 - (WIDTH / 2 + f1 + WIDTH / 2), 'y': yi},
+    ],
+    'treadDepth': SCH1_GOING,
+    'lockTreadDepth': False,
+    'turns': [{'pointIndex': 1, 'type': 'Landing'}, {'pointIndex': 2, 'type': 'Landing'}],
+}
+_, stairI2 = CreateStair ('(i2) same, lockTreadDepth false', params_i2)
+if stairI2 and 'error' not in stairI2:
+    Check ('(i2) baseline not collapsed (length about 2 x 2.10 + 2.70 m)', abs (stairI2.get ('baseLineLength', 0) - (2 * (f1 + WIDTH / 2) + (WIDTH + f1))) < 0.05,
+           'baseLineLength {}'.format (stairI2.get ('baseLineLength')))
+
+# --- (j) INFO: Smooth monolith heel (Eden: always 100 mm below the start) ---------------
+for i, structure in enumerate ((
+        {'structType': 'Monolith', 'bottomType': 'Smooth'},
+        {'structType': 'Monolith', 'bottomType': 'Smooth', 'horizontalThickness': 0.0},
+        {'structType': 'Monolith', 'bottomType': 'Smooth', 'thickness': 0.0},
+        {'structType': 'Monolith', 'bottomType': 'Smooth', 'thinning': True},
+        {'structType': 'Monolith', 'bottomType': 'Smooth', 'monolithThickness': 0.05})):
+    element, stair = CreateStair ('(j) smooth monolith variant {}'.format (i), {
+        'baseLinePoints': [{'x': xe + 22.0 + 2.5 * i, 'y': y0}, {'x': xe + 22.0 + 2.5 * i, 'y': y0 + 17 * GOING}],
+        'structure': structure,
+    })
+    if stair and 'error' not in stair:
+        Info ('(j) {}'.format (json.dumps (structure)), '3D z {} placed {}'.format (ZRange (element), json.dumps ((stair.get ('structures') or [{}])[0])))
 
 # --- validation: bad input must give an error, not a crash ----------------------
 try:
