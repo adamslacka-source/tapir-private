@@ -469,6 +469,11 @@ GSErrCode Initialize (void)
             "Creates Stair elements based on the given baseline and parameters. Optional turns (landing, winders, divided landing) at inner baseline points, "
             "segment types of baseline edges, riser/tread rules, top story link and baseline / walking line position."
         );
+        err |= RegisterCommand<ProbeElementAccessCommand> (
+            elementCommands, "1.7.2",
+            "Diagnostic, read-only: looks the given elements up (ACAPI_Element_GetHeader / ACAPI_Element_Get) outside and inside an undoable command "
+            "(rolled back) and reports the error codes with the current database and window."
+        );
         err |= RegisterCommand<GetStairBaseLineDataCommand> (
             elementCommands, "1.7.2",
             "Returns the baseline and walking line of Stair elements as the API gives them (coords, raw edge and vertex data with turn and segment types), "
