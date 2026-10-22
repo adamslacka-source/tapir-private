@@ -474,6 +474,16 @@ GSErrCode Initialize (void)
             "Changes the floor plan (and optionally reflected ceiling plan) display of existing Stairs: shown stories, layout on the relevant / "
             "above / below stories (break mark), walking line, numbering, up/down text, structure and break line position. Reads the result back."
         );
+        err |= RegisterCommand<GetStairDetailsCommand> (
+            elementCommands, "1.7.2",
+            "Returns every API_StairType setting of Stairs under its API name (rules, tread / riser / structure defaults, floor plan and ceiling plan display, symbols, headroom...), "
+            "the placed treads / risers / structures, the baseline, walking lines and boundaries, and a CreateStairs item that rebuilds the stair."
+        );
+        err |= RegisterCommand<ModifyStairsCommand> (
+            elementCommands, "1.7.2",
+            "Changes existing Stairs: any writable API_StairType setting with ACAPI_Element_Change (masked to the touched members); baseline, z, story, turns or segments - "
+            "or a setting Change refuses - by recreating the stair at the same place (new GUID reported). Reports the requested fields Archicad did not keep."
+        );
         err |= RegisterCommand<ProbeElementAccessCommand> (
             elementCommands, "1.7.2",
             "Diagnostic, read-only: looks the given elements up (ACAPI_Element_GetHeader / ACAPI_Element_Get) outside and inside an undoable command "

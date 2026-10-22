@@ -4795,6 +4795,10 @@ GS::Optional<GS::UniString> CreateStairsCommand::GetInputParametersSchema () con
                             "type": "boolean",
                             "description": "Optional. API_StairType::extraBottomTread. Exact effect on the first step NOT verified - see ADR-002."
                         },
+                        "stair": {
+                            "type": "object",
+                            "description": "Optional. Any writable API_StairType member under its API name, nested as GetStairDetails returns it in 'stair' (rules, tread / riser / structure defaults per run / landing and side, fpdLayout / rcpdLayout, symbols, headroom, ...). Applied first; the other fields of this item override it. Unknown or read-only keys are an error. Coverage table: ADR-002 kap. 12."
+                        },
                         "floorPlanDisplay": )" + GS::UniString (StairFloorPlanDisplaySchema) + R"(,
                         "structureVisible": {
                             "type": "boolean",
@@ -4983,6 +4987,709 @@ GS::ObjectState CreateStairLayoutObjectState (const API_StairLayoutData& layout)
 
 } // namespace
 
+// ============================================================================
+// Full API_StairType mapping (ADR-002 kap. 12): one function per API struct maps every field in
+// both directions - read (API -> JSON) and write (JSON -> API, only the fields present, unknown
+// keys and read-only keys are errors). The JSON keys are the API member names, so the coverage
+// table in ADR-002 is the header itself. Used by CreateStairs ("stair"), ModifyStairs and
+// GetStairDetails.
+// ============================================================================
+
+namespace {
+
+class StairFieldMapper {
+public:
+    // read mode
+    StairFieldMapper (GS::ObjectState& outIn, bool includeReadOnlyIn, GS::Array<GS::UniString>& errorsIn) :
+        writing (false), in (nullptr), out (&outIn), includeReadOnly (includeReadOnlyIn), errors (errorsIn) {}
+    // write mode
+    StairFieldMapper (const GS::ObjectState& inIn, const GS::UniString& pathIn, GS::Array<GS::UniString>& errorsIn) :
+        writing (true), in (&inIn), out (nullptr), includeReadOnly (false), path (pathIn), errors (errorsIn) {}
+
+    bool IsWriting () const { return writing; }
+    bool IncludeReadOnly () const { return includeReadOnly; }
+    const GS::HashSet<GS::String>& Consumed () const { return consumed; }
+
+    // Write mode: true if the request names the field (and marks it consumed).
+    bool Has (const char* name)
+    {
+        if (!writing || !in->Contains (name)) {
+            return false;
+        }
+        consumed.Add (name);
+        return true;
+    }
+
+    void Error (const char* name, const GS::UniString& message)
+    {
+        errors.Push (path + "." + name + ": " + message);
+    }
+
+    void Num (const char* name, double& v, double minV = -1e6, double maxV = 1e6)
+    {
+        if (!writing) { out->Add (name, v); return; }
+        if (!Has (name)) return;
+        double d = 0.0;
+        if (!in->Get (name, d) || !std::isfinite (d) || d < minV || d > maxV) {
+            Error (name, GS::UniString::Printf ("must be a number in %g..%g", minV, maxV));
+            return;
+        }
+        v = d;
+    }
+
+    void Bool (const char* name, bool& v)
+    {
+        if (!writing) { out->Add (name, v); return; }
+        if (!Has (name)) return;
+        bool b = false;
+        if (!in->Get (name, b)) { Error (name, "must be a boolean"); return; }
+        v = b;
+    }
+
+    template <typename T>
+    void Int (const char* name, T& v, Int32 minV, Int32 maxV)
+    {
+        if (!writing) { out->Add (name, static_cast<Int32> (v)); return; }
+        if (!Has (name)) return;
+        Int32 i = 0;
+        if (!in->Get (name, i) || i < minV || i > maxV) {
+            Error (name, GS::UniString::Printf ("must be an integer in %d..%d", minV, maxV));
+            return;
+        }
+        v = static_cast<T> (i);
+    }
+
+    void Pen (const char* name, short& v) { Int (name, v, 0, 255); }
+
+    template <typename EnumT>
+    void Enum (const char* name, EnumT& v, const std::initializer_list<std::pair<const char*, EnumT>>& table)
+    {
+        if (!writing) { out->Add (name, StairEnumName (table, v)); return; }
+        if (!Has (name)) return;
+        GS::UniString s;
+        EnumT parsed = v;
+        if (!in->Get (name, s) || !ParseStairEnum (s, table, parsed)) {
+            GS::UniString allowed;
+            for (const auto& e : table) { allowed += (allowed.IsEmpty () ? "" : ", "); allowed += e.first; }
+            Error (name, "must be one of " + allowed);
+            return;
+        }
+        v = parsed;
+    }
+
+    // Attribute: read {"attributeId": {"guid"}, "index"}; write either of them (checked to exist).
+    void Attr (const char* name, API_AttrTypeID type, API_AttributeIndex& v)
+    {
+        if (!writing) {
+            GS::ObjectState a;
+            a.Add ("index", GetAttributeIndex (v));
+            const API_Guid g = GetAttributeGuidFromIndex (type, v);
+            if (g != APINULLGuid) {
+                a.Add ("attributeId", CreateGuidObjectState (g));
+            }
+            out->Add (name, a);
+            return;
+        }
+        if (!Has (name)) return;
+        const GS::ObjectState* a = in->Get (name);
+        if (a == nullptr) { Error (name, "must be an object {attributeId: {guid}} or {index}"); return; }
+        API_AttributeIndex index = {};
+        if (const GS::ObjectState* id = a->Get ("attributeId"); id != nullptr) {
+            const API_Guid g = GetGuidFromObjectState (*id);
+            index = GetAttributeIndexFromGuid (type, g);
+            if (g == APINULLGuid || GetAttributeGuidFromIndex (type, index) != g) { Error (name, "no attribute of this type with this guid"); return; }
+        } else {
+            Int32 i = 0;
+            if (!a->Get ("index", i)) { Error (name, "needs attributeId or index"); return; }
+            index = ACAPI_CreateAttributeIndex (i);
+            API_Attribute attr = {};
+            attr.header.typeID = type;
+            attr.header.index = index;
+            if (ACAPI_Attribute_Get (&attr) != NoError) { Error (name, GS::UniString::Printf ("no attribute of this type with index %d", i)); return; }
+        }
+        v = index;
+    }
+
+    void OverMaterial (const char* name, API_OverriddenAttribute& v)
+    {
+        if (!writing) { out->Add (name, CreateOverriddenMaterialObjectState (v)); return; }
+        if (!Has (name)) return;
+        const GS::ObjectState* a = in->Get (name);
+        if (a == nullptr) { Error (name, "must be an object {overridden, attributeId}"); return; }
+        bool overridden = false;
+        a->Get ("overridden", overridden);
+        if (overridden) {
+            const GS::ObjectState* id = a->Get ("attributeId");
+            const API_Guid g = id != nullptr ? GetGuidFromObjectState (*id) : APINULLGuid;
+            const API_AttributeIndex index = GetAttributeIndexFromGuid (API_MaterialID, g);
+            if (g == APINULLGuid || GetAttributeGuidFromIndex (API_MaterialID, index) != g) { Error (name, "overridden needs the attributeId of an existing surface"); return; }
+        }
+        v = GetOverriddenMaterialFromObjectState (*a);
+    }
+
+    void OverPen (const char* name, API_OverriddenPen& v)
+    {
+        if (!writing) { out->Add (name, CreateOverriddenPenObjectState (v)); return; }
+        if (!Has (name)) return;
+        const GS::ObjectState* a = in->Get (name);
+        if (a == nullptr) { Error (name, "must be an object {overridden, penIndex}"); return; }
+        Int32 pen = 0;
+        bool overridden = false;
+        a->Get ("overridden", overridden);
+        if (overridden && (!a->Get ("penIndex", pen) || pen < 0 || pen > 255)) { Error (name, "penIndex must be 0..255"); return; }
+        v = GetOverriddenPenFromObjectState (*a);
+    }
+
+    void StoryVisibility (const char* name, API_StoryVisibility& v)
+    {
+        if (!writing) { out->Add (name, CreateStoryVisibilityObjectState (v)); return; }
+        if (!Has (name)) return;
+        const GS::ObjectState* a = in->Get (name);
+        if (a == nullptr) { Error (name, "must be a StoryVisibility object"); return; }
+        a->Get ("showOnHome", v.showOnHome);
+        a->Get ("showAllAbove", v.showAllAbove);
+        a->Get ("showAllBelow", v.showAllBelow);
+        Int32 rel = 0;
+        if (a->Get ("showRelAbove", rel)) v.showRelAbove = static_cast<short> (rel);
+        if (a->Get ("showRelBelow", rel)) v.showRelBelow = static_cast<short> (rel);
+    }
+
+    // Read-only values: reported when includeReadOnly, an error when written.
+    void ReadOnlyGuid (const char* name, const API_Guid& v)
+    {
+        if (!writing) { if (includeReadOnly) out->Add (name, APIGuidToString (v)); return; }
+        if (Has (name)) Error (name, "is read-only");
+    }
+    template <typename T>
+    void ReadOnlyInt (const char* name, const T& v)
+    {
+        if (!writing) { if (includeReadOnly) out->Add (name, static_cast<Int32> (v)); return; }
+        if (Has (name)) Error (name, "is read-only");
+    }
+    void ReadOnlyBool (const char* name, bool v)
+    {
+        if (!writing) { if (includeReadOnly) out->Add (name, v); return; }
+        if (Has (name)) Error (name, "is read-only");
+    }
+    void ReadOnlyCoord3D (const char* name, const API_Coord3D& c)
+    {
+        if (!writing) { if (includeReadOnly) out->Add (name, Create3DCoordinateObjectState (c)); return; }
+        if (Has (name)) Error (name, "is read-only");
+    }
+
+    template <typename F>
+    void Nested (const char* name, F&& f)
+    {
+        if (!writing) {
+            GS::ObjectState sub;
+            StairFieldMapper m (sub, includeReadOnly, errors);
+            f (m);
+            out->Add (name, sub);
+            return;
+        }
+        if (!Has (name)) return;
+        const GS::ObjectState* sub = in->Get (name);
+        if (sub == nullptr) { Error (name, "must be an object"); return; }
+        StairFieldMapper m (*sub, path + "." + name, errors);
+        f (m);
+        m.Finish ();
+    }
+
+    // Write mode: every key of the request must have been consumed.
+    void Finish ()
+    {
+        if (!writing) return;
+        in->EnumerateFields ([&] (const GS::String& key) {
+            if (!consumed.Contains (key)) {
+                errors.Push (path + "." + GS::UniString (key.ToCStr ()) + ": unknown field");
+            }
+        });
+    }
+
+private:
+    bool writing;
+    const GS::ObjectState* in;
+    GS::ObjectState* out;
+    bool includeReadOnly;
+    GS::UniString path;
+    GS::Array<GS::UniString>& errors;
+    GS::HashSet<GS::String> consumed;
+};
+
+const std::initializer_list<std::pair<const char*, API_StairTreadNosingTypeID>> NosingTypeTable = { { "ByValue", APITN_ByValue }, { "BySlanting", APITN_BySlanting } };
+const std::initializer_list<std::pair<const char*, API_RiserPositionID>> RiserPositionTable = { { "OnTread", APIRP_OnTread }, { "BehindTread", APIRP_BehindTread } };
+const std::initializer_list<std::pair<const char*, API_RiserCrossSectID>> RiserCrossSectTable = { { "Simple", APIRCS_Simple }, { "Slanted", APIRCS_Slanted } };
+const std::initializer_list<std::pair<const char*, API_StairStructHeightMeasureID>> HeightMeasureTable = { { "Perpendicular", APIHM_Perpendicular }, { "Vertical", APIHM_Vertical } };
+const std::initializer_list<std::pair<const char*, API_StairDrainSurfaceTypeID>> DrainSurfaceTable = { { "Stepped", APIST_Stepped }, { "Smooth", APIST_Smooth } };
+const std::initializer_list<std::pair<const char*, API_HeadroomGenerationModeID>> HeadroomMethodTable = { { "RightAngleToSlope", APIHM_RightAngleToSlope }, { "VerticallyToSlope", APIHM_VerticallyToSlope } };
+const std::initializer_list<std::pair<const char*, API_StairDisplayTypeID>> StairDisplayTypeTable = { { "Custom", APIStairDisplay_Custom }, { "ByModelViewOptions", APIStairDisplay_ByModelViewOptions } };
+const std::initializer_list<std::pair<const char*, API_StairNumberingID>> NumberingTable = { { "Treads", APISN_Treads }, { "Risers", APISN_Risers } };
+const std::initializer_list<std::pair<const char*, API_StairDirectionID>> DirectionTable = { { "Upward", APISD_Upward }, { "Inverse", APISD_Inverse } };
+const std::initializer_list<std::pair<const char*, API_StairWalkLineSymbPosID>> WalkLineSymbPosTable = { { "Auto", APISP_Auto }, { "Center", APISP_Center }, { "Custom", APISP_Custom } };
+const std::initializer_list<std::pair<const char*, API_StairPartRoleID>> PartRoleTable = { { "Run", APISR_Run }, { "Landing", APISR_Landing } };
+const std::initializer_list<std::pair<const char*, API_StairStructureSideID>> StructureSideTable = { { "Left", APISS_LeftSide }, { "Right", APISS_RightSide }, { "Under", APISS_UnderSide } };
+
+constexpr double StairLen = 100.0;  // m, upper bound of lengths
+
+void MapStairRules (StairFieldMapper& m, API_StairRulesData& r)
+{
+    m.Num ("riserHeightMinValue", r.riserHeightMinValue, 0, StairLen);       m.Bool ("riserHeightMinApplied", r.riserHeightMinApplied);
+    m.Num ("riserHeightMaxValue", r.riserHeightMaxValue, 0, StairLen);       m.Bool ("riserHeightMaxApplied", r.riserHeightMaxApplied);
+    m.Num ("treadDepthMinValue", r.treadDepthMinValue, 0, StairLen);         m.Bool ("treadDepthMinApplied", r.treadDepthMinApplied);
+    m.Num ("treadDepthMaxValue", r.treadDepthMaxValue, 0, StairLen);         m.Bool ("treadDepthMaxApplied", r.treadDepthMaxApplied);
+    m.Num ("ruleMinValue", r.ruleMinValue, 0, StairLen);                     m.Bool ("ruleMinApplied", r.ruleMinApplied);
+    m.Num ("ruleMaxValue", r.ruleMaxValue, 0, StairLen);                     m.Bool ("ruleMaxApplied", r.ruleMaxApplied);
+    m.Num ("landingLengthMinValue", r.landingLengthMinValue, 0, StairLen);   m.Bool ("landingLengthMinApplied", r.landingLengthMinApplied);
+    m.Num ("walkingLineOffsetMinValue", r.walkingLineOffsetMinValue, 0, StairLen); m.Bool ("walkingLineOffsetMinApplied", r.walkingLineOffsetMinApplied);
+    m.Num ("winderTurnOffsetMinValue", r.winderTurnOffsetMinValue, 0, StairLen);   m.Bool ("winderTurnOffsetMinApplied", r.winderTurnOffsetMinApplied);
+    m.Num ("riserGoingRatioMinValue", r.riserGoingRatioMinValue, 0, 1000);   m.Bool ("riserGoingRatioMinApplied", r.riserGoingRatioMinApplied);
+    m.Num ("riserGoingRatioMaxValue", r.riserGoingRatioMaxValue, 0, 1000);   m.Bool ("riserGoingRatioMaxApplied", r.riserGoingRatioMaxApplied);
+    m.Num ("riserPlusGoingMinValue", r.riserPlusGoingMinValue, 0, StairLen); m.Bool ("riserPlusGoingMinApplied", r.riserPlusGoingMinApplied);
+    m.Num ("riserPlusGoingMaxValue", r.riserPlusGoingMaxValue, 0, StairLen); m.Bool ("riserPlusGoingMaxApplied", r.riserPlusGoingMaxApplied);
+    m.Num ("stairPitchMinValue", r.stairPitchMinValue, -10, 10);             m.Bool ("stairPitchMinApplied", r.stairPitchMinApplied);
+    m.Num ("stairPitchMaxValue", r.stairPitchMaxValue, -10, 10);             m.Bool ("stairPitchMaxApplied", r.stairPitchMaxApplied);
+}
+
+void MapStairTread (StairFieldMapper& m, API_StairTreadType& t)
+{
+    m.Bool ("isCustom", t.isCustom);
+    m.Bool ("visible", t.visible);
+    m.Enum ("nosingType", t.nosingType, NosingTypeTable);
+    m.Num ("nosingValue", t.nosingValue, -StairLen, StairLen);
+    m.Num ("nosingSlant", t.nosingSlant, -10, 10);
+    m.Num ("offset", t.offset, -StairLen, StairLen);
+    m.Num ("thickness", t.thickness, 0, StairLen);
+    m.Num ("zOffset", t.zOffset, -StairLen, StairLen);
+    m.ReadOnlyGuid ("owner", t.owner);
+    m.ReadOnlyGuid ("libId", t.libId);
+    m.ReadOnlyInt ("sequenceNumber", t.sequenceNumber);
+    m.ReadOnlyInt ("subElemId", t.subElemId);
+    if (!m.IsWriting ()) m.ReadOnlyGuid ("guid", t.head.guid);
+    if (m.IsWriting () && m.Has ("role")) m.Error ("role", "is read-only");
+    else if (!m.IsWriting () && m.IncludeReadOnly ()) { API_StairPartRoleID role = t.role; m.Enum ("role", role, PartRoleTable); }
+}
+
+void MapStairRiser (StairFieldMapper& m, API_StairRiserType& r)
+{
+    m.Enum ("riserPosition", r.riserPosition, RiserPositionTable);
+    m.Enum ("crossSect", r.crossSect, RiserCrossSectTable);
+    m.Num ("angle", r.angle, -10, 10);
+    m.Num ("offset", r.offset, -StairLen, StairLen);
+    m.Num ("thickness", r.thickness, 0, StairLen);
+    m.Bool ("visible", r.visible);
+    m.ReadOnlyGuid ("owner", r.owner);
+    m.ReadOnlyGuid ("libId", r.libId);
+    m.ReadOnlyInt ("sequenceNumber", r.sequenceNumber);
+    m.ReadOnlyInt ("subElemId", r.subElemId);
+    if (!m.IsWriting ()) m.ReadOnlyGuid ("guid", r.head.guid);
+    if (m.IsWriting () && m.Has ("role")) m.Error ("role", "is read-only");
+    else if (!m.IsWriting () && m.IncludeReadOnly ()) { API_StairPartRoleID role = r.role; m.Enum ("role", role, PartRoleTable); }
+}
+
+void MapStairDraining (StairFieldMapper& m, API_StairStructureDrainingData& d)
+{
+    m.Bool ("enabled", d.enabled);
+    m.Num ("width", d.width, 0, StairLen);
+    m.Num ("offset", d.offset, -StairLen, StairLen);
+    m.Num ("horizontalDepth", d.horizontalDepth, 0, StairLen);
+    m.Num ("verticalDepth", d.verticalDepth, 0, StairLen);
+    m.OverMaterial ("material", d.material);
+    m.Enum ("surfaceType", d.surfaceType, DrainSurfaceTable);
+}
+
+void MapStairMonolith (StairFieldMapper& m, API_MonolithStairStructData& s)
+{
+    m.Bool ("thinning", s.thinning);
+    m.Bool ("materialsChained", s.materialsChained);
+    m.Attr ("sideFill", API_FilltypeID, s.sideFill);
+    m.Attr ("buildingMaterial", API_BuildingMaterialID, s.buildingMaterial);
+    m.Num ("monolithThickness", s.monolithThickness, 0, StairLen);
+    m.Num ("bottomOversize", s.bottomOversize, 0, StairLen);
+    m.OverMaterial ("topMaterial", s.topMaterial);
+    m.OverMaterial ("leftMaterial", s.leftMaterial);
+    m.OverMaterial ("rightMaterial", s.rightMaterial);
+    m.OverMaterial ("bottomMaterial", s.bottomMaterial);
+    m.Attr ("cutLineType", API_LinetypeID, s.cutLineType);
+    m.Pen ("cutLinePen", s.cutLinePen);
+    m.Pen ("pen", s.pen);
+    m.Attr ("lineType", API_LinetypeID, s.lineType);
+    m.OverPen ("cutFillPen", s.cutFillPen);
+    m.OverPen ("cutFillBackgroundPen", s.cutFillBackgroundPen);
+    m.Attr ("surfaceMaterial", API_MaterialID, s.surfaceMaterial);
+    m.Bool ("uniformDrainings", s.uniformDrainings);
+    m.Nested ("drainingLeft", [&] (StairFieldMapper& n) { MapStairDraining (n, s.draining[APIDS_Left]); });
+    m.Nested ("drainingRight", [&] (StairFieldMapper& n) { MapStairDraining (n, s.draining[APIDS_Right]); });
+}
+
+void MapStairStructure (StairFieldMapper& m, API_StairStructureType& s)
+{
+    m.Bool ("visible", s.visible);
+    m.ReadOnlyBool ("isLanding", s.isLanding);
+    m.Enum ("structType", s.structType, StairStructTypeTable);
+    m.Enum ("bottomType", s.bottomType, StairStructBottomTable);
+    m.Num ("horizontalThickness", s.horizontalThickness, 0, StairLen);
+    m.Num ("thickness", s.thickness, 0, StairLen);
+    // data is a union: sideStair for a Side structure, monolith for a Monolith one.
+    if (!m.IsWriting ()) {
+        if (s.structType == APIST_Side) {
+            m.Nested ("sideStair", [&] (StairFieldMapper& n) {
+                n.Num ("width", s.data.sideStair.width, 0, StairLen);
+                n.Num ("heightAboveTread", s.data.sideStair.heightAboveTread, -StairLen, StairLen);
+                n.Enum ("heightMeasure", s.data.sideStair.heightMeasure, HeightMeasureTable);
+            });
+        } else if (s.structType == APIST_Monolith) {
+            m.Nested ("monolith", [&] (StairFieldMapper& n) { MapStairMonolith (n, s.data.monolith); });
+        }
+    } else {
+        if (m.Has ("sideStair") && s.structType != APIST_Side) {
+            m.Error ("sideStair", "needs structType Side (union with monolith)");
+        } else if (s.structType == APIST_Side) {
+            m.Nested ("sideStair", [&] (StairFieldMapper& n) {
+                n.Num ("width", s.data.sideStair.width, 0, StairLen);
+                n.Num ("heightAboveTread", s.data.sideStair.heightAboveTread, -StairLen, StairLen);
+                n.Enum ("heightMeasure", s.data.sideStair.heightMeasure, HeightMeasureTable);
+            });
+        }
+        if (m.Has ("monolith") && s.structType != APIST_Monolith) {
+            m.Error ("monolith", "needs structType Monolith (union with sideStair)");
+        } else if (s.structType == APIST_Monolith) {
+            m.Nested ("monolith", [&] (StairFieldMapper& n) { MapStairMonolith (n, s.data.monolith); });
+        }
+    }
+    m.ReadOnlyGuid ("owner", s.owner);
+    m.ReadOnlyGuid ("libId", s.libId);
+    m.ReadOnlyInt ("sequenceNumber", s.sequenceNumber);
+    m.ReadOnlyInt ("subElemId", s.subElemId);
+    if (!m.IsWriting ()) {
+        m.ReadOnlyGuid ("guid", s.head.guid);
+        // role / side are read-only; reported for the placed subelements (GetStairDetails).
+        if (m.IncludeReadOnly ()) {
+            API_StairPartRoleID role = s.role;
+            API_StairStructureSideID side = s.side;
+            m.Enum ("role", role, PartRoleTable);
+            m.Enum ("side", side, StructureSideTable);
+        }
+    } else {
+        if (m.Has ("role")) m.Error ("role", "is read-only");
+        if (m.Has ("side")) m.Error ("side", "is read-only");
+    }
+}
+
+void MapStairLayout (StairFieldMapper& m, API_StairLayoutData& l)
+{
+    m.StoryVisibility ("visibility", l.visibility);
+    m.Bool ("isAutoOnStoryVisibility", l.isAutoOnStoryVisibility);
+    m.Enum ("gridTypeAbove", l.gridTypeAbove, StairGridTypeTable);
+    m.Enum ("gridTypeTop", l.gridTypeTop, StairGridTypeTable);
+    m.Enum ("gridTypeMiddle", l.gridTypeMiddle, StairGridTypeTable);
+    m.Enum ("gridTypeBottom", l.gridTypeBottom, StairGridTypeTable);
+    m.Enum ("gridTypeBelow", l.gridTypeBelow, StairGridTypeTable);
+    m.Enum ("storyVisibility", l.storyVisibility, StairStoryVisibilityTable);
+    m.Bool ("showWalkingLine", l.showWalkingLine);
+    m.Bool ("showNumbering", l.showNumbering);
+    m.Bool ("showUpDownText", l.showUpDownText);
+    m.Bool ("showDescription", l.showDescription);
+    m.Bool ("showStructure", l.showStructure);
+    m.Num ("breakLineAngle", l.breakLineAngle, -10, 10);
+    m.Int ("breakLineAngleNumberOfGoings", l.breakLineAngleNumberOfGoings, 0, 1000);
+    m.Enum ("breakLineAngleType", l.breakLineAngleType, BreakLineAngleTable);
+    m.Num ("breakLineDistance", l.breakLineDistance, 0, StairLen);
+    m.Enum ("breakLinePositionType", l.breakLinePositionType, BreakLinePositionTable);
+    m.Num ("upperBreakLineCustomPosition", l.upperBreakLineCustomPosition, -StairLen, StairLen);
+    m.Num ("lowerBreakLineCustomPosition", l.lowerBreakLineCustomPosition, -StairLen, StairLen);
+    m.Int ("upperBreakLineNthRiserPosition", l.upperBreakLineNthRiserPosition, 0, 1000);
+    m.Int ("lowerBreakLineNthRiserPosition", l.lowerBreakLineNthRiserPosition, 0, 1000);
+    m.Bool ("overrideLineType", l.overrideLineType);
+    m.Bool ("overridePen", l.overridePen);
+    m.Pen ("pen", l.pen);
+    m.Attr ("lineType", API_LinetypeID, l.lineType);
+    m.Bool ("overrideSymbolFill", l.overrideSymbolFill);
+    m.Attr ("symbolFill", API_FilltypeID, l.symbolFill);
+    m.Pen ("symbolFillPen", l.symbolFillPen);
+    m.Pen ("symbolFillBkgPen", l.symbolFillBkgPen);
+}
+
+void MapStructSymb (StairFieldMapper& m, API_StairStructureSymbolData& s)
+{
+    m.Attr ("visibleLineType", API_LinetypeID, s.visibleLineType);
+    m.Pen ("visibleLinePen", s.visibleLinePen);
+    m.Pen ("hiddenLinePen", s.hiddenLinePen);
+    m.Attr ("hiddenLineType", API_LinetypeID, s.hiddenLineType);
+    m.Attr ("visibleFillType", API_FilltypeID, s.visibleFillType);
+    m.Pen ("visibleFillPen", s.visibleFillPen);
+    m.Pen ("visibleFillBackgroundPen", s.visibleFillBackgroundPen);
+    m.Attr ("hiddenFillType", API_FilltypeID, s.hiddenFillType);
+    m.Pen ("hiddenFillPen", s.hiddenFillPen);
+    m.Pen ("hiddenFillBackgroundPen", s.hiddenFillBackgroundPen);
+}
+
+void MapMonolithSymb (StairFieldMapper& m, API_StairMonolithStructureSymbolData& s)
+{
+    m.Attr ("goingLineType", API_LinetypeID, s.goingLineType);
+    m.Pen ("goingLinePen", s.goingLinePen);
+    m.Pen ("goingNosingLinePen", s.goingNosingLinePen);
+    m.Attr ("goingNosingLineType", API_LinetypeID, s.goingNosingLineType);
+    m.Attr ("connectionLineType", API_LinetypeID, s.connectionLineType);
+    m.Pen ("connectionLinePen", s.connectionLinePen);
+    m.Pen ("connectionDetailLinePen", s.connectionDetailLinePen);
+    m.Attr ("connectionDetailLineType", API_LinetypeID, s.connectionDetailLineType);
+    m.Attr ("drainingFillType", API_FilltypeID, s.drainingFillType);
+    m.Pen ("drainingFillPen", s.drainingFillPen);
+    m.Pen ("drainingFillBackGroundPen", s.drainingFillBackGroundPen);
+    m.Attr ("contourLineType", API_LinetypeID, s.contourLineType);
+    m.Pen ("contourLinePen", s.contourLinePen);
+}
+
+const char* const SymbPartNames[API_StairStructSymbPartNum] = { "visible", "hidden" };
+const char* const SymbVisibilityNames[API_StairStructSymbVisibilityNum] = { "beam", "cantilevered", "stringer", "monolith" };
+const char* const SymbTypeNames[API_StairStructSymbTypeNum] = { "underStructure", "stringer" };
+const char* const SymbViewNames[API_StairStructSymbViewNum] = { "floorPlan", "ceilingPlan" };
+const char* const RelevantStoriesNames[API_StairStructSymbRelevantStoriesNum] = { "allStories", "belowRelevant", "bottomRelevant", "midRelevant", "topRelevant", "aboveRelevant" };
+const char* const RoleNames[API_StairPartRoleNum] = { "run", "landing" };
+const char* const SideNames[API_StairStructureSideNum] = { "left", "right", "under" };
+
+void MapComponentVisibility (StairFieldMapper& m, API_StairStructureComponentSettingsVisibility& v)
+{
+    m.Bool ("uniformSymbolRepresentationEnabled", v.uniformSymbolRepresentationEnabled);
+    for (int st = 0; st < API_StairStructSymbRelevantStoriesNum; ++st) {
+        m.Nested (RelevantStoriesNames[st], [&] (StairFieldMapper& s) {
+            API_StairStructureComponentSettingsVisibilityOnStory& o = v.structureVisibilityOnStories[st];
+            for (int part = 0; part < API_StairStructSymbPartNum; ++part) {
+                s.Nested (SymbPartNames[part], [&] (StairFieldMapper& p) {
+                    p.Nested ("structureVisibility", [&] (StairFieldMapper& q) {
+                        for (int k = 0; k < API_StairStructSymbVisibilityNum; ++k) q.Bool (SymbVisibilityNames[k], o.structureVisibility[part][k]);
+                    });
+                    p.Nested ("fillVisibility", [&] (StairFieldMapper& q) {
+                        for (int k = 0; k < API_StairStructSymbTypeNum; ++k) q.Bool (SymbTypeNames[k], o.fillVisibility[part][k]);
+                    });
+                    p.Nested ("monolithPartsVisibility", [&] (StairFieldMapper& q) {
+                        API_MonolithPartsVisibilityData& mp = o.monolithPartsVisibility[part];
+                        q.Bool ("connectionVisible", mp.connectionVisible);
+                        q.Bool ("drainingVisible", mp.drainingVisible);
+                        q.Bool ("landingLineVisible", mp.landingLineVisible);
+                        q.Bool ("structureGoingVisible", mp.structureGoingVisible);
+                        q.Bool ("structureGoingNosingVisible", mp.structureGoingNosingVisible);
+                    });
+                });
+            }
+        });
+    }
+}
+
+// Every member of API_StairType (APIdefs_Elements.h:15644) except head.
+void MapStairType (StairFieldMapper& m, API_StairType& s)
+{
+    m.Num ("totalHeight", s.totalHeight, 0.001, 1000);
+    m.Num ("topOffset", s.topOffset, -1000, 1000);
+    m.Nested ("linkToSettings", [&] (StairFieldMapper& n) {
+        n.Int ("homeStoryDifference", s.linkToSettings.homeStoryDifference, -1000, 1000);
+        n.Bool ("newCreationMode", s.linkToSettings.newCreationMode);
+    });
+    m.Int ("relativeTopStory", s.relativeTopStory, -100, 100);
+    m.Num ("flightWidth", s.flightWidth, 0.01, StairLen);
+    m.Int ("stepNum", s.stepNum, 1, static_cast<Int32> (StairMaxStepNum));
+    m.ReadOnlyInt ("nFPDMarkers", s.nFPDMarkers);
+    m.ReadOnlyInt ("nRCPDMarkers", s.nRCPDMarkers);
+    m.ReadOnlyInt ("treadNum", s.treadNum);
+    m.Num ("riserHeight", s.riserHeight, 0.001, StairLen);
+    m.Num ("treadDepth", s.treadDepth, 0.001, StairLen);
+    m.Bool ("treadDepthLocked", s.treadDepthLocked);
+    m.Bool ("totalHeightLocked", s.totalHeightLocked);
+    m.Num ("walkingLineOffset", s.walkingLineOffset, -StairLen, StairLen);
+    m.Enum ("walkingLinePosition", s.walkingLinePosition, StairWalkingLinePositionTable);
+    m.Bool ("extraTopTread", s.extraTopTread);
+    m.Bool ("extraBottomTread", s.extraBottomTread);
+    m.Bool ("finishVisible", s.finishVisible);
+    m.Enum ("baselinePosition", s.baselinePosition, StairBaseLinePositionTable);
+    m.Num ("baselineOffset", s.baselineOffset, -StairLen, StairLen);
+    m.Nested ("rules", [&] (StairFieldMapper& n) { MapStairRules (n, s.rules); });
+    m.Nested ("tread", [&] (StairFieldMapper& n) {
+        for (int role = 0; role < API_StairPartRoleNum; ++role) n.Nested (RoleNames[role], [&] (StairFieldMapper& t) { MapStairTread (t, s.tread[role]); });
+    });
+    m.Nested ("riser", [&] (StairFieldMapper& n) {
+        for (int role = 0; role < API_StairPartRoleNum; ++role) n.Nested (RoleNames[role], [&] (StairFieldMapper& t) { MapStairRiser (t, s.riser[role]); });
+    });
+    m.Nested ("structure", [&] (StairFieldMapper& n) {
+        for (int role = 0; role < API_StairPartRoleNum; ++role) {
+            n.Nested (RoleNames[role], [&] (StairFieldMapper& r) {
+                for (int side = 0; side < API_StairStructureSideNum; ++side) r.Nested (SideNames[side], [&] (StairFieldMapper& t) { MapStairStructure (t, s.structure[role][side]); });
+            });
+        }
+    });
+    m.Enum ("stairDisplayType", s.stairDisplayType, StairDisplayTypeTable);
+    m.Nested ("fpdLayout", [&] (StairFieldMapper& n) { MapStairLayout (n, s.fpdLayout); });
+    m.Nested ("rcpdLayout", [&] (StairFieldMapper& n) { MapStairLayout (n, s.rcpdLayout); });
+    m.Enum ("numberingType", s.numberingType, NumberingTable);
+    m.Enum ("inputDirection", s.inputDirection, DirectionTable);
+    if (!m.IsWriting ()) {
+        if (m.IncludeReadOnly ()) m.Nested ("basePlane", [&] (StairFieldMapper& n) {
+            n.ReadOnlyCoord3D ("basePoint", s.basePlane.basePoint);
+            n.ReadOnlyCoord3D ("axisX", API_Coord3D { s.basePlane.axisX.x, s.basePlane.axisX.y, s.basePlane.axisX.z });
+            n.ReadOnlyCoord3D ("axisY", API_Coord3D { s.basePlane.axisY.x, s.basePlane.axisY.y, s.basePlane.axisY.z });
+            n.ReadOnlyCoord3D ("axisZ", API_Coord3D { s.basePlane.axisZ.x, s.basePlane.axisZ.y, s.basePlane.axisZ.z });
+        });
+    } else if (m.Has ("basePlane")) {
+        m.Error ("basePlane", "is read-only (use baseLinePoints / zCoordinate)");
+    }
+    m.Bool ("uniformFinish", s.uniformFinish);
+    m.Bool ("uniformMonolithAttributes", s.uniformMonolithAttributes);
+    m.Nested ("uniformLeftRightSideSupports", [&] (StairFieldMapper& n) {
+        for (int role = 0; role < API_StairPartRoleNum; ++role) n.Bool (RoleNames[role], s.uniformLeftRightSideSupports[role]);
+    });
+    m.Bool ("uniformDrainings", s.uniformDrainings);
+    m.Bool ("structureVisibility", s.structureVisibility);
+    m.Nested ("structSymbData", [&] (StairFieldMapper& n) {
+        for (int t = 0; t < API_StairStructSymbTypeNum; ++t) {
+            n.Nested (SymbTypeNames[t], [&] (StairFieldMapper& a) {
+                for (int v = 0; v < API_StairStructSymbViewNum; ++v) a.Nested (SymbViewNames[v], [&] (StairFieldMapper& b) { MapStructSymb (b, s.structSymbData[t][v]); });
+            });
+        }
+    });
+    m.Nested ("monolithStructureSymbolData", [&] (StairFieldMapper& n) {
+        for (int v = 0; v < API_StairStructSymbViewNum; ++v) {
+            n.Nested (SymbViewNames[v], [&] (StairFieldMapper& a) {
+                for (int p = 0; p < API_StairStructSymbPartNum; ++p) a.Nested (SymbPartNames[p], [&] (StairFieldMapper& b) { MapMonolithSymb (b, s.monolithStructureSymbolData[v][p]); });
+            });
+        }
+    });
+    m.Nested ("structureVisibilityOnStories", [&] (StairFieldMapper& n) {
+        for (int v = 0; v < API_StairStructSymbViewNum; ++v) n.Nested (SymbViewNames[v], [&] (StairFieldMapper& a) { MapComponentVisibility (a, s.structureVisibilityOnStories[v]); });
+    });
+    m.Enum ("walkLineSymbPos", s.walkLineSymbPos, WalkLineSymbPosTable);
+    m.Nested ("stairHeadroomData", [&] (StairFieldMapper& n) {
+        n.Enum ("headroomMethod", s.stairHeadroomData.headroomMethod, HeadroomMethodTable);
+        n.Num ("headroomHeight", s.stairHeadroomData.headroomHeight, 0, StairLen);
+        n.Num ("headroomLeftOffset", s.stairHeadroomData.headroomLeftOffset, -StairLen, StairLen);
+        n.Num ("headroomRightOffset", s.stairHeadroomData.headroomRightOffset, -StairLen, StairLen);
+    });
+}
+
+// The element mask bits for the top-level members a write request touched.
+void SetStairMaskForKeys (API_Element& mask, const GS::HashSet<GS::String>& keys)
+{
+#define STAIR_MASK(member) if (keys.Contains (#member)) { ACAPI_ELEMENT_MASK_SET (mask, API_StairType, member); }
+    STAIR_MASK (totalHeight) STAIR_MASK (topOffset) STAIR_MASK (linkToSettings) STAIR_MASK (relativeTopStory)
+    STAIR_MASK (flightWidth) STAIR_MASK (stepNum) STAIR_MASK (riserHeight) STAIR_MASK (treadDepth)
+    STAIR_MASK (treadDepthLocked) STAIR_MASK (totalHeightLocked) STAIR_MASK (walkingLineOffset) STAIR_MASK (walkingLinePosition)
+    STAIR_MASK (extraTopTread) STAIR_MASK (extraBottomTread) STAIR_MASK (finishVisible) STAIR_MASK (baselinePosition)
+    STAIR_MASK (baselineOffset) STAIR_MASK (rules) STAIR_MASK (tread) STAIR_MASK (riser) STAIR_MASK (structure)
+    STAIR_MASK (stairDisplayType) STAIR_MASK (fpdLayout) STAIR_MASK (rcpdLayout) STAIR_MASK (numberingType)
+    STAIR_MASK (inputDirection) STAIR_MASK (uniformFinish) STAIR_MASK (uniformMonolithAttributes)
+    STAIR_MASK (uniformLeftRightSideSupports) STAIR_MASK (uniformDrainings) STAIR_MASK (structureVisibility)
+    STAIR_MASK (structSymbData) STAIR_MASK (monolithStructureSymbolData) STAIR_MASK (structureVisibilityOnStories)
+    STAIR_MASK (walkLineSymbPos) STAIR_MASK (stairHeadroomData)
+#undef STAIR_MASK
+}
+
+// Applies a "stair" request object; returns the errors (empty = OK) and the touched top-level keys.
+GS::Array<GS::UniString> WriteStairTypeRequest (API_StairType& stair, const GS::ObjectState& request, GS::HashSet<GS::String>* touched)
+{
+    GS::Array<GS::UniString> errors;
+    StairFieldMapper m (request, "stair", errors);
+    MapStairType (m, stair);
+    m.Finish ();
+    if (touched != nullptr) {
+        *touched = m.Consumed ();
+    }
+    return errors;
+}
+
+GS::ObjectState ReadStairType (API_StairType& stair, bool includeReadOnly)
+{
+    GS::ObjectState os;
+    GS::Array<GS::UniString> errors;
+    StairFieldMapper m (os, includeReadOnly, errors);
+    MapStairType (m, stair);
+    return os;
+}
+
+GS::UniString JoinStairErrors (const GS::Array<GS::UniString>& errors)
+{
+    GS::UniString text;
+    for (UIndex i = 0; i < errors.GetSize () && i < 30; ++i) {
+        text += (i == 0 ? "" : "; ") + errors[i];
+    }
+    if (errors.GetSize () > 30) text += GS::UniString::Printf ("; ... (%d errors)", (int) errors.GetSize ());
+    return text;
+}
+
+// The structure / tread / riser defaults of a placed stair read back as 0 (confirmed live
+// 2026-10-22); before such a stair is changed or recreated, they are filled from the first
+// placed subelement of the same role (and side).
+void FillStairDefaultsFromSubelements (API_StairType& stair, const API_ElementMemo& memo)
+{
+    const GSSize nStructures = StairPtrCount (memo.stairStructures);
+    for (int role = 0; role < API_StairPartRoleNum; ++role) {
+        for (int side = 0; side < API_StairStructureSideNum; ++side) {
+            API_StairStructureType& def = stair.structure[role][side];
+            if (def.thickness != 0.0 || def.horizontalThickness != 0.0) continue;
+            for (GSSize i = 0; i < nStructures; ++i) {
+                const API_StairStructureType& placed = memo.stairStructures[i];
+                if (placed.role == role && placed.side == side) {
+                    def = placed;
+                    break;
+                }
+            }
+        }
+    }
+    const GSSize nTreads = StairPtrCount (memo.stairTreads);
+    for (int role = 0; role < API_StairPartRoleNum; ++role) {
+        if (stair.tread[role].thickness != 0.0) continue;
+        for (GSSize i = 0; i < nTreads; ++i) {
+            if (memo.stairTreads[i].role == role) { stair.tread[role] = memo.stairTreads[i]; break; }
+        }
+    }
+    const GSSize nRisers = StairPtrCount (memo.stairRisers);
+    for (int role = 0; role < API_StairPartRoleNum; ++role) {
+        if (stair.riser[role].thickness != 0.0) continue;
+        for (GSSize i = 0; i < nRisers; ++i) {
+            if (memo.stairRisers[i].role == role) { stair.riser[role] = memo.stairRisers[i]; break; }
+        }
+    }
+}
+
+// Deep comparison of the request with the read-back: the leaves of `request` that differ in
+// `actual` (numbers with a 1e-6 tolerance).
+void CollectNotKept (const GS::ObjectState& request, const GS::ObjectState& actual, const GS::UniString& path, GS::Array<GS::UniString>& notKept)
+{
+    request.EnumerateFields ([&] (const GS::String& key) {
+        const GS::UniString p = path + "." + GS::UniString (key.ToCStr ());
+        if (!actual.Contains (key)) { notKept.Push (p + " (not read back)"); return; }
+        switch (request.GetType (key)) {
+            case GS::ObjectState::Object: {
+                const GS::ObjectState* r = request.Get (key);
+                const GS::ObjectState* a = actual.Get (key);
+                if (r != nullptr && a != nullptr) CollectNotKept (*r, *a, p, notKept);
+                break;
+            }
+            case GS::ObjectState::Bool: {
+                bool r = false, a = false;
+                request.Get (key, r); actual.Get (key, a);
+                if (r != a) notKept.Push (p + GS::UniString::Printf (" (asked %s, got %s)", r ? "true" : "false", a ? "true" : "false"));
+                break;
+            }
+            case GS::ObjectState::Int:
+            case GS::ObjectState::UInt:
+            case GS::ObjectState::Real: {
+                double r = 0.0, a = 0.0;
+                request.Get (key, r); actual.Get (key, a);
+                if (std::fabs (r - a) > 1e-6) notKept.Push (p + GS::UniString::Printf (" (asked %g, got %g)", r, a));
+                break;
+            }
+            case GS::ObjectState::String: {
+                GS::UniString r, a;
+                request.Get (key, r); actual.Get (key, a);
+                if (r != a) notKept.Push (p + " (asked " + r + ", got " + a + ")");
+                break;
+            }
+            default:
+                break;
+        }
+    });
+}
+
+} // namespace
+
 // Writes every API_StairType field the request names (story / z, sizes, steps, rules, lines,
 // structure). Used for the create and again for the template of the turn recreate, which must
 // not inherit what Archicad wrote back into the placed stair (Eden 2026-10-22: walking line,
@@ -4994,6 +5701,13 @@ static GS::Optional<GS::ObjectState> ApplyStairElementParameters (API_Element& e
     const auto floorIndexAndOffset = ResolveFloorIndexAndOffset (parameters, "floorIndex", zCoordinate, stories);
     element.header.floorInd = floorIndexAndOffset.first;
     element.stair.basePlane.basePoint.z = floorIndexAndOffset.second;
+
+    if (const GS::ObjectState* stairOs = parameters.Get ("stair"); stairOs != nullptr) {
+        const GS::Array<GS::UniString> errors = WriteStairTypeRequest (element.stair, *stairOs, nullptr);
+        if (!errors.IsEmpty ()) {
+            return CreateErrorResponse (APIERR_BADPARS, JoinStairErrors (errors));
+        }
+    }
 
     bool finishVisible = true;
     if (parameters.Get ("finishVisible", finishVisible)) {
@@ -9727,6 +10441,514 @@ GS::ObjectState SetStairFloorPlanDisplayCommand::Execute (const GS::ObjectState&
             os.Add ("ceilingPlanDisplay", CreateStairLayoutObjectState (readBack.stair.rcpdLayout));
         }
         stairs (os);
+    }
+    return response;
+}
+
+// ============================================================================
+// GetStairDetails / ModifyStairs (ADR-002 kap. 12): every API_StairType field, the placed
+// subelements, the stair polylines and a "createRequest" that CreateStairs turns back into the
+// same stair (used by the ModifyStairs recreate).
+// ============================================================================
+
+static GS::ObjectState CreateStairBoundaryObjectState (const API_StairBoundaryData& b, const API_Plane3D& plane)
+{
+    GS::ObjectState os;
+    os.Add ("isCustom", b.isCustom);
+    os.Add ("nCoords", b.polygon.nCoords);
+    const auto& coords = os.AddList<GS::ObjectState> ("globalCoords");
+    if (b.coords != nullptr) {
+        const GSSize handleCount = BMGetHandleSize (reinterpret_cast<GSConstHandle> (b.coords)) / static_cast<GSSize> (sizeof (API_Coord));
+        for (Int32 k = 1; k <= b.polygon.nCoords && k < handleCount; ++k) {
+            coords (Create2DCoordinateObjectState (StairLocalToGlobal (plane, (*b.coords)[k])));
+        }
+    }
+    const GSSize nv = StairPtrCount (b.vertexData);
+    const auto& vertices = os.AddList<GS::ObjectState> ("vertexData");
+    for (GSSize i = 0; i < nv; ++i) {
+        GS::ObjectState v;
+        v.Add ("index", static_cast<Int32> (i));
+        v.Add ("type", GS::UniString (StairPolyTypeName (b.vertexData[i].type)));
+        v.Add ("zValue", b.vertexData[i].zValue);
+        vertices (v);
+    }
+    const GSSize ne = StairPtrCount (b.edgeData);
+    const auto& edges = os.AddList<GS::ObjectState> ("edgeData");
+    for (GSSize i = 0; i < ne; ++i) {
+        GS::ObjectState e;
+        e.Add ("index", static_cast<Int32> (i));
+        e.Add ("type", GS::UniString (StairPolyTypeName (b.edgeData[i].type)));
+        e.Add ("visible", b.edgeData[i].visible);
+        edges (e);
+    }
+    return os;
+}
+
+static double StairGlobalPolylineLength (const API_StairPolylineData& line)
+{
+    double length = 0.0;
+    if (line.coords == nullptr) return length;
+    const GSSize handleCount = BMGetHandleSize (reinterpret_cast<GSConstHandle> (line.coords)) / static_cast<GSSize> (sizeof (API_Coord));
+    for (Int32 k = 2; k <= line.polygon.nCoords && k < handleCount; ++k) {
+        length += std::hypot ((*line.coords)[k].x - (*line.coords)[k - 1].x, (*line.coords)[k].y - (*line.coords)[k - 1].y);
+    }
+    return length;
+}
+
+// A CreateStairs item that rebuilds the stair: global baseline, absolute z + home story, the
+// turns / segments of every inner point / edge and the full writable "stair" settings (defaults
+// filled from the placed subelements; treadDepth from the baseline because it reads back as 1.0).
+static GS::ObjectState BuildStairCreateRequest (const API_Element& element, const API_ElementMemo& memo, API_StairType settings, const Stories& stories, bool treadDepthRequested)
+{
+    GS::ObjectState req;
+    const API_StairPolylineData& line = memo.stairBaseLine;
+    const Int32 nCoords = line.polygon.nCoords;
+    const auto& points = req.AddList<GS::ObjectState> ("baseLinePoints");
+    if (line.coords != nullptr) {
+        for (Int32 k = 1; k <= nCoords; ++k) {
+            points (Create2DCoordinateObjectState (StairLocalToGlobal (element.stair.basePlane, (*line.coords)[k])));
+        }
+    }
+    req.Add ("zCoordinate", GetZPos (element.header.floorInd, element.stair.basePlane.basePoint.z, stories));
+    req.Add ("floorIndex", static_cast<Int32> (element.header.floorInd));
+    const Int32 vOffset = StairDataIndexOffset (line.vertexData, nCoords);
+    const auto& turns = req.AddList<GS::ObjectState> ("turns");
+    if (vOffset >= 0) {
+        const GSSize nv = StairPtrCount (line.vertexData);
+        for (Int32 k = 2; k <= nCoords - 1; ++k) {
+            const Int32 index = k - 1 + vOffset;
+            if (index < 0 || index >= nv) continue;
+            const API_StairPolylineVertexData& v = line.vertexData[index];
+            GS::ObjectState t;
+            t.Add ("pointIndex", k - 1);
+            t.Add ("type", GS::UniString (StairTurnTypeName (v.turnType)));
+            t.Add ("winderStepsBackward", v.winderStepNumBackward);
+            t.Add ("winderStepsForward", v.winderStepNumForward);
+            t.Add ("numOfWindersType", StairEnumName (StairWinderNumTypeTable, v.numOfWindersType));
+            t.Add ("winderType", StairEnumName (StairWinderTypeTable, v.winderType));
+            t.Add ("riserOffsetType", StairEnumName (StairRiserOffsetTypeTable, v.innerWidthOffsetType));
+            t.Add ("dividedLandingWinderMode", StairEnumName (StairDLWinderNumTypeTable, v.dividedLandingNumOfWindersType));
+            if (v.dividedLandingFixedNumOfSteps >= 1) t.Add ("dividedLandingStepNum", v.dividedLandingFixedNumOfSteps);
+            t.Add ("landingStartOffset", std::max (0.0, v.minLandingStartEdgeOffset));
+            t.Add ("landingEndOffset", std::max (0.0, v.minLandingEndEdgeOffset));
+            t.Add ("symmetricalLandingOffset", v.symmetricalLandingOffset);
+            turns (t);
+        }
+    }
+    const Int32 eOffset = StairDataIndexOffset (line.edgeData, nCoords - 1);
+    const auto& segments = req.AddList<GS::ObjectState> ("segments");
+    if (eOffset >= 0) {
+        const GSSize ne = StairPtrCount (line.edgeData);
+        for (Int32 k = 1; k <= nCoords - 1; ++k) {
+            const Int32 index = k - 1 + eOffset;
+            if (index < 0 || index >= ne) continue;
+            GS::ObjectState sgm;
+            sgm.Add ("edgeIndex", k - 1);
+            sgm.Add ("type", GS::UniString (StairSegmentTypeName (line.edgeData[index].segmentType)));
+            segments (sgm);
+        }
+    }
+    FillStairDefaultsFromSubelements (settings, memo);
+    if (!treadDepthRequested && settings.stepNum > 1) {
+        const double baseLength = StairGlobalPolylineLength (line);
+        if (baseLength > 0.0) settings.treadDepth = baseLength / static_cast<double> (settings.stepNum - 1);
+    }
+    req.Add ("stair", ReadStairType (settings, false));
+    return req;
+}
+
+static GS::ObjectState BuildStairDetails (const API_Element& element, const API_ElementMemo& memo, const Stories& stories)
+{
+    API_StairType stair = element.stair;
+    GS::ObjectState os;
+    os.Add ("elementId", CreateGuidObjectState (element.header.guid));
+    os.Add ("floorIndex", static_cast<Int32> (element.header.floorInd));
+    const double zBottom = GetZPos (element.header.floorInd, stair.basePlane.basePoint.z, stories);
+    os.Add ("zCoordinate", zBottom);
+    os.Add ("zTop", zBottom + stair.totalHeight);
+    os.Add ("stair", ReadStairType (stair, true));
+    {
+        GS::ObjectState sub;
+        GS::Array<GS::UniString> errors;
+        const auto& treads = sub.AddList<GS::ObjectState> ("treads");
+        for (GSSize i = 0; i < StairPtrCount (memo.stairTreads); ++i) {
+            GS::ObjectState t;
+            t.Add ("index", static_cast<Int32> (i));
+            StairFieldMapper m (t, true, errors);
+            MapStairTread (m, memo.stairTreads[i]);
+            treads (t);
+        }
+        const auto& risers = sub.AddList<GS::ObjectState> ("risers");
+        for (GSSize i = 0; i < StairPtrCount (memo.stairRisers); ++i) {
+            GS::ObjectState r;
+            r.Add ("index", static_cast<Int32> (i));
+            StairFieldMapper m (r, true, errors);
+            MapStairRiser (m, memo.stairRisers[i]);
+            risers (r);
+        }
+        const auto& structures = sub.AddList<GS::ObjectState> ("structures");
+        for (GSSize i = 0; i < StairPtrCount (memo.stairStructures); ++i) {
+            GS::ObjectState s;
+            s.Add ("index", static_cast<Int32> (i));
+            StairFieldMapper m (s, true, errors);
+            MapStairStructure (m, memo.stairStructures[i]);
+            structures (s);
+        }
+        os.Add ("subelements", sub);
+    }
+    os.Add ("baseLine", CreateStairPolylineObjectState (memo.stairBaseLine));
+    os.Add ("walkingLine", CreateStairPolylineObjectState (memo.stairWalkingLine));
+    os.Add ("customWalkingLine", CreateStairPolylineObjectState (memo.stairCustomWalkLine));
+    os.Add ("centerWalkingLine", CreateStairPolylineObjectState (memo.stairCenterWalkLine));
+    os.Add ("leftBoundary", CreateStairBoundaryObjectState (memo.stairBoundary[0], stair.basePlane));
+    os.Add ("rightBoundary", CreateStairBoundaryObjectState (memo.stairBoundary[1], stair.basePlane));
+    os.Add ("baseLineLength", StairGlobalPolylineLength (memo.stairBaseLine));
+    if (stair.stepNum > 1) {
+        os.Add ("goingFromBaseLine", StairGlobalPolylineLength (memo.stairBaseLine) / static_cast<double> (stair.stepNum - 1));
+    }
+    os.Add ("createRequest", BuildStairCreateRequest (element, memo, element.stair, stories, false));
+    return os;
+}
+
+GetStairDetailsCommand::GetStairDetailsCommand () :
+    CommandBase (CommonSchema::Used)
+{
+}
+
+GS::String GetStairDetailsCommand::GetName () const
+{
+    return "GetStairDetails";
+}
+
+GS::Optional<GS::UniString> GetStairDetailsCommand::GetInputParametersSchema () const
+{
+    return R"({
+        "type": "object",
+        "properties": {
+            "elements": {
+                "type": "array",
+                "description": "The Stair elements.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "elementId": { "$ref": "#/ElementId" }
+                    },
+                    "additionalProperties": false,
+                    "required": ["elementId"]
+                }
+            }
+        },
+        "additionalProperties": false,
+        "required": ["elements"]
+    })";
+}
+
+GS::Optional<GS::UniString> GetStairDetailsCommand::GetRawResponseSchema () const
+{
+    return R"({
+        "type": "object",
+        "properties": {
+            "stairs": {
+                "type": "array",
+                "description": "Per stair: 'stair' = every API_StairType member under its API name (read-only ones included), 'subelements' (treads / risers / structures as placed), baseLine / walkingLine / customWalkingLine / centerWalkingLine / left and right boundary, and 'createRequest' - a CreateStairs item that rebuilds the stair; or an error.",
+                "items": { "type": "object" }
+            }
+        },
+        "additionalProperties": false,
+        "required": ["stairs"]
+    })";
+}
+
+GS::ObjectState GetStairDetailsCommand::Execute (const GS::ObjectState& parameters, GS::ProcessControl& /*processControl*/) const
+{
+    GS::Array<GS::ObjectState> elements;
+    parameters.Get ("elements", elements);
+    GS::ObjectState response;
+    const auto& stairs = response.AddList<GS::ObjectState> ("stairs");
+    const Stories stories = GetStories ();
+    for (const GS::ObjectState& elementObj : elements) {
+        const GS::ObjectState* elementId = elementObj.Get ("elementId");
+        if (elementId == nullptr) { stairs (CreateErrorResponse (APIERR_BADPARS, "elementId is missing")); continue; }
+        API_Element element = {};
+        element.header.guid = GetGuidFromObjectState (*elementId);
+        GSErrCode err = ACAPI_Element_Get (&element);
+        if (err != NoError) { stairs (CreateErrorResponse (err, "Failed to get element")); continue; }
+        if (GetElemTypeId (element.header) != API_StairID) { stairs (CreateErrorResponse (APIERR_BADID, "Element is not a Stair")); continue; }
+        API_ElementMemo memo = {};
+        const GS::OnExit guard ([&memo] () { ACAPI_DisposeElemMemoHdls (&memo); });
+        err = ACAPI_Element_GetMemo (element.header.guid, &memo, APIMemoMask_All);
+        if (err != NoError) { stairs (CreateErrorResponse (err, "Failed to get element memo")); continue; }
+        stairs (BuildStairDetails (element, memo, stories));
+    }
+    return response;
+}
+
+// ----------------------------------------------------------------------------
+
+ModifyStairsCommand::ModifyStairsCommand () :
+    CommandBase (CommonSchema::Used)
+{
+}
+
+GS::String ModifyStairsCommand::GetName () const
+{
+    return "ModifyStairs";
+}
+
+GS::Optional<GS::UniString> ModifyStairsCommand::GetInputParametersSchema () const
+{
+    return R"({
+        "type": "object",
+        "properties": {
+            "stairs": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "elementId": { "$ref": "#/ElementId" },
+                        "stair": { "type": "object", "description": "Any writable API_StairType member under its API name, nested as GetStairDetails returns it (see ADR-002 coverage table). Only the given fields change." },
+                        "baseLinePoints": { "type": "array", "items": { "$ref": "#/Coordinate2D" }, "minItems": 2, "description": "New baseline (global). Forces a recreate." },
+                        "zCoordinate": { "type": "number", "description": "New absolute base z. Forces a recreate." },
+                        "floorIndex": { "type": "integer", "description": "New home story (with zCoordinate). Forces a recreate." },
+                        "turns": { "type": "array", "items": { "type": "object" }, "description": "As in CreateStairs (all inner points; missing ones keep the current turn). Forces a recreate." },
+                        "segments": { "type": "array", "items": { "type": "object" }, "description": "As in CreateStairs. Forces a recreate." },
+                        "subelements": {
+                            "type": "object",
+                            "description": "Experimental (NOT verified live): fields of single placed subelements, by their index in GetStairDetails.subelements, changed through the stair memo (APIMemoMask_StairTread / Riser / Structure).",
+                            "properties": {
+                                "treads": { "type": "array", "items": { "type": "object" } },
+                                "risers": { "type": "array", "items": { "type": "object" } },
+                                "structures": { "type": "array", "items": { "type": "object" } }
+                            },
+                            "additionalProperties": false
+                        },
+                        "forceRecreate": { "type": "boolean", "description": "Recreate instead of ACAPI_Element_Change." },
+                        "recreateIfChangeFails": { "type": "boolean", "description": "Default true: when ACAPI_Element_Change refuses the change, the stair is recreated (new GUID, same position)." }
+                    },
+                    "additionalProperties": false,
+                    "required": ["elementId"]
+                }
+            }
+        },
+        "additionalProperties": false,
+        "required": ["stairs"]
+    })";
+}
+
+GS::Optional<GS::UniString> ModifyStairsCommand::GetRawResponseSchema () const
+{
+    return R"({
+        "type": "object",
+        "properties": {
+            "stairs": {
+                "type": "array",
+                "description": "Per stair: elementId (new one after a recreate), previousElementId, method ('change' | 'recreate'), changeError (why Change was not used), notKept (requested fields Archicad did not keep, from the read-back); or an error.",
+                "items": { "type": "object" }
+            }
+        },
+        "additionalProperties": false,
+        "required": ["stairs"]
+    })";
+}
+
+static void AddObjectList (GS::ObjectState& os, const char* name, const GS::Array<GS::ObjectState>& items)
+{
+    const auto& list = os.AddList<GS::ObjectState> (name);
+    for (const GS::ObjectState& i : items) list (i);
+}
+
+template <typename T, typename F>
+static GS::Optional<GS::UniString> ApplyStairSubelementRequests (T* items, GSSize count, const GS::Array<GS::ObjectState>& requests, const char* what, F&& map)
+{
+    for (const GS::ObjectState& r : requests) {
+        Int32 index = -1;
+        if (!r.Get ("index", index) || index < 0 || index >= count) {
+            return GS::UniString::Printf ("subelements.%s: index missing or out of range (0..%d)", what, (int) count - 1);
+        }
+        GS::Array<GS::UniString> errors;
+        StairFieldMapper m (r, GS::UniString::Printf ("subelements.%s[%d]", what, index), errors);
+        m.Has ("index");
+        map (m, items[index]);
+        m.Finish ();
+        if (!errors.IsEmpty ()) {
+            return JoinStairErrors (errors);
+        }
+    }
+    return {};
+}
+
+GS::ObjectState ModifyStairsCommand::Execute (const GS::ObjectState& parameters, GS::ProcessControl& processControl) const
+{
+    GS::Array<GS::ObjectState> items;
+    parameters.Get ("stairs", items);
+    GS::ObjectState response;
+    const auto& results = response.AddList<GS::ObjectState> ("stairs");
+    const Stories stories = GetStories ();
+
+    for (const GS::ObjectState& item : items) {
+        const GS::ObjectState* elementId = item.Get ("elementId");
+        if (elementId == nullptr) { results (CreateErrorResponse (APIERR_BADPARS, "elementId is missing")); continue; }
+        API_Element element = {};
+        element.header.guid = GetGuidFromObjectState (*elementId);
+        GSErrCode err = ACAPI_Element_Get (&element);
+        if (err != NoError) { results (CreateErrorResponse (err, "Failed to get element")); continue; }
+        if (GetElemTypeId (element.header) != API_StairID) { results (CreateErrorResponse (APIERR_BADID, "Element is not a Stair")); continue; }
+        API_ElementMemo memo = {};
+        const GS::OnExit guard ([&memo] () { ACAPI_DisposeElemMemoHdls (&memo); });
+        err = ACAPI_Element_GetMemo (element.header.guid, &memo, APIMemoMask_All);
+        if (err != NoError) { results (CreateErrorResponse (err, "Failed to get element memo")); continue; }
+
+        // The settings to write: placed values (defaults filled from the subelements) + the request.
+        API_Element work = element;
+        FillStairDefaultsFromSubelements (work.stair, memo);
+        const GS::ObjectState* stairRequest = item.Get ("stair");
+        GS::HashSet<GS::String> touched;
+        if (stairRequest != nullptr) {
+            const GS::Array<GS::UniString> errors = WriteStairTypeRequest (work.stair, *stairRequest, &touched);
+            if (!errors.IsEmpty ()) { results (CreateErrorResponse (APIERR_BADPARS, JoinStairErrors (errors))); continue; }
+        }
+
+        bool forceRecreate = false;
+        item.Get ("forceRecreate", forceRecreate);
+        bool recreateIfChangeFails = true;
+        item.Get ("recreateIfChangeFails", recreateIfChangeFails);
+        const bool geometry = item.Contains ("baseLinePoints") || item.Contains ("zCoordinate") || item.Contains ("floorIndex") || item.Contains ("turns") || item.Contains ("segments");
+
+        GS::ObjectState result;
+        result.Add ("previousElementId", CreateGuidObjectState (element.header.guid));
+        API_Guid finalGuid = element.header.guid;
+        GS::UniString changeError;
+        bool done = false;
+
+        if (!geometry && !forceRecreate) {
+            if (!touched.IsEmpty ()) {
+                API_Element mask = {};
+                ACAPI_ELEMENT_MASK_CLEAR (mask);
+                SetStairMaskForKeys (mask, touched);
+                GSErrCode changeErr = NoError;
+                ACAPI_CallUndoableCommand ("Modify Stair", [&] () -> GSErrCode {
+                    changeErr = ACAPI_Element_Change (&work, &mask, nullptr, 0, true);
+                    return changeErr;
+                });
+                if (changeErr == NoError) {
+                    finalGuid = work.header.guid;
+                    done = true;
+                    result.Add ("method", GS::UniString ("change"));
+                } else {
+                    changeError = GS::UniString::Printf ("ACAPI_Element_Change failed (%d)", (int) changeErr);
+                }
+            } else {
+                done = true;
+                result.Add ("method", GS::UniString ("none"));
+            }
+            // Single subelements (experimental): through the stair memo.
+            if (done && item.Contains ("subelements")) {
+                const GS::ObjectState* sub = item.Get ("subelements");
+                API_ElementMemo subMemo = {};
+                const GS::OnExit subGuard ([&subMemo] () { ACAPI_DisposeElemMemoHdls (&subMemo); });
+                const UInt64 subMask = APIMemoMask_StairTread | APIMemoMask_StairRiser | APIMemoMask_StairStructure;
+                err = ACAPI_Element_GetMemo (finalGuid, &subMemo, subMask);
+                GS::Optional<GS::UniString> subErr;
+                GS::Array<GS::ObjectState> list;
+                if (err != NoError) subErr = GS::UniString::Printf ("reading the subelements failed (%d)", (int) err);
+                if (!subErr.HasValue () && sub->Get ("treads", list)) subErr = ApplyStairSubelementRequests (subMemo.stairTreads, StairPtrCount (subMemo.stairTreads), list, "treads", [] (StairFieldMapper& m, API_StairTreadType& t) { MapStairTread (m, t); });
+                list.Clear ();
+                if (!subErr.HasValue () && sub->Get ("risers", list)) subErr = ApplyStairSubelementRequests (subMemo.stairRisers, StairPtrCount (subMemo.stairRisers), list, "risers", [] (StairFieldMapper& m, API_StairRiserType& r) { MapStairRiser (m, r); });
+                list.Clear ();
+                if (!subErr.HasValue () && sub->Get ("structures", list)) subErr = ApplyStairSubelementRequests (subMemo.stairStructures, StairPtrCount (subMemo.stairStructures), list, "structures", [] (StairFieldMapper& m, API_StairStructureType& s) { MapStairStructure (m, s); });
+                if (subErr.HasValue ()) {
+                    result.Add ("subelementsError", subErr.Get ());
+                } else {
+                    API_Element current = {};
+                    current.header.guid = finalGuid;
+                    API_Element mask = {};
+                    ACAPI_ELEMENT_MASK_CLEAR (mask);
+                    GSErrCode subChangeErr = ACAPI_Element_Get (&current);
+                    if (subChangeErr == NoError) {
+                        ACAPI_CallUndoableCommand ("Modify Stair Subelements", [&] () -> GSErrCode {
+                            subChangeErr = ACAPI_Element_Change (&current, &mask, &subMemo, subMask, true);
+                            return subChangeErr;
+                        });
+                    }
+                    if (subChangeErr != NoError) {
+                        result.Add ("subelementsError", GS::UniString::Printf ("ACAPI_Element_Change with the subelement memo failed (%d)", (int) subChangeErr));
+                    } else {
+                        finalGuid = current.header.guid;
+                    }
+                }
+            }
+        }
+
+        if (!done && (geometry || forceRecreate || recreateIfChangeFails)) {
+            bool treadDepthRequested = false;
+            if (stairRequest != nullptr) treadDepthRequested = stairRequest->Contains ("treadDepth");
+            GS::ObjectState createItem = BuildStairCreateRequest (element, memo, work.stair, stories, treadDepthRequested);
+            // Geometry from the request replaces the current one.
+            GS::ObjectState request;
+            {
+                GS::ObjectState merged;
+                GS::Array<GS::ObjectState> list;
+                if (item.Get ("baseLinePoints", list)) AddObjectList (merged, "baseLinePoints", list); else { createItem.Get ("baseLinePoints", list); AddObjectList (merged, "baseLinePoints", list); }
+                double z = 0.0;
+                if (item.Get ("zCoordinate", z)) merged.Add ("zCoordinate", z); else { createItem.Get ("zCoordinate", z); merged.Add ("zCoordinate", z); }
+                Int32 floor = 0;
+                if (item.Get ("floorIndex", floor)) merged.Add ("floorIndex", floor);
+                else if (!item.Contains ("zCoordinate")) { createItem.Get ("floorIndex", floor); merged.Add ("floorIndex", floor); }
+                list.Clear ();
+                if (item.Get ("turns", list)) AddObjectList (merged, "turns", list);
+                else if (!item.Contains ("baseLinePoints")) { createItem.Get ("turns", list); if (!list.IsEmpty ()) AddObjectList (merged, "turns", list); }
+                list.Clear ();
+                if (item.Get ("segments", list)) AddObjectList (merged, "segments", list);
+                else if (!item.Contains ("baseLinePoints")) { createItem.Get ("segments", list); if (!list.IsEmpty ()) AddObjectList (merged, "segments", list); }
+                const GS::ObjectState* settings = createItem.Get ("stair");
+                if (settings != nullptr) merged.Add ("stair", *settings);
+                GS::Array<GS::ObjectState> one;
+                one.Push (merged);
+                AddObjectList (request, "stairsData", one);
+            }
+            const GS::ObjectState created = CreateStairsCommand ().Execute (request, processControl);
+            GS::Array<GS::ObjectState> createdElements;
+            created.Get ("elements", createdElements);
+            const GS::ObjectState* newId = createdElements.IsEmpty () ? nullptr : createdElements[0].Get ("elementId");
+            if (newId == nullptr) {
+                GS::UniString message ("Recreating the stair failed");
+                if (!changeError.IsEmpty ()) message += " (after: " + changeError + ")";
+                const GS::ObjectState* errorOs = createdElements.IsEmpty () ? nullptr : createdElements[0].Get ("error");
+                GS::UniString createMessage;
+                if (errorOs != nullptr && errorOs->Get ("message", createMessage)) message += ": " + createMessage;
+                results (CreateErrorResponse (APIERR_GENERAL, message + ". The original stair is unchanged."));
+                continue;
+            }
+            finalGuid = GetGuidFromObjectState (*newId);
+            ACAPI_CallUndoableCommand ("Modify Stair (delete the replaced stair)", [&] () -> GSErrCode {
+                return ACAPI_Element_Delete ({ element.header.guid });
+            });
+            result.Add ("method", GS::UniString ("recreate"));
+            done = true;
+        }
+        if (!done) {
+            results (CreateErrorResponse (APIERR_GENERAL, changeError + " (recreateIfChangeFails is false; the stair is unchanged)."));
+            continue;
+        }
+        if (!changeError.IsEmpty ()) result.Add ("changeError", changeError);
+        result.Add ("elementId", CreateGuidObjectState (finalGuid));
+
+        // Read back and report what Archicad did not keep.
+        if (stairRequest != nullptr) {
+            API_Element readBack = {};
+            readBack.header.guid = finalGuid;
+            API_ElementMemo readMemo = {};
+            const GS::OnExit readGuard ([&readMemo] () { ACAPI_DisposeElemMemoHdls (&readMemo); });
+            if (ACAPI_Element_Get (&readBack) == NoError && ACAPI_Element_GetMemo (finalGuid, &readMemo, APIMemoMask_All) == NoError) {
+                FillStairDefaultsFromSubelements (readBack.stair, readMemo);
+                const GS::ObjectState actual = ReadStairType (readBack.stair, false);
+                GS::Array<GS::UniString> notKept;
+                CollectNotKept (*stairRequest, actual, "stair", notKept);
+                const auto& list = result.AddList<GS::UniString> ("notKept");
+                for (const GS::UniString& n : notKept) list (n);
+            }
+        }
+        results (result);
     }
     return response;
 }

@@ -125,3 +125,51 @@ API (`APIdefs_Elements.h`): `API_StairType::fpdLayout` / `rcpdLayout` (r. 15826)
   `storyVisibility: AllRelevantStories, gridTypeBottom: WithBreakMarkVisibleHidden (alebo WithBreakMarkAllVisible = celé viditeľné), gridTypeTop: AboveBreakMarkVisible, gridTypeAbove/Below: NotRelevant`.
   Ktoré podlažie je pre jednopodlažné schodisko „top relevant" (domovské alebo to, na ktoré prichádza), header nehovorí – NEOVERENÉ. Ak sa na podlaží nad ním nezobrazí nič, použiť `storyVisibility: HomeAndOneStoryUp` + `gridTypeAbove: AboveBreakMarkVisible`.
 * Morfy: `ModifyMorphs` už vie `showContour` / `showFill` (`API_StoryVisibility`) a `isAutoOnStoryVisibility` (`API_MorphType`) – stačí `{"showContour": {"showOnHome": true, "showAllAbove": false, "showAllBelow": false, "showRelAbove": 0, "showRelBelow": 0}, "showFill": {…rovnako}, "isAutoOnStoryVisibility": false}`.
+
+## 12. Úplné pokrytie nástroja Stair (2026-10-22, build `TapirAddOn_AC29_Win_private_full_stairs.apx`)
+
+Zásada používateľa: nástroj sa ovláda celý, nie po častiach. Jedna mapovacia funkcia na každú API štruktúru (`StairFieldMapper` v `ExtendedElementCommands.cpp`) slúži na čítanie aj zápis; JSON kľúče = mená členov v `APIdefs_Elements.h`, vnorenie podľa štruktúry. Zápis: len uvedené polia; neznámy alebo read-only kľúč = chyba s cestou (`stair.structure.run.under.monolith.xyz: unknown field`). Rozsahy čísel sa kontrolujú, atribúty (`{attributeId:{guid}}` alebo `{index}`) sa overia, že existujú.
+
+Príkazy: `CreateStairs.stair{…}` (aplikuje sa prvé, staršie polia ho prepíšu), `GetStairDetails` (všetko vrátane read-only + `createRequest`, ktorý CreateStairs zmení späť na to isté schodisko), `ModifyStairs` (Change s maskou len na dotknuté členy; geometria / z / podlažie / turns / segments alebo odmietnutý Change → recreate na tom istom mieste, nový GUID v odpovedi; `notKept` = požadované polia, ktoré ArchiCAD nezachoval). `GetStairBaseLineData` ostáva (spätná kompatibilita).
+
+### Tabuľka pokrytia (`API_StairType`, r. 15644)
+
+| Člen (JSON kľúč) | Typ / podštruktúra | Čítanie | Zápis | Poznámka |
+|---|---|---|---|---|
+| head | API_Elem_Head | čiastočne (elementId, floorIndex) | – | podlažie/z cez `zCoordinate`/`floorIndex` |
+| totalHeight, topOffset, relativeTopStory | double/short | áno | áno | |
+| linkToSettings{homeStoryDifference, newCreationMode} | API_LinkToSettings | áno | áno | |
+| flightWidth, stepNum, riserHeight | | áno | áno | |
+| treadDepth | double | áno (vždy 1,0 – živé 22.10.) | áno | skutočnú hĺbku dáva baseline; `goingFromBaseLine` |
+| treadDepthLocked, totalHeightLocked | bool | áno | áno | |
+| nFPDMarkers, nRCPDMarkers, treadNum | UInt32 | áno | **read-only** | odvodené ArchiCADom |
+| walkingLineOffset, walkingLinePosition | | áno | áno | |
+| extraTopTread, extraBottomTread, finishVisible | bool | áno | áno | |
+| baselinePosition, baselineOffset | | áno | áno | |
+| rules | API_StairRulesData (15 hodnôt + 15 Applied) | áno | áno | |
+| tread{run, landing} | API_StairTreadType: isCustom, visible, nosingType, nosingValue, nosingSlant, offset, thickness, zOffset | áno | áno | owner, libId, sequenceNumber, subElemId, role read-only; predvolené hodnoty sa z umiestneného prvku čítajú ako 0 → pri Modify/recreate sa doplnia z umiestnených podprvkov |
+| riser{run, landing} | API_StairRiserType: riserPosition, crossSect, angle, offset, thickness, visible | áno | áno | rovnako |
+| structure{run, landing}{left, right, under} | API_StairStructureType: visible, structType, bottomType, horizontalThickness, thickness, sideStair{width, heightAboveTread, heightMeasure} **alebo** monolith{…19 polí vrátane drainingLeft/Right…} | áno | áno | union – `sideStair` len pri Side, `monolith` len pri Monolith; isLanding, owner, libId, … read-only |
+| stairDisplayType | enum | áno | áno | |
+| fpdLayout, rcpdLayout | API_StairLayoutData (30 polí) | áno | áno | aj `SetStairFloorPlanDisplay` |
+| numberingType, inputDirection | enum | áno | áno | |
+| basePlane | API_Plane3D | áno | **read-only** | poloha cez baseLinePoints / zCoordinate (recreate) |
+| uniformFinish, uniformMonolithAttributes, uniformLeftRightSideSupports{run, landing}, uniformDrainings, structureVisibility | bool | áno | áno | |
+| structSymbData{underStructure, stringer}{floorPlan, ceilingPlan} | API_StairStructureSymbolData (10) | áno | áno | |
+| monolithStructureSymbolData{floorPlan, ceilingPlan}{visible, hidden} | API_StairMonolithStructureSymbolData (13) | áno | áno | |
+| structureVisibilityOnStories{floorPlan, ceilingPlan} | uniformSymbolRepresentationEnabled + 6 relevantných podlaží × {visible, hidden} × structureVisibility{beam, cantilevered, stringer, monolith}, fillVisibility{underStructure, stringer}, monolithPartsVisibility{5} | áno | áno | |
+| walkLineSymbPos | enum | áno | áno | |
+| stairHeadroomData{headroomMethod, headroomHeight, headroomLeftOffset, headroomRightOffset} | | áno | áno | |
+
+### Memo schodiska (r. 18080–18118)
+
+| Člen | Čítanie | Zápis | Poznámka |
+|---|---|---|---|
+| stairBaseLine (+ edge/vertex data) | áno (lokálne aj globálne súradnice, turns, segments) | áno – CreateStairs / ModifyStairs (recreate) | |
+| stairWalkingLine, stairCenterWalkLine | áno | **nie** | odvodené ArchiCADom |
+| stairCustomWalkLine | áno | **nie (NEOVERENÉ, neimplementované)** | rozloženie edge/vertex dát a súradnicový systém pri zápise nie sú zdokumentované; zápis bez živého overenia by riskoval pád |
+| stairBoundary[2] (isCustom, z vrcholov, viditeľnosť hrán) | áno | **nie (NEOVERENÉ, neimplementované)** | dtto; `API_StairBoundaryData` r. 14251 |
+| stairTreads / stairRisers / stairStructures (umiestnené podprvky) | áno – všetky polia | experimentálne: `ModifyStairs.subelements{treads, risers, structures}[{index, …}]` cez `ACAPI_Element_Change` s `APIMemoMask_StairTread/Riser/Structure` – **NEOVERENÉ** | ACAPinc.h:3590: podprvky zloženého prvku sa nedajú mazať samostatne; Change cez memo stairu header nepopisuje |
+| GDL parametre podprvkov (libId) | libId áno | **nie** | podprvky sú GDL objekty; ich parametre API_StairTreadType neobsahuje (podobne ako pri zábradlí, ADR-001 R1) |
+
+Overiť naživo: `private-tests/test_stairs_full_coverage.py` (každé zapisovateľné pole: zmena → spätné čítanie, výsledok `private-tests/out/stair_coverage.json`, round-trip `createRequest`, recreate geometrie, experimentálny podprvok).
