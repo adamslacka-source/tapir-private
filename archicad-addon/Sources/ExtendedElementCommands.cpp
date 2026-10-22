@@ -4298,10 +4298,33 @@ Int32 FindStairCoord (const API_StairPolylineData& line, const API_Coord& point)
     return best;
 }
 
+// Read-back coord (1-based) of input point i. Confirmed live (2026-10-22): the read-back
+// coordinates do NOT equal the input points (with baseLinePosition Center they did not match
+// within 5 mm), while nCoords stays the input count. So when the counts agree the points map by
+// order (k = i + 1); only when Archicad added / merged points is the coordinate match tried.
+Int32 MapStairPoint (const API_StairPolylineData& line, const GS::Array<API_Coord>& inputPoints, Int32 i)
+{
+    if (line.coords == nullptr || i < 0 || i >= static_cast<Int32> (inputPoints.GetSize ())) {
+        return -1;
+    }
+    if (line.polygon.nCoords == static_cast<Int32> (inputPoints.GetSize ())) {
+        return i + 1;
+    }
+    return FindStairCoord (line, inputPoints[i]);
+}
+
 GS::UniString DescribeStairPolyline (const API_StairPolylineData& line)
 {
     GS::UniString text = GS::UniString::Printf ("nCoords=%d vertexData=%d edgeData=%d;",
         line.polygon.nCoords, (int) StairPtrCount (line.vertexData), (int) StairPtrCount (line.edgeData));
+    if (line.coords != nullptr) {
+        const GSSize handleCount = BMGetHandleSize (reinterpret_cast<GSConstHandle> (line.coords)) / static_cast<GSSize> (sizeof (API_Coord));
+        text += GS::UniString::Printf (" coordsHandle=%d:", (int) handleCount);
+        for (GSSize k = 0; k < handleCount && k < 8; ++k) {
+            text += GS::UniString::Printf (" c[%d]=(%.3f,%.3f)", (int) k, (*line.coords)[k].x, (*line.coords)[k].y);
+        }
+        text += ";";
+    }
     const GSSize nv = StairPtrCount (line.vertexData);
     for (GSSize i = 0; i < nv; ++i) {
         text += GS::UniString::Printf (" v[%d]=%s/%s", (int) i, StairPolyTypeName (line.vertexData[i].type), StairTurnTypeName (line.vertexData[i].turnType));
@@ -4351,7 +4374,7 @@ GS::Optional<GS::UniString> ApplyStairTurnsAndSegments (API_StairPolylineData& l
         }
         const GSSize nv = StairPtrCount (line.vertexData);
         for (const StairTurnRequest& turn : turns) {
-            const Int32 k = FindStairCoord (line, inputPoints[turn.pointIndex]);
+            const Int32 k = MapStairPoint (line, inputPoints, turn.pointIndex);
             if (k < 0) {
                 return GS::UniString::Printf ("Baseline point %d was not found in the stair Archicad created (it may have merged collinear points). ", turn.pointIndex) + DescribeStairPolyline (line);
             }
@@ -4369,8 +4392,8 @@ GS::Optional<GS::UniString> ApplyStairTurnsAndSegments (API_StairPolylineData& l
         }
         const GSSize ne = StairPtrCount (line.edgeData);
         for (const StairSegmentRequest& segment : segments) {
-            const Int32 kBeg = FindStairCoord (line, inputPoints[segment.edgeIndex]);
-            const Int32 kEnd = FindStairCoord (line, inputPoints[segment.edgeIndex + 1]);
+            const Int32 kBeg = MapStairPoint (line, inputPoints, segment.edgeIndex);
+            const Int32 kEnd = MapStairPoint (line, inputPoints, segment.edgeIndex + 1);
             if (kBeg < 0 || kEnd != kBeg + 1) {
                 return GS::UniString::Printf ("Baseline edge %d was not found in the stair Archicad created. ", segment.edgeIndex) + DescribeStairPolyline (line);
             }
@@ -4403,7 +4426,7 @@ GS::Optional<GS::UniString> VerifyStairTurnsAndSegments (const API_Guid& guid,
         const Int32 vOffset = StairDataIndexOffset (line.vertexData, nCoords);
         const GSSize nv = StairPtrCount (line.vertexData);
         for (const StairTurnRequest& turn : turns) {
-            const Int32 k = FindStairCoord (line, inputPoints[turn.pointIndex]);
+            const Int32 k = MapStairPoint (line, inputPoints, turn.pointIndex);
             const Int32 index = k - 1 + vOffset;
             if (vOffset < 0 || k < 0 || index < 0 || index >= nv) {
                 mismatches += GS::UniString::Printf (" point %d: not found;", turn.pointIndex);
@@ -4417,7 +4440,7 @@ GS::Optional<GS::UniString> VerifyStairTurnsAndSegments (const API_Guid& guid,
         const Int32 eOffset = StairDataIndexOffset (line.edgeData, nCoords - 1);
         const GSSize ne = StairPtrCount (line.edgeData);
         for (const StairSegmentRequest& segment : segments) {
-            const Int32 k = FindStairCoord (line, inputPoints[segment.edgeIndex]);
+            const Int32 k = MapStairPoint (line, inputPoints, segment.edgeIndex);
             const Int32 index = k - 1 + eOffset;
             if (eOffset < 0 || k < 0 || index < 0 || index >= ne) {
                 mismatches += GS::UniString::Printf (" edge %d: not found;", segment.edgeIndex);
@@ -5311,6 +5334,72 @@ GS::ObjectState GetStairBaseLineDataCommand::Execute (const GS::ObjectState& par
         os.Add ("landingTreadCount", landingTreads);
         os.Add ("riserCount", static_cast<Int32> (StairPtrCount (memo.stairRisers)));
         os.Add ("structureCount", static_cast<Int32> (StairPtrCount (memo.stairStructures)));
+
+        // The structure defaults in API_StairType read back as 0 (confirmed live 2026-10-22); the
+        // placed structure subelements carry the real values - first one per role / side here.
+        {
+            const auto& placed = os.AddList<GS::ObjectState> ("structures");
+            const char* roleNames[API_StairPartRoleNum] = { "Run", "Landing" };
+            const char* sideNames[API_StairStructureSideNum] = { "Left", "Right", "Under" };
+            bool seen[API_StairPartRoleNum][API_StairStructureSideNum] = {};
+            Int32 counts[API_StairPartRoleNum][API_StairStructureSideNum] = {};
+            const GSSize nStructures = StairPtrCount (memo.stairStructures);
+            for (GSSize i = 0; i < nStructures; ++i) {
+                const API_StairStructureType& st = memo.stairStructures[i];
+                if (st.role < 0 || st.role >= API_StairPartRoleNum || st.side < 0 || st.side >= API_StairStructureSideNum) {
+                    continue;
+                }
+                ++counts[st.role][st.side];
+            }
+            for (GSSize i = 0; i < nStructures; ++i) {
+                const API_StairStructureType& st = memo.stairStructures[i];
+                if (st.role < 0 || st.role >= API_StairPartRoleNum || st.side < 0 || st.side >= API_StairStructureSideNum || seen[st.role][st.side]) {
+                    continue;
+                }
+                seen[st.role][st.side] = true;
+                GS::ObjectState so;
+                so.Add ("role", GS::UniString (roleNames[st.role]));
+                so.Add ("side", GS::UniString (sideNames[st.side]));
+                so.Add ("count", counts[st.role][st.side]);
+                so.Add ("visible", st.visible);
+                so.Add ("structType", GS::UniString (StairStructTypeName (st.structType)));
+                so.Add ("bottomType", GS::UniString (StairStructBottomName (st.bottomType)));
+                so.Add ("thickness", st.thickness);
+                so.Add ("horizontalThickness", st.horizontalThickness);
+                if (st.structType == APIST_Monolith) {
+                    so.Add ("monolithThickness", st.data.monolith.monolithThickness);
+                    so.Add ("bottomOversize", st.data.monolith.bottomOversize);
+                    so.Add ("thinning", st.data.monolith.thinning);
+                }
+                placed (so);
+            }
+        }
+
+        // treadDepth reads back as 1.0 whatever was asked (confirmed live 2026-10-22), so the going
+        // is also measured: walking line length / run goings (exact for a straight stair; with
+        // landings / winders it is an average along the walking line - NEOVERENE).
+        {
+            const auto PolylineLength = [] (const API_StairPolylineData& line) {
+                double length = 0.0;
+                if (line.coords == nullptr) {
+                    return length;
+                }
+                const GSSize handleCount = BMGetHandleSize (reinterpret_cast<GSConstHandle> (line.coords)) / static_cast<GSSize> (sizeof (API_Coord));
+                for (Int32 k = 2; k <= line.polygon.nCoords && k < handleCount; ++k) {
+                    length += std::hypot ((*line.coords)[k].x - (*line.coords)[k - 1].x, (*line.coords)[k].y - (*line.coords)[k - 1].y);
+                }
+                return length;
+            };
+            const double walkingLength = PolylineLength (memo.stairWalkingLine);
+            os.Add ("baseLineLength", PolylineLength (memo.stairBaseLine));
+            os.Add ("walkingLineLength", walkingLength);
+            if (runTreads > 0 && walkingLength > 0.0) {
+                os.Add ("averageGoingOnWalkingLine", walkingLength / runTreads);
+            }
+            if (s.stepNum > 1 && walkingLength > 0.0) {
+                os.Add ("goingFromRisers", walkingLength / static_cast<double> (s.stepNum - 1));
+            }
+        }
         stairs (os);
     }
     return response;

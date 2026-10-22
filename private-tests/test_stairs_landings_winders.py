@@ -291,7 +291,9 @@ elementE, stairE = CreateStair ('(e) going 0.34 with applyRules false', {
     'treadDepth': 0.34,
 })
 if stairE and 'error' not in stairE:
-    Check ('(e) going kept at 0.34', abs (stairE['treadDepth'] - 0.34) < 0.001, '{:.4f}'.format (stairE['treadDepth']))
+    going = stairE.get ('goingFromRisers')
+    Check ('(e) going 0.34 (walking line / (risers - 1))', going is not None and abs (going - 0.34) < 0.005,
+           'measured {} / treadDepth field {:.4f}'.format (going, stairE['treadDepth']))
     Check ('(e) riser 3.10/18', abs (stairE['riserHeight'] - HEIGHT / RISERS) < 0.001, '{:.4f}'.format (stairE['riserHeight']))
     Check ('(e) read back zCoordinate 0 / zTop 3.10', abs (stairE['zCoordinate']) < 0.001 and abs (stairE['zTop'] - HEIGHT) < 0.001,
            'z {} .. {}'.format (stairE.get ('zCoordinate'), stairE.get ('zTop')))
@@ -326,6 +328,33 @@ element, stair = CreateStair ('(g2) structure hidden', {
 if stair and 'error' not in stair:
     Check ('(g2) structureVisible false kept', stair['structureVisible'] is False, str (stair['structureVisible']))
     Info ('(g2) 3D z range', str (ZRange (element)))
+
+# --- (h) SCH1 exactly: 3 flights 6+6+6 risers, 172 mm, going 0.30, 2 landings ---------
+# Center baseline; each flight 5 goings, landings WIDTH x WIDTH, extra top tread off (the
+# last tread is the landing / slab), monolith flat structure (no 100 mm below the base).
+SCH1_GOING = 0.30
+xh = ORIGIN_X + 70.0
+f1 = 5 * SCH1_GOING
+elementH, stairH = CreateStair ('(h) SCH1 6+6+6, going 0.30, 2 landings', {
+    'baseLinePoints': [
+        {'x': xh, 'y': y0},
+        {'x': xh, 'y': y0 + f1 + WIDTH / 2},
+        {'x': xh - (WIDTH / 2 + f1 + WIDTH / 2), 'y': y0 + f1 + WIDTH / 2},
+        {'x': xh - (WIDTH / 2 + f1 + WIDTH / 2), 'y': y0},
+    ],
+    'treadDepth': SCH1_GOING,
+    'extraTopTread': False,
+    'structure': {'structType': 'Monolith', 'bottomType': 'Flat', 'monolithThickness': 0.15, 'bottomOversize': 0.0},
+    'turns': [{'pointIndex': 1, 'type': 'Landing'}, {'pointIndex': 2, 'type': 'Landing'}],
+})
+if stairH and 'error' not in stairH:
+    Check ('(h) turns Landing, Landing', InnerTurns (stairH) == ['Landing', 'Landing'], str (InnerTurns (stairH)))
+    Check ('(h) 18 risers of 172 mm', stairH['stepNum'] == RISERS and abs (stairH['riserHeight'] - HEIGHT / RISERS) < 0.001,
+           '{} x {:.4f}'.format (stairH['stepNum'], stairH['riserHeight']))
+    Check ('(h) 15 run treads (5 per flight)', stairH['runTreadCount'] == 15, 'run {} landing {}'.format (stairH['runTreadCount'], stairH['landingTreadCount']))
+    zMin, zMax = ZRange (elementH)
+    Check ('(h) 3D from 0.00 to 3.10', zMin is not None and zMin > -0.005 and abs (zMax - HEIGHT) < 0.01, '{} .. {}'.format (zMin, zMax))
+    Info ('(h) structures', json.dumps (stairH.get ('structures')))
 
 # --- validation: bad input must give an error, not a crash ----------------------
 try:
