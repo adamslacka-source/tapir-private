@@ -466,7 +466,13 @@ GSErrCode Initialize (void)
         );
         err |= RegisterCommand<CreateStairsCommand> (
             elementCommands, "1.5.0",
-            "Creates Stair elements based on the given baseline and parameters."
+            "Creates Stair elements based on the given baseline and parameters. Optional turns (landing, winders, divided landing) at inner baseline points, "
+            "segment types of baseline edges, riser/tread rules, top story link and baseline / walking line position."
+        );
+        err |= RegisterCommand<GetStairBaseLineDataCommand> (
+            elementCommands, "1.7.2",
+            "Returns the baseline and walking line of Stair elements as the API gives them (coords, raw edge and vertex data with turn and segment types), "
+            "the main stair settings and rules, and the tread / riser counts. A diagnostic command for stairs with landings and winders."
         );
         err |= RegisterCommand<CreateSlabsCommand> (
             elementCommands, "1.0.3",

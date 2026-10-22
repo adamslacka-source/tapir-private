@@ -3971,6 +3971,479 @@ GS::Optional<GS::ObjectState> CreateBeamsCommand::SetTypeSpecificParameters (API
     return {};
 }
 
+// ============================================================================
+// Stairs: baseline, landings, winders, riser/tread rules (ADR-002)
+//
+// What the AC29 DevKit gives (APIdefs_Elements.h):
+//   * API_ElementMemo::stairBaseLine (API_StairPolylineData): polygon, coords, pends, parcs and
+//     the per-edge API_StairPolylineEdgeData (segmentType: APIST_StepsSegment /
+//     APIST_LandingSegment / APIST_DividedLandingSegment) and per-vertex
+//     API_StairPolylineVertexData (turnType: APIST_NoTurn / APIST_LandingTurn / APIST_WinderTurn /
+//     APIST_DividedLandingTurn, winderStepNumBackward/Forward, numOfWindersType, winderType,
+//     landing edge offsets, divided landing winder mode).
+//   * API_StairType: stepNum, riserHeight, treadDepth, treadDepthLocked, totalHeightLocked,
+//     relativeTopStory / topOffset, walkingLinePosition / walkingLineOffset, baselinePosition /
+//     baselineOffset and API_StairRulesData (riser height / going / 2R+G / landing / winder limits,
+//     each with an "...Applied" switch).
+//
+// The array layout of edgeData / vertexData (0- or 1-based, sizes) is NOT documented. Filling them
+// blindly made multi-segment stairs fail (#444), so the turns are applied after a plain create:
+// the stair is created from the baseline alone (Archicad derives edgeData / vertexData), the
+// derived data is read back, the requested turn / segment types are written into a copy of it
+// and the stair is created again from that copy ("recreate", default) or changed in place
+// ("change"). The result is read back and checked; nothing is left half-done on failure.
+// ============================================================================
+
+namespace {
+
+constexpr double StairMinEdgeLength        = 0.05;     // m, shorter baseline edges are rejected
+constexpr Int32  StairMaxBaseLinePoints    = 64;
+constexpr double StairCoordMatchTolerance  = 0.005;    // m, matching a read-back vertex to an input point
+constexpr UInt32 StairMaxStepNum           = 400;
+
+struct StairTurnRequest {
+    Int32                                       pointIndex = -1;    // 0-based index into baseLinePoints
+    API_StairTurnTypeID                         turnType = APIST_NoTurn;
+    GS::Optional<Int32>                         winderStepsBackward;
+    GS::Optional<Int32>                         winderStepsForward;
+    GS::Optional<API_StairWinderNumTypeID>      numOfWindersType;
+    GS::Optional<API_StairWinderID>             winderType;
+    GS::Optional<API_StairInnerWidthOffsetTypeID> riserOffsetType;
+    GS::Optional<API_StairDLWinderNumTypeID>    dividedLandingWinderMode;
+    GS::Optional<Int32>                         dividedLandingStepNum;
+    GS::Optional<double>                        landingStartOffset;
+    GS::Optional<double>                        landingEndOffset;
+    GS::Optional<bool>                          symmetricalLandingOffset;
+};
+
+struct StairSegmentRequest {
+    Int32                   edgeIndex = -1;     // 0-based: the edge from baseLinePoints[i] to baseLinePoints[i + 1]
+    API_StairSegmentTypeID  segmentType = APIST_StepsSegment;
+};
+
+template <typename EnumT>
+bool ParseStairEnum (const GS::UniString& value, const std::initializer_list<std::pair<const char*, EnumT>>& table, EnumT& result)
+{
+    for (const auto& entry : table) {
+        if (value.Compare (entry.first, CaseInsensitive) == GS::UniString::Equal) {
+            result = entry.second;
+            return true;
+        }
+    }
+    return false;
+}
+
+template <typename EnumT>
+GS::Optional<GS::UniString> GetOptionalStairEnum (const GS::ObjectState& os, const char* field, const std::initializer_list<std::pair<const char*, EnumT>>& table, GS::Optional<EnumT>& result)
+{
+    GS::UniString value;
+    if (!os.Get (field, value)) {
+        return {};
+    }
+    EnumT parsed;
+    if (!ParseStairEnum (value, table, parsed)) {
+        return GS::UniString ("Unknown value '") + value + "' of " + field + ".";
+    }
+    result = parsed;
+    return {};
+}
+
+const std::initializer_list<std::pair<const char*, API_StairTurnTypeID>> StairTurnTypeTable = {
+    { "None", APIST_NoTurn }, { "Landing", APIST_LandingTurn }, { "Winder", APIST_WinderTurn }, { "DividedLanding", APIST_DividedLandingTurn }
+};
+const std::initializer_list<std::pair<const char*, API_StairSegmentTypeID>> StairSegmentTypeTable = {
+    { "Steps", APIST_StepsSegment }, { "Landing", APIST_LandingSegment }, { "DividedLanding", APIST_DividedLandingSegment }
+};
+const std::initializer_list<std::pair<const char*, API_StairWinderNumTypeID>> StairWinderNumTypeTable = {
+    { "Min", APIWN_Min }, { "Fix", APIWN_Fix }
+};
+const std::initializer_list<std::pair<const char*, API_StairWinderID>> StairWinderTypeTable = {
+    { "AuxiliaryWalkingLine", APIWT_DINTurn }, { "DIN", APIWT_DINTurn },
+    { "TwoPoints", APIWT_NZETurn }, { "NZE", APIWT_NZETurn },
+    { "SinglePoint", APIWT_SIPTurn }, { "SIP", APIWT_SIPTurn },
+    { "PrincipalLines", APIWT_AGNTurn }, { "AGN", APIWT_AGNTurn }
+};
+const std::initializer_list<std::pair<const char*, API_StairInnerWidthOffsetTypeID>> StairRiserOffsetTypeTable = {
+    { "Min", APIIWO_Min }, { "Fix", APIIWO_Fix }
+};
+const std::initializer_list<std::pair<const char*, API_StairDLWinderNumTypeID>> StairDLWinderNumTypeTable = {
+    { "Max", APIDWN_Max }, { "Optimal", APIDWN_Optimal }, { "Fix", APIDWN_Fix }, { "Uniform", APIDWN_Uniform }
+};
+const std::initializer_list<std::pair<const char*, API_LinePositionID>> StairBaseLinePositionTable = {
+    { "Left", APILP_Left }, { "Right", APILP_Right }, { "Center", APILP_Center }
+};
+const std::initializer_list<std::pair<const char*, API_LinePositionID>> StairWalkingLinePositionTable = {
+    { "Left", APILP_Left }, { "Right", APILP_Right }, { "Center", APILP_Center }, { "Auto", APILP_Auto }
+};
+
+const char* StairTurnTypeName (API_StairTurnTypeID t)
+{
+    switch (t) {
+        case APIST_NoTurn:              return "None";
+        case APIST_LandingTurn:         return "Landing";
+        case APIST_WinderTurn:          return "Winder";
+        case APIST_DividedLandingTurn:  return "DividedLanding";
+        default:                        return "Unknown";
+    }
+}
+
+const char* StairSegmentTypeName (API_StairSegmentTypeID t)
+{
+    switch (t) {
+        case APIST_StepsSegment:            return "Steps";
+        case APIST_LandingSegment:          return "Landing";
+        case APIST_DividedLandingSegment:   return "DividedLanding";
+        default:                            return "Unknown";
+    }
+}
+
+const char* StairPolyTypeName (API_StairPolyTypeID t)
+{
+    switch (t) {
+        case APISP_Undefined:           return "Undefined";
+        case APISP_BaseLine:            return "BaseLine";
+        case APISP_LeftBoundary:        return "LeftBoundary";
+        case APISP_RightBoundary:       return "RightBoundary";
+        case APISP_Tread:               return "Tread";
+        case APISP_Riser:               return "Riser";
+        case APISP_WalkingLine:         return "WalkingLine";
+        case APISP_FloorPlanSymb:       return "FloorPlanSymb";
+        case APISP_BreakMark:           return "BreakMark";
+        case APISP_DummyTreadLeading:   return "DummyTreadLeading";
+        case APISP_DummyTreadTrailing:  return "DummyTreadTrailing";
+        default:                        return "Unknown";
+    }
+}
+
+const char* LinePositionName (API_LinePositionID p)
+{
+    switch (p) {
+        case APILP_Left:    return "Left";
+        case APILP_Right:   return "Right";
+        case APILP_Center:  return "Center";
+        case APILP_Auto:    return "Auto";
+        default:            return "Unknown";
+    }
+}
+
+GS::Optional<GS::UniString> ParseStairTurns (const GS::ObjectState& parameters, Int32 nPoints, GS::Array<StairTurnRequest>& turns)
+{
+    GS::Array<GS::ObjectState> turnObjects;
+    if (!parameters.Get ("turns", turnObjects)) {
+        return {};
+    }
+    GS::Array<bool> used;
+    for (Int32 i = 0; i < nPoints; ++i) {
+        used.Push (false);
+    }
+    for (const GS::ObjectState& os : turnObjects) {
+        StairTurnRequest turn;
+        if (!os.Get ("pointIndex", turn.pointIndex)) {
+            return GS::UniString ("Every turn needs a pointIndex.");
+        }
+        if (turn.pointIndex < 1 || turn.pointIndex > nPoints - 2) {
+            return GS::UniString::Printf ("turns: pointIndex %d is not an inner point of the baseline (valid: 1..%d).", turn.pointIndex, nPoints - 2);
+        }
+        if (used[turn.pointIndex]) {
+            return GS::UniString::Printf ("turns: pointIndex %d is given twice.", turn.pointIndex);
+        }
+        used[turn.pointIndex] = true;
+        GS::UniString typeStr;
+        if (!os.Get ("type", typeStr) || !ParseStairEnum (typeStr, StairTurnTypeTable, turn.turnType)) {
+            return GS::UniString ("turns: type must be one of None, Landing, Winder, DividedLanding.");
+        }
+        Int32 intValue = 0;
+        if (os.Get ("winderStepsBackward", intValue)) {
+            if (intValue < 0 || intValue > 50) return GS::UniString ("turns: winderStepsBackward must be 0..50.");
+            turn.winderStepsBackward = intValue;
+        }
+        if (os.Get ("winderStepsForward", intValue)) {
+            if (intValue < 0 || intValue > 50) return GS::UniString ("turns: winderStepsForward must be 0..50.");
+            turn.winderStepsForward = intValue;
+        }
+        if (os.Get ("dividedLandingStepNum", intValue)) {
+            if (intValue < 1 || intValue > 50) return GS::UniString ("turns: dividedLandingStepNum must be 1..50.");
+            turn.dividedLandingStepNum = intValue;
+        }
+        if (auto err = GetOptionalStairEnum (os, "numOfWindersType", StairWinderNumTypeTable, turn.numOfWindersType); err.HasValue ()) return err;
+        if (auto err = GetOptionalStairEnum (os, "winderType", StairWinderTypeTable, turn.winderType); err.HasValue ()) return err;
+        if (auto err = GetOptionalStairEnum (os, "riserOffsetType", StairRiserOffsetTypeTable, turn.riserOffsetType); err.HasValue ()) return err;
+        if (auto err = GetOptionalStairEnum (os, "dividedLandingWinderMode", StairDLWinderNumTypeTable, turn.dividedLandingWinderMode); err.HasValue ()) return err;
+        double d = 0.0;
+        if (os.Get ("landingStartOffset", d)) {
+            if (d < 0.0) return GS::UniString ("turns: landingStartOffset must be >= 0.");
+            turn.landingStartOffset = d;
+        }
+        if (os.Get ("landingEndOffset", d)) {
+            if (d < 0.0) return GS::UniString ("turns: landingEndOffset must be >= 0.");
+            turn.landingEndOffset = d;
+        }
+        bool b = false;
+        if (os.Get ("symmetricalLandingOffset", b)) {
+            turn.symmetricalLandingOffset = b;
+        }
+        turns.Push (turn);
+    }
+    return {};
+}
+
+GS::Optional<GS::UniString> ParseStairSegments (const GS::ObjectState& parameters, Int32 nPoints, GS::Array<StairSegmentRequest>& segments)
+{
+    GS::Array<GS::ObjectState> segmentObjects;
+    if (!parameters.Get ("segments", segmentObjects)) {
+        return {};
+    }
+    for (const GS::ObjectState& os : segmentObjects) {
+        StairSegmentRequest segment;
+        if (!os.Get ("edgeIndex", segment.edgeIndex)) {
+            return GS::UniString ("Every segment needs an edgeIndex.");
+        }
+        if (segment.edgeIndex < 0 || segment.edgeIndex > nPoints - 2) {
+            return GS::UniString::Printf ("segments: edgeIndex %d is out of range (valid: 0..%d).", segment.edgeIndex, nPoints - 2);
+        }
+        for (const StairSegmentRequest& other : segments) {
+            if (other.edgeIndex == segment.edgeIndex) {
+                return GS::UniString::Printf ("segments: edgeIndex %d is given twice.", segment.edgeIndex);
+            }
+        }
+        GS::UniString typeStr;
+        if (!os.Get ("type", typeStr) || !ParseStairEnum (typeStr, StairSegmentTypeTable, segment.segmentType)) {
+            return GS::UniString ("segments: type must be one of Steps, Landing, DividedLanding.");
+        }
+        segments.Push (segment);
+    }
+    return {};
+}
+
+template <typename T>
+GSSize StairPtrCount (const T* ptr)
+{
+    if (ptr == nullptr) {
+        return 0;
+    }
+    return BMGetPtrSize (reinterpret_cast<GSConstPtr> (ptr)) / static_cast<GSSize> (sizeof (T));
+}
+
+template <typename T>
+T** CopyStairHandle (T** src)
+{
+    if (src == nullptr) {
+        return nullptr;
+    }
+    const GSSize size = BMGetHandleSize (reinterpret_cast<GSConstHandle> (src));
+    T** dst = reinterpret_cast<T**> (BMAllocateHandle (size, ALLOCATE_CLEAR, 0));
+    if (dst != nullptr && size > 0) {
+        memcpy (*dst, *src, size);
+    }
+    return dst;
+}
+
+template <typename T>
+T* CopyStairPtr (const T* src)
+{
+    if (src == nullptr) {
+        return nullptr;
+    }
+    const GSSize size = BMGetPtrSize (reinterpret_cast<GSConstPtr> (src));
+    T* dst = reinterpret_cast<T*> (BMAllocatePtr (size, ALLOCATE_CLEAR, 0));
+    if (dst != nullptr && size > 0) {
+        memcpy (dst, src, size);
+    }
+    return dst;
+}
+
+// Where the data of baseline coord k (1-based) sits: array index k - 1 + offset.
+// Decided from the content first (a derived entry has type APISP_BaseLine, an unused zeroed one
+// APISP_Undefined), then from the array size. -1: undecidable.
+template <typename T>
+Int32 StairDataIndexOffset (const T* data, Int32 nItems)
+{
+    const GSSize count = StairPtrCount (data);
+    if (data == nullptr || nItems <= 0) {
+        return -1;
+    }
+    if (count >= nItems + 1 && data[0].type != APISP_BaseLine && data[1].type == APISP_BaseLine) {
+        return 1;
+    }
+    if (count >= nItems && data[0].type == APISP_BaseLine) {
+        return 0;
+    }
+    if (count == nItems + 1) {
+        return 1;
+    }
+    if (count == nItems) {
+        return 0;
+    }
+    return -1;
+}
+
+// Index of the read-back coord (1-based) that matches the point, or -1.
+Int32 FindStairCoord (const API_StairPolylineData& line, const API_Coord& point)
+{
+    if (line.coords == nullptr) {
+        return -1;
+    }
+    const Int32 nCoords = line.polygon.nCoords;
+    const GSSize handleCount = BMGetHandleSize (reinterpret_cast<GSConstHandle> (line.coords)) / static_cast<GSSize> (sizeof (API_Coord));
+    Int32 best = -1;
+    double bestDist = StairCoordMatchTolerance;
+    for (Int32 k = 1; k <= nCoords && k < handleCount; ++k) {
+        const API_Coord& c = (*line.coords)[k];
+        const double dist = std::hypot (c.x - point.x, c.y - point.y);
+        if (dist <= bestDist) {
+            bestDist = dist;
+            best = k;
+        }
+    }
+    return best;
+}
+
+GS::UniString DescribeStairPolyline (const API_StairPolylineData& line)
+{
+    GS::UniString text = GS::UniString::Printf ("nCoords=%d vertexData=%d edgeData=%d;",
+        line.polygon.nCoords, (int) StairPtrCount (line.vertexData), (int) StairPtrCount (line.edgeData));
+    const GSSize nv = StairPtrCount (line.vertexData);
+    for (GSSize i = 0; i < nv; ++i) {
+        text += GS::UniString::Printf (" v[%d]=%s/%s", (int) i, StairPolyTypeName (line.vertexData[i].type), StairTurnTypeName (line.vertexData[i].turnType));
+    }
+    const GSSize ne = StairPtrCount (line.edgeData);
+    for (GSSize i = 0; i < ne; ++i) {
+        text += GS::UniString::Printf (" e[%d]=%s/%s", (int) i, StairPolyTypeName (line.edgeData[i].type), StairSegmentTypeName (line.edgeData[i].segmentType));
+    }
+    return text;
+}
+
+void ApplyStairTurn (API_StairPolylineVertexData& v, const StairTurnRequest& turn)
+{
+    v.turnType = turn.turnType;
+    if (turn.winderStepsBackward.HasValue ())      v.winderStepNumBackward = turn.winderStepsBackward.Get ();
+    if (turn.winderStepsForward.HasValue ())       v.winderStepNumForward = turn.winderStepsForward.Get ();
+    if (turn.numOfWindersType.HasValue ())         v.numOfWindersType = turn.numOfWindersType.Get ();
+    if (turn.winderType.HasValue ())               v.winderType = turn.winderType.Get ();
+    if (turn.riserOffsetType.HasValue ())          v.innerWidthOffsetType = turn.riserOffsetType.Get ();
+    if (turn.dividedLandingWinderMode.HasValue ()) v.dividedLandingNumOfWindersType = turn.dividedLandingWinderMode.Get ();
+    if (turn.dividedLandingStepNum.HasValue ())    v.dividedLandingFixedNumOfSteps = turn.dividedLandingStepNum.Get ();
+    if (turn.symmetricalLandingOffset.HasValue ()) v.symmetricalLandingOffset = turn.symmetricalLandingOffset.Get ();
+    if (turn.landingStartOffset.HasValue ()) {
+        v.minLandingStartEdgeOffset = turn.landingStartOffset.Get ();
+        v.currLandingStartEdgeOffset = turn.landingStartOffset.Get ();
+    }
+    if (turn.landingEndOffset.HasValue ()) {
+        v.minLandingEndEdgeOffset = turn.landingEndOffset.Get ();
+        v.currLandingEndEdgeOffset = turn.landingEndOffset.Get ();
+    }
+}
+
+// Writes the requested turn / segment types into the baseline data (in place).
+GS::Optional<GS::UniString> ApplyStairTurnsAndSegments (API_StairPolylineData& line,
+                                                        const GS::Array<API_Coord>& inputPoints,
+                                                        const GS::Array<StairTurnRequest>& turns,
+                                                        const GS::Array<StairSegmentRequest>& segments)
+{
+    const Int32 nCoords = line.polygon.nCoords;
+    if (line.coords == nullptr || nCoords < 2) {
+        return GS::UniString ("Archicad returned no stair baseline coordinates.");
+    }
+    if (!turns.IsEmpty ()) {
+        const Int32 vOffset = StairDataIndexOffset (line.vertexData, nCoords);
+        if (vOffset < 0) {
+            return GS::UniString ("The layout of the derived baseline vertex data could not be determined: ") + DescribeStairPolyline (line);
+        }
+        const GSSize nv = StairPtrCount (line.vertexData);
+        for (const StairTurnRequest& turn : turns) {
+            const Int32 k = FindStairCoord (line, inputPoints[turn.pointIndex]);
+            if (k < 0) {
+                return GS::UniString::Printf ("Baseline point %d was not found in the stair Archicad created (it may have merged collinear points). ", turn.pointIndex) + DescribeStairPolyline (line);
+            }
+            const Int32 index = k - 1 + vOffset;
+            if (index < 0 || index >= nv) {
+                return GS::UniString::Printf ("Vertex data index %d of baseline point %d is out of range. ", index, turn.pointIndex) + DescribeStairPolyline (line);
+            }
+            ApplyStairTurn (line.vertexData[index], turn);
+        }
+    }
+    if (!segments.IsEmpty ()) {
+        const Int32 eOffset = StairDataIndexOffset (line.edgeData, nCoords - 1);
+        if (eOffset < 0) {
+            return GS::UniString ("The layout of the derived baseline edge data could not be determined: ") + DescribeStairPolyline (line);
+        }
+        const GSSize ne = StairPtrCount (line.edgeData);
+        for (const StairSegmentRequest& segment : segments) {
+            const Int32 kBeg = FindStairCoord (line, inputPoints[segment.edgeIndex]);
+            const Int32 kEnd = FindStairCoord (line, inputPoints[segment.edgeIndex + 1]);
+            if (kBeg < 0 || kEnd != kBeg + 1) {
+                return GS::UniString::Printf ("Baseline edge %d was not found in the stair Archicad created. ", segment.edgeIndex) + DescribeStairPolyline (line);
+            }
+            const Int32 index = kBeg - 1 + eOffset;
+            if (index < 0 || index >= ne) {
+                return GS::UniString::Printf ("Edge data index %d of baseline edge %d is out of range. ", index, segment.edgeIndex) + DescribeStairPolyline (line);
+            }
+            line.edgeData[index].segmentType = segment.segmentType;
+        }
+    }
+    return {};
+}
+
+// Reads the stair back and checks that the requested turn / segment types are there.
+GS::Optional<GS::UniString> VerifyStairTurnsAndSegments (const API_Guid& guid,
+                                                         const GS::Array<API_Coord>& inputPoints,
+                                                         const GS::Array<StairTurnRequest>& turns,
+                                                         const GS::Array<StairSegmentRequest>& segments)
+{
+    API_ElementMemo memo = {};
+    const GS::OnExit guard ([&memo] () { ACAPI_DisposeElemMemoHdls (&memo); });
+    const GSErrCode err = ACAPI_Element_GetMemo (guid, &memo, APIMemoMask_All);
+    if (err != NoError) {
+        return GS::UniString::Printf ("Reading the stair back failed (error %d).", (int) err);
+    }
+    const API_StairPolylineData& line = memo.stairBaseLine;
+    const Int32 nCoords = line.polygon.nCoords;
+    GS::UniString mismatches;
+    if (!turns.IsEmpty ()) {
+        const Int32 vOffset = StairDataIndexOffset (line.vertexData, nCoords);
+        const GSSize nv = StairPtrCount (line.vertexData);
+        for (const StairTurnRequest& turn : turns) {
+            const Int32 k = FindStairCoord (line, inputPoints[turn.pointIndex]);
+            const Int32 index = k - 1 + vOffset;
+            if (vOffset < 0 || k < 0 || index < 0 || index >= nv) {
+                mismatches += GS::UniString::Printf (" point %d: not found;", turn.pointIndex);
+            } else if (line.vertexData[index].turnType != turn.turnType) {
+                mismatches += GS::UniString::Printf (" point %d: %s instead of %s;", turn.pointIndex,
+                    StairTurnTypeName (line.vertexData[index].turnType), StairTurnTypeName (turn.turnType));
+            }
+        }
+    }
+    if (!segments.IsEmpty ()) {
+        const Int32 eOffset = StairDataIndexOffset (line.edgeData, nCoords - 1);
+        const GSSize ne = StairPtrCount (line.edgeData);
+        for (const StairSegmentRequest& segment : segments) {
+            const Int32 k = FindStairCoord (line, inputPoints[segment.edgeIndex]);
+            const Int32 index = k - 1 + eOffset;
+            if (eOffset < 0 || k < 0 || index < 0 || index >= ne) {
+                mismatches += GS::UniString::Printf (" edge %d: not found;", segment.edgeIndex);
+            } else if (line.edgeData[index].segmentType != segment.segmentType) {
+                mismatches += GS::UniString::Printf (" edge %d: %s instead of %s;", segment.edgeIndex,
+                    StairSegmentTypeName (line.edgeData[index].segmentType), StairSegmentTypeName (segment.segmentType));
+            }
+        }
+    }
+    if (mismatches.IsEmpty ()) {
+        return {};
+    }
+    return GS::UniString ("Archicad did not keep the requested turns/segments:") + mismatches + " Read back: " + DescribeStairPolyline (line);
+}
+
+void SetStairRule (const GS::ObjectState& rules, const char* field, double& value, bool& applied)
+{
+    double d = 0.0;
+    if (rules.Get (field, d)) {
+        value = d;
+        applied = true;
+    }
+}
+
+} // namespace
+
 CreateStairsCommand::CreateStairsCommand () :
     CreateElementsCommandBase ("CreateStairs", API_StairID, "stairsData")
 {
@@ -3994,9 +4467,10 @@ GS::Optional<GS::UniString> CreateStairsCommand::GetInputParametersSchema () con
                         },
                         "baseLinePoints": {
                             "type": "array",
-                            "description": "2D coordinates defining the stair baseline polyline. Minimum 2 points for a straight stair, 3+ for L-shaped or U-shaped stairs.",
+                            "description": "2D coordinates defining the stair baseline polyline. Minimum 2 points for a straight stair, 3+ for L-shaped or U-shaped stairs. Consecutive points must be at least 5 cm apart.",
                             "items": { "$ref": "#/Coordinate2D" },
-                            "minItems": 2
+                            "minItems": 2,
+                            "maxItems": 64
                         },
                         "zCoordinate": {
                             "type": "number",
@@ -4019,7 +4493,8 @@ GS::Optional<GS::UniString> CreateStairsCommand::GetInputParametersSchema () con
                         "stepNum": {
                             "type": "integer",
                             "description": "Number of risers (steps).",
-                            "minimum": 1
+                            "minimum": 1,
+                            "maximum": 400
                         },
                         "riserHeight": {
                             "type": "number",
@@ -4028,8 +4503,107 @@ GS::Optional<GS::UniString> CreateStairsCommand::GetInputParametersSchema () con
                         },
                         "treadDepth": {
                             "type": "number",
-                            "description": "Depth (going) of each tread.",
+                            "description": "Depth (going) of each tread. Archicad adjusts it to the riser/tread rules of the stair unless lockTreadDepth is true and the rules allow it (see applyRules / rules).",
                             "exclusiveMinimum": 0.0
+                        },
+                        "lockTreadDepth": {
+                            "type": "boolean",
+                            "description": "Optional. Sets treadDepthLocked (going length locked)."
+                        },
+                        "lockTotalHeight": {
+                            "type": "boolean",
+                            "description": "Optional. Sets totalHeightLocked."
+                        },
+                        "topLinkStoryOffset": {
+                            "type": "integer",
+                            "description": "Optional. Links the top of the stair to the story this many stories above the home story (relativeTopStory, 0 = not linked). Use it with topOffset to fit the stair between two slabs."
+                        },
+                        "topOffset": {
+                            "type": "number",
+                            "description": "Optional. Offset of the stair top from the linked top story."
+                        },
+                        "baseLinePosition": {
+                            "type": "string",
+                            "enum": ["Left", "Right", "Center"],
+                            "description": "Optional. Which side of the flight the baseline is (baselinePosition)."
+                        },
+                        "baseLineOffset": {
+                            "type": "number",
+                            "description": "Optional. Offset of the baseline from that side (baselineOffset)."
+                        },
+                        "walkingLinePosition": {
+                            "type": "string",
+                            "enum": ["Left", "Right", "Center", "Auto"],
+                            "description": "Optional. Position of the walking line (walkingLinePosition)."
+                        },
+                        "walkingLineOffset": {
+                            "type": "number",
+                            "description": "Optional. Offset of the walking line if not centered (walkingLineOffset)."
+                        },
+                        "applyRules": {
+                            "type": "boolean",
+                            "description": "Optional. false switches off every riser/tread rule of the stair (all API_StairRulesData ...Applied flags) before the rules given in 'rules' are switched on. Use it when the stair must keep a given riser height and going that the default rules (e.g. 2R+G) would change."
+                        },
+                        "rules": {
+                            "type": "object",
+                            "description": "Optional. Riser/tread rules of the stair; each given value is set and switched on. Lengths in meters.",
+                            "properties": {
+                                "riserHeightMin": { "type": "number" },
+                                "riserHeightMax": { "type": "number" },
+                                "treadDepthMin": { "type": "number" },
+                                "treadDepthMax": { "type": "number" },
+                                "twoRiserPlusGoingMin": { "type": "number" },
+                                "twoRiserPlusGoingMax": { "type": "number" },
+                                "landingLengthMin": { "type": "number" },
+                                "walkingLineOffsetMin": { "type": "number" },
+                                "winderTurnOffsetMin": { "type": "number" }
+                            },
+                            "additionalProperties": false
+                        },
+                        "turns": {
+                            "type": "array",
+                            "description": "Optional. How the stair turns at inner baseline points: a landing (podest), winders (zabiehajuce stupne) or a divided landing. Applied after a plain create, read back and checked (see ADR-002); points without an entry keep what Archicad derived.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "pointIndex": { "type": "integer", "minimum": 1, "description": "0-based index into baseLinePoints of an inner point (1..n-2)." },
+                                    "type": { "type": "string", "enum": ["None", "Landing", "Winder", "DividedLanding"] },
+                                    "winderStepsBackward": { "type": "integer", "minimum": 0, "description": "Winder: number of winder steps before the corner." },
+                                    "winderStepsForward": { "type": "integer", "minimum": 0, "description": "Winder: number of winder steps after the corner." },
+                                    "numOfWindersType": { "type": "string", "enum": ["Min", "Fix"], "description": "Winder: minimum or fixed number of winders." },
+                                    "winderType": { "type": "string", "enum": ["AuxiliaryWalkingLine", "TwoPoints", "SinglePoint", "PrincipalLines", "DIN", "NZE", "SIP", "AGN"], "description": "Winder construction method." },
+                                    "riserOffsetType": { "type": "string", "enum": ["Min", "Fix"], "description": "Type of the riser offset from the corner (innerWidthOffsetType)." },
+                                    "dividedLandingWinderMode": { "type": "string", "enum": ["Max", "Optimal", "Fix", "Uniform"] },
+                                    "dividedLandingStepNum": { "type": "integer", "minimum": 1 },
+                                    "landingStartOffset": { "type": "number", "minimum": 0.0, "description": "Landing: lead edge offset (min and current)." },
+                                    "landingEndOffset": { "type": "number", "minimum": 0.0, "description": "Landing: trail edge offset (min and current)." },
+                                    "symmetricalLandingOffset": { "type": "boolean" }
+                                },
+                                "additionalProperties": false,
+                                "required": ["pointIndex", "type"]
+                            }
+                        },
+                        "segments": {
+                            "type": "array",
+                            "description": "Optional. Segment type of baseline edges (e.g. a straight landing between two collinear flights).",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "edgeIndex": { "type": "integer", "minimum": 0, "description": "0-based: the edge from baseLinePoints[i] to baseLinePoints[i+1]." },
+                                    "type": { "type": "string", "enum": ["Steps", "Landing", "DividedLanding"] }
+                                },
+                                "additionalProperties": false,
+                                "required": ["edgeIndex", "type"]
+                            }
+                        },
+                        "turnApplyMode": {
+                            "type": "string",
+                            "enum": ["recreate", "change"],
+                            "description": "Optional, default recreate: how turns/segments are applied after the plain create. recreate = create the stair again from the edited read-back baseline data and delete the first one; change = ACAPI_Element_Change with the edited memo (experimental)."
+                        },
+                        "keepOnTurnFailure": {
+                            "type": "boolean",
+                            "description": "Optional, default false. If the turns/segments cannot be applied, keep the plain stair (the item still reports the error) instead of deleting it."
                         },
                         "finishVisible": {
                             "type": "boolean",
@@ -4052,6 +4626,50 @@ GS::Optional<GS::ObjectState> CreateStairsCommand::SetTypeSpecificParameters (AP
     parameters.Get ("baseLinePoints", baseLinePoints);
     if (baseLinePoints.GetSize () < 2) {
         return CreateErrorResponse (APIERR_BADPARS, "baseLinePoints must have at least 2 points.");
+    }
+    if (baseLinePoints.GetSize () > static_cast<UIndex> (StairMaxBaseLinePoints)) {
+        return CreateErrorResponse (APIERR_BADPARS, GS::UniString::Printf ("baseLinePoints must have at most %d points.", StairMaxBaseLinePoints));
+    }
+    const Int32 nCoords = static_cast<Int32> (baseLinePoints.GetSize ());
+    GS::Array<API_Coord> points;
+    for (const GS::ObjectState& p : baseLinePoints) {
+        const API_Coord c = Get2DCoordinateFromObjectState (p);
+        if (!std::isfinite (c.x) || !std::isfinite (c.y)) {
+            return CreateErrorResponse (APIERR_BADPARS, "baseLinePoints contains a non-finite coordinate.");
+        }
+        points.Push (c);
+    }
+    for (Int32 i = 0; i + 1 < nCoords; ++i) {
+        const double len = std::hypot (points[i + 1].x - points[i].x, points[i + 1].y - points[i].y);
+        if (len < StairMinEdgeLength) {
+            return CreateErrorResponse (APIERR_BADPARS, GS::UniString::Printf ("Baseline edge %d is %.4f m long; the minimum is %.2f m.", i, len, StairMinEdgeLength));
+        }
+    }
+    for (Int32 i = 1; i + 1 < nCoords; ++i) {
+        // A turn back on itself (180 degrees) gives a degenerate stair.
+        const double ax = points[i].x - points[i - 1].x, ay = points[i].y - points[i - 1].y;
+        const double bx = points[i + 1].x - points[i].x, by = points[i + 1].y - points[i].y;
+        const double cross = ax * by - ay * bx;
+        const double dot = ax * bx + ay * by;
+        if (dot < 0.0 && std::fabs (cross) < 1e-9 * std::hypot (ax, ay) * std::hypot (bx, by) + 1e-12) {
+            return CreateErrorResponse (APIERR_BADPARS, GS::UniString::Printf ("The baseline turns back on itself at point %d.", i));
+        }
+    }
+
+    // Turns and segments are validated here so a bad request creates nothing.
+    {
+        GS::Array<StairTurnRequest> turns;
+        GS::Array<StairSegmentRequest> segments;
+        if (auto err = ParseStairTurns (parameters, nCoords, turns); err.HasValue ()) {
+            return CreateErrorResponse (APIERR_BADPARS, err.Get ());
+        }
+        if (auto err = ParseStairSegments (parameters, nCoords, segments); err.HasValue ()) {
+            return CreateErrorResponse (APIERR_BADPARS, err.Get ());
+        }
+        GS::UniString mode;
+        if (parameters.Get ("turnApplyMode", mode) && !mode.IsEqual ("recreate") && !mode.IsEqual ("change")) {
+            return CreateErrorResponse (APIERR_BADPARS, "turnApplyMode must be recreate or change.");
+        }
     }
 
     double zCoordinate = 0.0;
@@ -4080,6 +4698,9 @@ GS::Optional<GS::ObjectState> CreateStairsCommand::SetTypeSpecificParameters (AP
 
     Int32 stepNum = 0;
     if (parameters.Get ("stepNum", stepNum)) {
+        if (stepNum < 1 || static_cast<UInt32> (stepNum) > StairMaxStepNum) {
+            return CreateErrorResponse (APIERR_BADPARS, "stepNum must be 1..400.");
+        }
         element.stair.stepNum = static_cast<UInt32> (stepNum);
     }
 
@@ -4091,9 +4712,80 @@ GS::Optional<GS::ObjectState> CreateStairsCommand::SetTypeSpecificParameters (AP
     if (treadDepth.HasValue ()) {
         element.stair.treadDepth = treadDepth.Get ();
     }
+    bool flag = false;
+    if (parameters.Get ("lockTreadDepth", flag)) {
+        element.stair.treadDepthLocked = flag;
+    }
+    if (parameters.Get ("lockTotalHeight", flag)) {
+        element.stair.totalHeightLocked = flag;
+    }
 
-    // Build the baseline polyline in the memo
-    const Int32 nCoords = static_cast<Int32> (baseLinePoints.GetSize ());
+    Int32 topLinkStoryOffset = 0;
+    if (parameters.Get ("topLinkStoryOffset", topLinkStoryOffset)) {
+        if (topLinkStoryOffset < 0 || topLinkStoryOffset > 100) {
+            return CreateErrorResponse (APIERR_BADPARS, "topLinkStoryOffset must be 0..100.");
+        }
+        element.stair.relativeTopStory = static_cast<short> (topLinkStoryOffset);
+    }
+    auto topOffset = GetOptionalDouble (parameters, "topOffset");
+    if (topOffset.HasValue ()) {
+        element.stair.topOffset = topOffset.Get ();
+    }
+
+    GS::UniString positionStr;
+    if (parameters.Get ("baseLinePosition", positionStr)) {
+        API_LinePositionID position;
+        if (!ParseStairEnum (positionStr, StairBaseLinePositionTable, position)) {
+            return CreateErrorResponse (APIERR_BADPARS, "baseLinePosition must be Left, Right or Center.");
+        }
+        element.stair.baselinePosition = position;
+    }
+    auto baseLineOffset = GetOptionalDouble (parameters, "baseLineOffset");
+    if (baseLineOffset.HasValue ()) {
+        element.stair.baselineOffset = baseLineOffset.Get ();
+    }
+    if (parameters.Get ("walkingLinePosition", positionStr)) {
+        API_LinePositionID position;
+        if (!ParseStairEnum (positionStr, StairWalkingLinePositionTable, position)) {
+            return CreateErrorResponse (APIERR_BADPARS, "walkingLinePosition must be Left, Right, Center or Auto.");
+        }
+        element.stair.walkingLinePosition = position;
+    }
+    auto walkingLineOffset = GetOptionalDouble (parameters, "walkingLineOffset");
+    if (walkingLineOffset.HasValue ()) {
+        element.stair.walkingLineOffset = walkingLineOffset.Get ();
+    }
+
+    API_StairRulesData& rules = element.stair.rules;
+    bool applyRules = true;
+    if (parameters.Get ("applyRules", applyRules) && !applyRules) {
+        rules.riserHeightMinApplied = false;
+        rules.riserHeightMaxApplied = false;
+        rules.treadDepthMinApplied = false;
+        rules.treadDepthMaxApplied = false;
+        rules.ruleMinApplied = false;
+        rules.ruleMaxApplied = false;
+        rules.landingLengthMinApplied = false;
+        rules.walkingLineOffsetMinApplied = false;
+        rules.winderTurnOffsetMinApplied = false;
+        rules.riserGoingRatioMinApplied = false;
+        rules.riserGoingRatioMaxApplied = false;
+        rules.riserPlusGoingMinApplied = false;
+        rules.riserPlusGoingMaxApplied = false;
+        rules.stairPitchMinApplied = false;
+        rules.stairPitchMaxApplied = false;
+    }
+    if (const GS::ObjectState* rulesOs = parameters.Get ("rules"); rulesOs != nullptr) {
+        SetStairRule (*rulesOs, "riserHeightMin", rules.riserHeightMinValue, rules.riserHeightMinApplied);
+        SetStairRule (*rulesOs, "riserHeightMax", rules.riserHeightMaxValue, rules.riserHeightMaxApplied);
+        SetStairRule (*rulesOs, "treadDepthMin", rules.treadDepthMinValue, rules.treadDepthMinApplied);
+        SetStairRule (*rulesOs, "treadDepthMax", rules.treadDepthMaxValue, rules.treadDepthMaxApplied);
+        SetStairRule (*rulesOs, "twoRiserPlusGoingMin", rules.ruleMinValue, rules.ruleMinApplied);
+        SetStairRule (*rulesOs, "twoRiserPlusGoingMax", rules.ruleMaxValue, rules.ruleMaxApplied);
+        SetStairRule (*rulesOs, "landingLengthMin", rules.landingLengthMinValue, rules.landingLengthMinApplied);
+        SetStairRule (*rulesOs, "walkingLineOffsetMin", rules.walkingLineOffsetMinValue, rules.walkingLineOffsetMinApplied);
+        SetStairRule (*rulesOs, "winderTurnOffsetMin", rules.winderTurnOffsetMinValue, rules.winderTurnOffsetMinApplied);
+    }
 
     // Free existing baseline handles from defaults
     if (memo.stairBaseLine.coords != nullptr) {
@@ -4117,13 +4809,17 @@ GS::Optional<GS::ObjectState> CreateStairsCommand::SetTypeSpecificParameters (AP
     // edgeData/vertexData are intentionally left null: ACAPI_Element_Create derives them
     // from the baseline geometry (see the Element_Test example in the DevKit). Pre-filling
     // them marks every edge as a steps segment, which makes multi-segment (L/U-shaped)
-    // baselines fail with -2130313215 (#444).
+    // baselines fail with -2130313215 (#444). Turns and segment types are applied in
+    // ChangeAfterCreation on the data Archicad derived.
     memo.stairBaseLine.coords = reinterpret_cast<API_Coord**> (BMAllocateHandle ((nCoords + 1) * sizeof (API_Coord), ALLOCATE_CLEAR, 0));
     memo.stairBaseLine.pends = reinterpret_cast<Int32**> (BMAllocateHandle (2 * sizeof (Int32), ALLOCATE_CLEAR, 0));
     memo.stairBaseLine.parcs = reinterpret_cast<API_PolyArc**> (BMAllocateHandle (0, ALLOCATE_CLEAR, 0));
+    if (memo.stairBaseLine.coords == nullptr || memo.stairBaseLine.pends == nullptr) {
+        return CreateErrorResponse (APIERR_MEMFULL, "Allocating the stair baseline failed.");
+    }
 
     for (Int32 i = 0; i < nCoords; ++i) {
-        (*memo.stairBaseLine.coords)[i + 1] = Get2DCoordinateFromObjectState (baseLinePoints[i]);
+        (*memo.stairBaseLine.coords)[i + 1] = points[i];
     }
 
     (*memo.stairBaseLine.pends)[1] = nCoords;
@@ -4133,6 +4829,293 @@ GS::Optional<GS::ObjectState> CreateStairsCommand::SetTypeSpecificParameters (AP
     memo.stairBaseLine.polygon.nArcs = 0;
 
     return {};
+}
+
+GS::Optional<GS::ObjectState> CreateStairsCommand::ChangeAfterCreation (API_Element& element, const Stories& /*stories*/, const GS::ObjectState& parameters) const
+{
+    GS::Array<GS::ObjectState> baseLinePoints;
+    parameters.Get ("baseLinePoints", baseLinePoints);
+    const Int32 nPoints = static_cast<Int32> (baseLinePoints.GetSize ());
+    GS::Array<StairTurnRequest> turns;
+    GS::Array<StairSegmentRequest> segments;
+    ParseStairTurns (parameters, nPoints, turns);           // validated in SetTypeSpecificParameters
+    ParseStairSegments (parameters, nPoints, segments);
+    if (turns.IsEmpty () && segments.IsEmpty ()) {
+        return {};
+    }
+    GS::Array<API_Coord> points;
+    for (const GS::ObjectState& p : baseLinePoints) {
+        points.Push (Get2DCoordinateFromObjectState (p));
+    }
+    GS::UniString mode ("recreate");
+    parameters.Get ("turnApplyMode", mode);
+    bool keepOnFailure = false;
+    parameters.Get ("keepOnTurnFailure", keepOnFailure);
+
+    const API_Guid plainGuid = element.header.guid;
+    const auto fail = [&] (GSErrCode code, const GS::UniString& message, const API_Guid& toDelete) -> GS::ObjectState {
+        if (!keepOnFailure && toDelete != APINULLGuid) {
+            ACAPI_Element_Delete ({ toDelete });
+            return CreateErrorResponse (code, message + " The stair was deleted (keepOnTurnFailure=false).");
+        }
+        return CreateErrorResponse (code, message + GS::UniString (" The stair without the turns was kept: ") + APIGuidToString (toDelete));
+    };
+
+    API_ElementMemo readMemo = {};
+    const GS::OnExit readGuard ([&readMemo] () { ACAPI_DisposeElemMemoHdls (&readMemo); });
+    GSErrCode err = ACAPI_Element_GetMemo (plainGuid, &readMemo, APIMemoMask_All);
+    if (err != NoError) {
+        return fail (err, "The Stair was created, but reading its baseline back failed.", plainGuid);
+    }
+
+    if (mode.IsEqual ("change")) {
+        if (auto applyErr = ApplyStairTurnsAndSegments (readMemo.stairBaseLine, points, turns, segments); applyErr.HasValue ()) {
+            return fail (APIERR_BADPARS, applyErr.Get (), plainGuid);
+        }
+        API_Element changed = {};
+        changed.header.guid = plainGuid;
+        err = ACAPI_Element_Get (&changed);
+        if (err != NoError) {
+            return fail (err, "Reading the created Stair back failed.", plainGuid);
+        }
+        API_Element mask = {};
+        ACAPI_ELEMENT_MASK_CLEAR (mask);
+        err = ACAPI_Element_Change (&changed, &mask, &readMemo, APIMemoMask_All, true);
+        if (err != NoError) {
+            return fail (err, "ACAPI_Element_Change with the turns failed. Read back before: " + DescribeStairPolyline (readMemo.stairBaseLine), plainGuid);
+        }
+        element.header = changed.header;
+    } else {
+        // Copy only the baseline: the create memo is the same shape as the one the plain create
+        // used (subelement arrays null), with the derived edge / vertex data added.
+        API_ElementMemo newMemo = {};
+        const GS::OnExit newGuard ([&newMemo] () { ACAPI_DisposeElemMemoHdls (&newMemo); });
+        const API_StairPolylineData& src = readMemo.stairBaseLine;
+        if (src.coords == nullptr || src.pends == nullptr || src.polygon.nCoords < 2) {
+            return fail (APIERR_GENERAL, "Archicad returned no stair baseline to edit. " + DescribeStairPolyline (src), plainGuid);
+        }
+        newMemo.stairBaseLine.polygon = src.polygon;
+        newMemo.stairBaseLine.coords = CopyStairHandle (src.coords);
+        newMemo.stairBaseLine.pends = CopyStairHandle (src.pends);
+        newMemo.stairBaseLine.parcs = src.parcs != nullptr ? CopyStairHandle (src.parcs)
+                                                           : reinterpret_cast<API_PolyArc**> (BMAllocateHandle (0, ALLOCATE_CLEAR, 0));
+        newMemo.stairBaseLine.edgeData = CopyStairPtr (src.edgeData);
+        newMemo.stairBaseLine.vertexData = CopyStairPtr (src.vertexData);
+        if (newMemo.stairBaseLine.coords == nullptr || newMemo.stairBaseLine.pends == nullptr) {
+            return fail (APIERR_MEMFULL, "Copying the stair baseline failed.", plainGuid);
+        }
+        if (auto applyErr = ApplyStairTurnsAndSegments (newMemo.stairBaseLine, points, turns, segments); applyErr.HasValue ()) {
+            return fail (APIERR_BADPARS, applyErr.Get (), plainGuid);
+        }
+        API_Element newElement = element;
+        newElement.header.guid = APINULLGuid;
+        err = ACAPI_Element_Create (&newElement, &newMemo);
+        if (err != NoError) {
+            return fail (err, "Creating the Stair with the turns failed. Derived data: " + DescribeStairPolyline (src), plainGuid);
+        }
+        ACAPI_Element_Delete ({ plainGuid });
+        element.header = newElement.header;
+    }
+
+    if (auto verifyErr = VerifyStairTurnsAndSegments (element.header.guid, points, turns, segments); verifyErr.HasValue ()) {
+        return fail (APIERR_GENERAL, verifyErr.Get (), element.header.guid);
+    }
+    return {};
+}
+
+// ============================================================================
+// GetStairBaseLineData (diagnostic): the baseline / walking line data of existing stairs exactly
+// as ACAPI_Element_GetMemo gives them, raw array indices included - to learn how Archicad stores a
+// stair drawn by hand (landings, winders) and to check what CreateStairs made.
+// ============================================================================
+
+GetStairBaseLineDataCommand::GetStairBaseLineDataCommand () :
+    CommandBase (CommonSchema::Used)
+{
+}
+
+GS::String GetStairBaseLineDataCommand::GetName () const
+{
+    return "GetStairBaseLineData";
+}
+
+GS::Optional<GS::UniString> GetStairBaseLineDataCommand::GetInputParametersSchema () const
+{
+    return R"({
+        "type": "object",
+        "properties": {
+            "elements": {
+                "type": "array",
+                "description": "The Stair elements.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "elementId": { "$ref": "#/ElementId" }
+                    },
+                    "additionalProperties": false,
+                    "required": ["elementId"]
+                }
+            }
+        },
+        "additionalProperties": false,
+        "required": ["elements"]
+    })";
+}
+
+GS::Optional<GS::UniString> GetStairBaseLineDataCommand::GetRawResponseSchema () const
+{
+    return R"({
+        "type": "object",
+        "properties": {
+            "stairs": {
+                "type": "array",
+                "description": "Per stair: the main settings, the baseline and walking line (coords and the raw edge / vertex data with their array indices) and the tread / riser counts; or an error.",
+                "items": { "type": "object" }
+            }
+        },
+        "additionalProperties": false,
+        "required": ["stairs"]
+    })";
+}
+
+static GS::ObjectState CreateStairPolylineObjectState (const API_StairPolylineData& line)
+{
+    GS::ObjectState os;
+    os.Add ("nCoords", line.polygon.nCoords);
+    const auto& coords = os.AddList<GS::ObjectState> ("coords");
+    if (line.coords != nullptr) {
+        const GSSize handleCount = BMGetHandleSize (reinterpret_cast<GSConstHandle> (line.coords)) / static_cast<GSSize> (sizeof (API_Coord));
+        for (Int32 k = 1; k <= line.polygon.nCoords && k < handleCount; ++k) {
+            coords (Create2DCoordinateObjectState ((*line.coords)[k]));
+        }
+    }
+    const GSSize nv = StairPtrCount (line.vertexData);
+    os.Add ("vertexDataCount", static_cast<Int32> (nv));
+    const auto& vertexData = os.AddList<GS::ObjectState> ("vertexData");
+    for (GSSize i = 0; i < nv; ++i) {
+        const API_StairPolylineVertexData& v = line.vertexData[i];
+        GS::ObjectState vo;
+        vo.Add ("index", static_cast<Int32> (i));
+        vo.Add ("type", GS::UniString (StairPolyTypeName (v.type)));
+        vo.Add ("geometryType", static_cast<Int32> (v.geometryType));
+        vo.Add ("subElemId", static_cast<Int32> (v.subElemId));
+        vo.Add ("turnType", GS::UniString (StairTurnTypeName (v.turnType)));
+        vo.Add ("winderStepNumBackward", v.winderStepNumBackward);
+        vo.Add ("winderStepNumForward", v.winderStepNumForward);
+        vo.Add ("numOfWindersType", static_cast<Int32> (v.numOfWindersType));
+        vo.Add ("winderType", static_cast<Int32> (v.winderType));
+        vo.Add ("innerWidthOffsetType", static_cast<Int32> (v.innerWidthOffsetType));
+        vo.Add ("dividedLandingNumOfWindersType", static_cast<Int32> (v.dividedLandingNumOfWindersType));
+        vo.Add ("dividedLandingFixedNumOfSteps", v.dividedLandingFixedNumOfSteps);
+        vo.Add ("symmetricalLandingOffset", v.symmetricalLandingOffset);
+        vo.Add ("minLandingStartEdgeOffset", v.minLandingStartEdgeOffset);
+        vo.Add ("minLandingEndEdgeOffset", v.minLandingEndEdgeOffset);
+        vo.Add ("currLandingStartEdgeOffset", v.currLandingStartEdgeOffset);
+        vo.Add ("currLandingEndEdgeOffset", v.currLandingEndEdgeOffset);
+        vertexData (vo);
+    }
+    const GSSize ne = StairPtrCount (line.edgeData);
+    os.Add ("edgeDataCount", static_cast<Int32> (ne));
+    const auto& edgeData = os.AddList<GS::ObjectState> ("edgeData");
+    for (GSSize i = 0; i < ne; ++i) {
+        const API_StairPolylineEdgeData& e = line.edgeData[i];
+        GS::ObjectState eo;
+        eo.Add ("index", static_cast<Int32> (i));
+        eo.Add ("type", GS::UniString (StairPolyTypeName (e.type)));
+        eo.Add ("geometryType", static_cast<Int32> (e.geometryType));
+        eo.Add ("subElemId", static_cast<Int32> (e.subElemId));
+        eo.Add ("segmentType", GS::UniString (StairSegmentTypeName (e.segmentType)));
+        eo.Add ("isLocked", e.isLocked);
+        edgeData (eo);
+    }
+    return os;
+}
+
+GS::ObjectState GetStairBaseLineDataCommand::Execute (const GS::ObjectState& parameters, GS::ProcessControl& /*processControl*/) const
+{
+    GS::Array<GS::ObjectState> elements;
+    parameters.Get ("elements", elements);
+
+    GS::ObjectState response;
+    const auto& stairs = response.AddList<GS::ObjectState> ("stairs");
+
+    for (const GS::ObjectState& elementObj : elements) {
+        const GS::ObjectState* elementId = elementObj.Get ("elementId");
+        if (elementId == nullptr) {
+            stairs (CreateErrorResponse (APIERR_BADPARS, "elementId is missing"));
+            continue;
+        }
+        API_Element element = {};
+        element.header.guid = GetGuidFromObjectState (*elementId);
+        GSErrCode err = ACAPI_Element_Get (&element);
+        if (err != NoError) {
+            stairs (CreateErrorResponse (err, "Failed to get element"));
+            continue;
+        }
+        if (GetElemTypeId (element.header) != API_StairID) {
+            stairs (CreateErrorResponse (APIERR_BADID, "Element is not a Stair"));
+            continue;
+        }
+        API_ElementMemo memo = {};
+        const GS::OnExit guard ([&memo] () { ACAPI_DisposeElemMemoHdls (&memo); });
+        err = ACAPI_Element_GetMemo (element.header.guid, &memo, APIMemoMask_All);
+        if (err != NoError) {
+            stairs (CreateErrorResponse (err, "Failed to get element memo"));
+            continue;
+        }
+
+        const API_StairType& s = element.stair;
+        GS::ObjectState os;
+        os.Add ("elementId", CreateGuidObjectState (element.header.guid));
+        os.Add ("floorIndex", static_cast<Int32> (element.header.floorInd));
+        os.Add ("baseZ", s.basePlane.basePoint.z);
+        os.Add ("totalHeight", s.totalHeight);
+        os.Add ("topOffset", s.topOffset);
+        os.Add ("topLinkStoryOffset", static_cast<Int32> (s.relativeTopStory));
+        os.Add ("flightWidth", s.flightWidth);
+        os.Add ("stepNum", static_cast<Int32> (s.stepNum));
+        os.Add ("treadNum", static_cast<Int32> (s.treadNum));
+        os.Add ("riserHeight", s.riserHeight);
+        os.Add ("treadDepth", s.treadDepth);
+        os.Add ("treadDepthLocked", s.treadDepthLocked);
+        os.Add ("totalHeightLocked", s.totalHeightLocked);
+        os.Add ("baseLinePosition", GS::UniString (LinePositionName (s.baselinePosition)));
+        os.Add ("baseLineOffset", s.baselineOffset);
+        os.Add ("walkingLinePosition", GS::UniString (LinePositionName (s.walkingLinePosition)));
+        os.Add ("walkingLineOffset", s.walkingLineOffset);
+
+        GS::ObjectState rules;
+        rules.Add ("riserHeightMin", s.rules.riserHeightMinValue);   rules.Add ("riserHeightMinApplied", s.rules.riserHeightMinApplied);
+        rules.Add ("riserHeightMax", s.rules.riserHeightMaxValue);   rules.Add ("riserHeightMaxApplied", s.rules.riserHeightMaxApplied);
+        rules.Add ("treadDepthMin", s.rules.treadDepthMinValue);     rules.Add ("treadDepthMinApplied", s.rules.treadDepthMinApplied);
+        rules.Add ("treadDepthMax", s.rules.treadDepthMaxValue);     rules.Add ("treadDepthMaxApplied", s.rules.treadDepthMaxApplied);
+        rules.Add ("twoRiserPlusGoingMin", s.rules.ruleMinValue);    rules.Add ("twoRiserPlusGoingMinApplied", s.rules.ruleMinApplied);
+        rules.Add ("twoRiserPlusGoingMax", s.rules.ruleMaxValue);    rules.Add ("twoRiserPlusGoingMaxApplied", s.rules.ruleMaxApplied);
+        rules.Add ("landingLengthMin", s.rules.landingLengthMinValue); rules.Add ("landingLengthMinApplied", s.rules.landingLengthMinApplied);
+        rules.Add ("walkingLineOffsetMin", s.rules.walkingLineOffsetMinValue); rules.Add ("walkingLineOffsetMinApplied", s.rules.walkingLineOffsetMinApplied);
+        rules.Add ("winderTurnOffsetMin", s.rules.winderTurnOffsetMinValue); rules.Add ("winderTurnOffsetMinApplied", s.rules.winderTurnOffsetMinApplied);
+        os.Add ("rules", rules);
+
+        os.Add ("baseLine", CreateStairPolylineObjectState (memo.stairBaseLine));
+        os.Add ("walkingLine", CreateStairPolylineObjectState (memo.stairWalkingLine));
+
+        const GSSize nTreads = StairPtrCount (memo.stairTreads);
+        Int32 runTreads = 0, landingTreads = 0;
+        for (GSSize i = 0; i < nTreads; ++i) {
+            if (memo.stairTreads[i].role == APISR_Landing) {
+                ++landingTreads;
+            } else {
+                ++runTreads;
+            }
+        }
+        os.Add ("treadCount", static_cast<Int32> (nTreads));
+        os.Add ("runTreadCount", runTreads);
+        os.Add ("landingTreadCount", landingTreads);
+        os.Add ("riserCount", static_cast<Int32> (StairPtrCount (memo.stairRisers)));
+        os.Add ("structureCount", static_cast<Int32> (StairPtrCount (memo.stairStructures)));
+        stairs (os);
+    }
+    return response;
 }
 
 CreateWindowsCommand::CreateWindowsCommand () :
