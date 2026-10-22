@@ -398,6 +398,57 @@ if stairI2 and 'error' not in stairI2:
     Check ('(i2) baseline not collapsed (length about 2 x 2.10 + 2.70 m)', abs (stairI2.get ('baseLineLength', 0) - (2 * (f1 + WIDTH / 2) + (WIDTH + f1))) < 0.05,
            'baseLineLength {}'.format (stairI2.get ('baseLineLength')))
 
+# --- (k) SCH2 type: U, 16 x 0.19375 m, going 0.217, width 0.90, well 0.25, winders in both corners,
+#         off the origin and at an absolute z of 4.25 m (a story whose level is not 0) -----------
+K_RISERS, K_HEIGHT, K_GOING, K_WIDTH, K_WELL = 16, 16 * 0.19375, 0.217, 0.90, 0.25
+K_Z = 4.25
+axisGap = K_WIDTH + K_WELL                        # distance of the two flight axes
+legK = (15 * K_GOING - axisGap) / 2.0             # Center baseline = walking line, 15 goings
+xk, yk = 1112.0, 1007.0
+paramsK = {
+    'baseLinePoints': [
+        {'x': xk, 'y': yk},
+        {'x': xk, 'y': yk + legK},
+        {'x': xk - axisGap, 'y': yk + legK},
+        {'x': xk - axisGap, 'y': yk},
+    ],
+    'zCoordinate': K_Z,
+    'totalHeight': K_HEIGHT,
+    'stepNum': K_RISERS,
+    'treadDepth': K_GOING,
+    'lockTreadDepth': False,
+    'flightWidth': K_WIDTH,
+    'turns': [{'pointIndex': 1, 'type': 'Winder'}, {'pointIndex': 2, 'type': 'Winder'}],
+}
+_, stairK = CreateStair ('(k) SCH2 U 16 x 0.19375, going 0.217, width 0.90, 2 winders, z 4.25', paramsK)
+if stairK and 'error' not in stairK:
+    Check ('(k) turns Winder, Winder', InnerTurns (stairK) == ['Winder', 'Winder'], str (InnerTurns (stairK)))
+    Check ('(k) 16 risers of 0.19375', stairK['stepNum'] == K_RISERS and abs (stairK['riserHeight'] - 0.19375) < 0.0005,
+           '{} x {:.5f}'.format (stairK['stepNum'], stairK['riserHeight']))
+    Check ('(k) absolute z 4.25 (story level {})'.format (stairK.get ('homeStoryLevel')), abs (stairK.get ('zCoordinate', -99) - K_Z) < 0.001,
+           'zCoordinate {} zTop {}'.format (stairK.get ('zCoordinate'), stairK.get ('zTop')))
+    Check ('(k) flight width 0.90', abs (stairK['flightWidth'] - K_WIDTH) < 0.001, str (stairK['flightWidth']))
+    going = stairK.get ('goingFromBaseLine')
+    Check ('(k) going 0.217 (baseline / 15)', going is not None and abs (going - K_GOING) < 0.005, 'baseline {} walking line {}'.format (going, stairK.get ('goingFromRisers')))
+    Check ('(k) walking line Center kept', stairK.get ('walkingLinePosition') == 'Center', str (stairK.get ('walkingLinePosition')))
+    Check ('(k) rules stay off after the recreate', not stairK['rules']['treadDepthMinApplied'] and not stairK['rules']['twoRiserPlusGoingMaxApplied'],
+           json.dumps ({k: v for k, v in stairK['rules'].items () if k.endswith ('Applied') and v}))
+
+# --- DeleteElements with a wrong item / a missing element must fail (private build) -------
+try:
+    r = Post (port, 'API.ExecuteAddOnCommand', {
+        'addOnCommandId': {'commandNamespace': 'TapirCommand', 'commandName': 'DeleteElements'},
+        'addOnCommandParameters': {'elements': [{'elementId': {'guid': '00000000-1111-2222-3333-444444444444'}}]}})
+    rs = r.get ('result', {}).get ('addOnCommandResponse', {}).get ('executionResults', [])
+    Check ('DeleteElements of a missing element reports a failure', bool (rs) and not rs[0].get ('success'), json.dumps (r)[:300])
+    r = Post (port, 'API.ExecuteAddOnCommand', {
+        'addOnCommandId': {'commandNamespace': 'TapirCommand', 'commandName': 'DeleteElements'},
+        'addOnCommandParameters': {'elements': [{'guid': '00000000-1111-2222-3333-444444444444'}]}})
+    rs = r.get ('result', {}).get ('addOnCommandResponse', {}).get ('executionResults', [])
+    Check ('DeleteElements with {"guid": ...} item is not a success', not r.get ('succeeded') or (bool (rs) and not rs[0].get ('success')), json.dumps (r)[:300])
+except Exception as e:
+    Check ('DeleteElements error reporting', False, str (e))
+
 # --- (j) INFO: Smooth monolith heel (Eden: always 100 mm below the start) ---------------
 for i, structure in enumerate ((
         {'structType': 'Monolith', 'bottomType': 'Smooth'},
