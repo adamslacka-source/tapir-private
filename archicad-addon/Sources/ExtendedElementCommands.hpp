@@ -50,6 +50,16 @@ public:
     virtual GS::Optional<GS::ObjectState> ChangeAfterCreation (API_Element& element, const Stories& stories, const GS::ObjectState& parameters) const override;
 };
 
+class SetStairFloorPlanDisplayCommand : public CommandBase
+{
+public:
+    SetStairFloorPlanDisplayCommand ();
+    virtual GS::String GetName () const override;
+    virtual GS::Optional<GS::UniString> GetInputParametersSchema () const override;
+    virtual GS::Optional<GS::UniString> GetRawResponseSchema () const override;
+    virtual GS::ObjectState Execute (const GS::ObjectState& parameters, GS::ProcessControl& processControl) const override;
+};
+
 class ProbeElementAccessCommand : public CommandBase
 {
 public:

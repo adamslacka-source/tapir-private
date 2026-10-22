@@ -4588,6 +4588,38 @@ GS::Optional<GS::UniString> ApplyStairStructureRequest (API_StairType& stair, co
 
 } // namespace
 
+// Shared by CreateStairs and SetStairFloorPlanDisplay (API_StairLayoutData, APIdefs_Elements.h:14309).
+static const char* StairFloorPlanDisplaySchema = R"({
+    "type": "object",
+    "description": "Floor plan display of the stair (API_StairLayoutData of fpdLayout, and of rcpdLayout with applyTo). Only the given fields are written.",
+    "properties": {
+        "applyTo": { "type": "array", "items": { "type": "string", "enum": ["FloorPlan", "CeilingPlan"] }, "description": "Default: FloorPlan only." },
+        "storyVisibility": { "type": "string", "enum": ["HomeStoryOnly", "HomeAndOneStoryUp", "HomeAndOneStoryDown", "HomeAndOneStoryUpAndDown", "OneStoryUp", "OneStoryDown", "AllStories", "AllRelevantStories", "AllRelevantAndOneStoryUp", "AllRelevantAndOneStoryDown"], "description": "API_StairStoryVisibilityID - the 'Show on stories' setting." },
+        "visibility": { "$ref": "#/StoryVisibility" },
+        "isAutoOnStoryVisibility": { "type": "boolean" },
+        "gridTypeAbove": { "$ref": "#/StairGridType" },
+        "gridTypeTop": { "$ref": "#/StairGridType" },
+        "gridTypeMiddle": { "$ref": "#/StairGridType" },
+        "gridTypeBottom": { "$ref": "#/StairGridType" },
+        "gridTypeBelow": { "$ref": "#/StairGridType" },
+        "showWalkingLine": { "type": "boolean" },
+        "showNumbering": { "type": "boolean" },
+        "showUpDownText": { "type": "boolean" },
+        "showDescription": { "type": "boolean" },
+        "showStructure": { "type": "boolean" },
+        "breakLinePositionType": { "type": "string", "enum": ["FloorPlanCutPlaneHeight", "CustomHeight", "AtNthRiser"] },
+        "upperBreakLineCustomPosition": { "type": "number" },
+        "lowerBreakLineCustomPosition": { "type": "number" },
+        "upperBreakLineNthRiserPosition": { "type": "integer", "minimum": 0 },
+        "lowerBreakLineNthRiserPosition": { "type": "integer", "minimum": 0 },
+        "breakLineAngleType": { "type": "string", "enum": ["AngleToVertical", "AngleToHorizontal", "NumberOfGoings"] },
+        "breakLineAngle": { "type": "number" },
+        "breakLineAngleNumberOfGoings": { "type": "integer", "minimum": 0 },
+        "breakLineDistance": { "type": "number", "minimum": 0.0 }
+    },
+    "additionalProperties": false
+})";
+
 CreateStairsCommand::CreateStairsCommand () :
     CreateElementsCommandBase ("CreateStairs", API_StairID, "stairsData")
 {
@@ -4763,6 +4795,7 @@ GS::Optional<GS::UniString> CreateStairsCommand::GetInputParametersSchema () con
                             "type": "boolean",
                             "description": "Optional. API_StairType::extraBottomTread. Exact effect on the first step NOT verified - see ADR-002."
                         },
+                        "floorPlanDisplay": )" + GS::UniString (StairFloorPlanDisplaySchema) + R"(,
                         "structureVisible": {
                             "type": "boolean",
                             "description": "Optional. API_StairType::structureVisibility - false hides the whole stair structure."
@@ -4797,6 +4830,158 @@ GS::Optional<GS::UniString> CreateStairsCommand::GetInputParametersSchema () con
         "required": ["stairsData"]
     })";
 }
+
+// ============================================================================
+// Stair floor plan / reflected ceiling plan display (API_StairType::fpdLayout / rcpdLayout,
+// API_StairLayoutData, APIdefs_Elements.h:14309).
+// ============================================================================
+
+
+namespace {
+
+const std::initializer_list<std::pair<const char*, API_StairStoryVisibilityID>> StairStoryVisibilityTable = {
+    { "HomeStoryOnly", APISSV_HomeStoryOnly }, { "HomeAndOneStoryUp", APISSV_HomeAndOneStoryUp },
+    { "HomeAndOneStoryDown", APISSV_HomeAndOneStoryDown }, { "HomeAndOneStoryUpAndDown", APISSV_HomeAndOneStoryUpAndDown },
+    { "OneStoryUp", APISSV_OneStoryUp }, { "OneStoryDown", APISSV_OneStoryDown }, { "AllStories", APISSV_AllStories },
+    { "AllRelevantStories", APISSV_AllRelevantStories }, { "AllRelevantAndOneStoryUp", APISSV_AllRelevantAndOneStoryUp },
+    { "AllRelevantAndOneStoryDown", APISSV_AllRelevantAndOneStoryDown }
+};
+const std::initializer_list<std::pair<const char*, API_StairGridTypeID>> StairGridTypeTable = {
+    { "NotRelevant", APIStairGrid_NotRelevant },
+    { "WithBreakMarkVisibleHidden", APIStairGrid_WithSingleBreaklineFull },
+    { "NoBreakMarkVisible", APIStairGrid_NoBreaklineFull },
+    { "BelowBreakMarkVisible", APIStairGrid_BelowBreakline },
+    { "AboveBreakMarkVisible", APIStairGrid_AboveBreakline },
+    { "Multistory2DVisibleInbetweenBreakMarks", APIStairGrid_MiddleBreakline },
+    { "Multistory2DHiddenVisibleHidden", APIStairGrid_MiddleBreaklineFull },
+    { "NoBreakMarkHidden", APIStairGrid_NoBreakMarkHidden },
+    { "AboveBreakMarkHidden", APIStairGrid_AboveBreakMarkHidden },
+    { "BelowBreakMarkHidden", APIStairGrid_BelowBreakMarkHidden },
+    { "Multistory2DAllVisible", APIStairGrid_Multistory2DAllVisible },
+    { "Multistory2DHiddenVisibleNone", APIStairGrid_Multistory2DHiddenVisible },
+    { "Multistory2DNoneVisibleHidden", APIStairGrid_Multistory2DNoneVisibleHidden },
+    { "WithBreakMarkAllVisible", APIStairGrid_WithBreakMarkAllVisible },
+    { "WithBreakMarkHiddenVisible", APIStairGrid_WithBreakMarkHiddenVisible }
+};
+const std::initializer_list<std::pair<const char*, API_BreakLinePositionTypeID>> BreakLinePositionTable = {
+    { "FloorPlanCutPlaneHeight", APIBreakLinePosition_FloorPlanCutPlaneHeight }, { "CustomHeight", APIBreakLinePosition_CustomHeight }, { "AtNthRiser", APIBreakLinePosition_AtNthRiser }
+};
+const std::initializer_list<std::pair<const char*, API_BreakLineAngleTypeID>> BreakLineAngleTable = {
+    { "AngleToVertical", APIBreakLineAngle_AngleToVertical }, { "AngleToHorizontal", APIBreakLineAngle_AngleToHorizontal }, { "NumberOfGoings", APIBreakLineAngle_NumberOfGoings }
+};
+
+template <typename EnumT>
+GS::UniString StairEnumName (const std::initializer_list<std::pair<const char*, EnumT>>& table, EnumT value)
+{
+    for (const auto& entry : table) {
+        if (entry.second == value) {
+            return GS::UniString (entry.first);
+        }
+    }
+    return GS::UniString::Printf ("Unknown(%d)", static_cast<int> (value));
+}
+
+GS::Optional<GS::UniString> ApplyStairLayoutRequest (API_StairLayoutData& layout, const GS::ObjectState& os)
+{
+    GS::Optional<API_StairStoryVisibilityID> storyVisibility;
+    if (auto err = GetOptionalStairEnum (os, "storyVisibility", StairStoryVisibilityTable, storyVisibility); err.HasValue ()) return err;
+    if (storyVisibility.HasValue ()) layout.storyVisibility = storyVisibility.Get ();
+    if (const GS::ObjectState* vis = os.Get ("visibility"); vis != nullptr) {
+        API_StoryVisibility v = layout.visibility;
+        vis->Get ("showOnHome", v.showOnHome);
+        vis->Get ("showAllAbove", v.showAllAbove);
+        vis->Get ("showAllBelow", v.showAllBelow);
+        Int32 rel = 0;
+        if (vis->Get ("showRelAbove", rel)) v.showRelAbove = static_cast<short> (rel);
+        if (vis->Get ("showRelBelow", rel)) v.showRelBelow = static_cast<short> (rel);
+        layout.visibility = v;
+    }
+    os.Get ("isAutoOnStoryVisibility", layout.isAutoOnStoryVisibility);
+    const std::pair<const char*, API_StairGridTypeID*> grids[] = {
+        { "gridTypeAbove", &layout.gridTypeAbove }, { "gridTypeTop", &layout.gridTypeTop }, { "gridTypeMiddle", &layout.gridTypeMiddle },
+        { "gridTypeBottom", &layout.gridTypeBottom }, { "gridTypeBelow", &layout.gridTypeBelow }
+    };
+    for (const auto& grid : grids) {
+        GS::Optional<API_StairGridTypeID> value;
+        if (auto err = GetOptionalStairEnum (os, grid.first, StairGridTypeTable, value); err.HasValue ()) return err;
+        if (value.HasValue ()) *grid.second = value.Get ();
+    }
+    os.Get ("showWalkingLine", layout.showWalkingLine);
+    os.Get ("showNumbering", layout.showNumbering);
+    os.Get ("showUpDownText", layout.showUpDownText);
+    os.Get ("showDescription", layout.showDescription);
+    os.Get ("showStructure", layout.showStructure);
+    GS::Optional<API_BreakLinePositionTypeID> positionType;
+    if (auto err = GetOptionalStairEnum (os, "breakLinePositionType", BreakLinePositionTable, positionType); err.HasValue ()) return err;
+    if (positionType.HasValue ()) layout.breakLinePositionType = positionType.Get ();
+    GS::Optional<API_BreakLineAngleTypeID> angleType;
+    if (auto err = GetOptionalStairEnum (os, "breakLineAngleType", BreakLineAngleTable, angleType); err.HasValue ()) return err;
+    if (angleType.HasValue ()) layout.breakLineAngleType = angleType.Get ();
+    os.Get ("upperBreakLineCustomPosition", layout.upperBreakLineCustomPosition);
+    os.Get ("lowerBreakLineCustomPosition", layout.lowerBreakLineCustomPosition);
+    os.Get ("breakLineAngle", layout.breakLineAngle);
+    os.Get ("breakLineDistance", layout.breakLineDistance);
+    Int32 n = 0;
+    if (os.Get ("upperBreakLineNthRiserPosition", n)) { if (n < 0) return GS::UniString ("upperBreakLineNthRiserPosition must be >= 0."); layout.upperBreakLineNthRiserPosition = static_cast<UInt32> (n); }
+    if (os.Get ("lowerBreakLineNthRiserPosition", n)) { if (n < 0) return GS::UniString ("lowerBreakLineNthRiserPosition must be >= 0."); layout.lowerBreakLineNthRiserPosition = static_cast<UInt32> (n); }
+    if (os.Get ("breakLineAngleNumberOfGoings", n)) layout.breakLineAngleNumberOfGoings = n;
+    return {};
+}
+
+// Applies floorPlanDisplay to fpdLayout (and rcpdLayout when applyTo names CeilingPlan).
+GS::Optional<GS::UniString> ApplyStairFloorPlanDisplay (API_StairType& stair, const GS::ObjectState& os, bool& changedFpd, bool& changedRcpd)
+{
+    bool toFloorPlan = true;
+    bool toCeiling = false;
+    GS::Array<GS::UniString> applyTo;
+    if (os.Get ("applyTo", applyTo) && !applyTo.IsEmpty ()) {
+        toFloorPlan = false;
+        for (const GS::UniString& a : applyTo) {
+            if (a.IsEqual ("FloorPlan")) toFloorPlan = true;
+            else if (a.IsEqual ("CeilingPlan")) toCeiling = true;
+            else return GS::UniString ("floorPlanDisplay.applyTo: unknown value ") + a;
+        }
+    }
+    if (toFloorPlan) {
+        if (auto err = ApplyStairLayoutRequest (stair.fpdLayout, os); err.HasValue ()) return err;
+        changedFpd = true;
+    }
+    if (toCeiling) {
+        if (auto err = ApplyStairLayoutRequest (stair.rcpdLayout, os); err.HasValue ()) return err;
+        changedRcpd = true;
+    }
+    return {};
+}
+
+GS::ObjectState CreateStairLayoutObjectState (const API_StairLayoutData& layout)
+{
+    GS::ObjectState os;
+    os.Add ("storyVisibility", StairEnumName (StairStoryVisibilityTable, layout.storyVisibility));
+    os.Add ("visibility", CreateStoryVisibilityObjectState (layout.visibility));
+    os.Add ("isAutoOnStoryVisibility", layout.isAutoOnStoryVisibility);
+    os.Add ("gridTypeAbove", StairEnumName (StairGridTypeTable, layout.gridTypeAbove));
+    os.Add ("gridTypeTop", StairEnumName (StairGridTypeTable, layout.gridTypeTop));
+    os.Add ("gridTypeMiddle", StairEnumName (StairGridTypeTable, layout.gridTypeMiddle));
+    os.Add ("gridTypeBottom", StairEnumName (StairGridTypeTable, layout.gridTypeBottom));
+    os.Add ("gridTypeBelow", StairEnumName (StairGridTypeTable, layout.gridTypeBelow));
+    os.Add ("showWalkingLine", layout.showWalkingLine);
+    os.Add ("showNumbering", layout.showNumbering);
+    os.Add ("showUpDownText", layout.showUpDownText);
+    os.Add ("showDescription", layout.showDescription);
+    os.Add ("showStructure", layout.showStructure);
+    os.Add ("breakLinePositionType", StairEnumName (BreakLinePositionTable, layout.breakLinePositionType));
+    os.Add ("upperBreakLineCustomPosition", layout.upperBreakLineCustomPosition);
+    os.Add ("lowerBreakLineCustomPosition", layout.lowerBreakLineCustomPosition);
+    os.Add ("upperBreakLineNthRiserPosition", static_cast<Int32> (layout.upperBreakLineNthRiserPosition));
+    os.Add ("lowerBreakLineNthRiserPosition", static_cast<Int32> (layout.lowerBreakLineNthRiserPosition));
+    os.Add ("breakLineAngleType", StairEnumName (BreakLineAngleTable, layout.breakLineAngleType));
+    os.Add ("breakLineAngle", layout.breakLineAngle);
+    os.Add ("breakLineAngleNumberOfGoings", layout.breakLineAngleNumberOfGoings);
+    os.Add ("breakLineDistance", layout.breakLineDistance);
+    return os;
+}
+
+} // namespace
 
 // Writes every API_StairType field the request names (story / z, sizes, steps, rules, lines,
 // structure). Used for the create and again for the template of the turn recreate, which must
@@ -4896,6 +5081,12 @@ static GS::Optional<GS::ObjectState> ApplyStairElementParameters (API_Element& e
     }
     if (parameters.Get ("structureVisible", flag)) {
         element.stair.structureVisibility = flag;
+    }
+    if (const GS::ObjectState* displayOs = parameters.Get ("floorPlanDisplay"); displayOs != nullptr) {
+        bool changedFpd = false, changedRcpd = false;
+        if (auto err = ApplyStairFloorPlanDisplay (element.stair, *displayOs, changedFpd, changedRcpd); err.HasValue ()) {
+            return CreateErrorResponse (APIERR_BADPARS, err.Get ());
+        }
     }
     if (const GS::ObjectState* structureOs = parameters.Get ("structure"); structureOs != nullptr) {
         if (auto err = ApplyStairStructureRequest (element.stair, *structureOs); err.HasValue ()) {
@@ -5387,6 +5578,8 @@ GS::ObjectState GetStairBaseLineDataCommand::Execute (const GS::ObjectState& par
         os.Add ("extraBottomTread", s.extraBottomTread);
         os.Add ("finishVisible", s.finishVisible);
         os.Add ("structureVisible", s.structureVisibility);
+        os.Add ("floorPlanDisplay", CreateStairLayoutObjectState (s.fpdLayout));
+        os.Add ("ceilingPlanDisplay", CreateStairLayoutObjectState (s.rcpdLayout));
         {
             const auto& structures = os.AddList<GS::ObjectState> ("structureDefaults");
             const char* roleNames[API_StairPartRoleNum] = { "Run", "Landing" };
@@ -9397,5 +9590,143 @@ GS::ObjectState ProbeElementAccessCommand::Execute (const GS::ObjectState& param
     });
     response.Add ("inside", inside);
     response.Add ("undoableCommandResult", static_cast<Int32> (undoErr));
+    return response;
+}
+
+// ============================================================================
+// SetStairFloorPlanDisplay: changes fpdLayout / rcpdLayout of existing stairs with
+// ACAPI_Element_Change (mask on fpdLayout / rcpdLayout only, no memo) and reads them back.
+// ============================================================================
+
+SetStairFloorPlanDisplayCommand::SetStairFloorPlanDisplayCommand () :
+    CommandBase (CommonSchema::Used)
+{
+}
+
+GS::String SetStairFloorPlanDisplayCommand::GetName () const
+{
+    return "SetStairFloorPlanDisplay";
+}
+
+GS::Optional<GS::UniString> SetStairFloorPlanDisplayCommand::GetInputParametersSchema () const
+{
+    return GS::UniString (R"({
+        "type": "object",
+        "properties": {
+            "elements": {
+                "type": "array",
+                "description": "The Stair elements.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "elementId": { "$ref": "#/ElementId" }
+                    },
+                    "additionalProperties": false,
+                    "required": ["elementId"]
+                }
+            },
+            "floorPlanDisplay": )") + GS::UniString (StairFloorPlanDisplaySchema) + R"(
+        },
+        "additionalProperties": false,
+        "required": ["elements", "floorPlanDisplay"]
+    })";
+}
+
+GS::Optional<GS::UniString> SetStairFloorPlanDisplayCommand::GetRawResponseSchema () const
+{
+    return R"({
+        "type": "object",
+        "properties": {
+            "stairs": {
+                "type": "array",
+                "description": "Per stair: the elementId after the change (ACAPI_Element_Change may give a new one) and the read-back floor plan / ceiling plan display; or an error.",
+                "items": { "type": "object" }
+            }
+        },
+        "additionalProperties": false,
+        "required": ["stairs"]
+    })";
+}
+
+GS::ObjectState SetStairFloorPlanDisplayCommand::Execute (const GS::ObjectState& parameters, GS::ProcessControl& /*processControl*/) const
+{
+    GS::Array<GS::ObjectState> elements;
+    parameters.Get ("elements", elements);
+    const GS::ObjectState* displayOs = parameters.Get ("floorPlanDisplay");
+
+    GS::ObjectState response;
+    const auto& stairs = response.AddList<GS::ObjectState> ("stairs");
+    if (displayOs == nullptr) {
+        stairs (CreateErrorResponse (APIERR_BADPARS, "floorPlanDisplay is missing"));
+        return response;
+    }
+    // Validate once before touching anything.
+    {
+        API_StairType probe = {};
+        bool a = false, b = false;
+        if (auto err = ApplyStairFloorPlanDisplay (probe, *displayOs, a, b); err.HasValue ()) {
+            stairs (CreateErrorResponse (APIERR_BADPARS, err.Get ()));
+            return response;
+        }
+    }
+
+    // Elements are read outside the undoable command (see ProbeElementAccess / ADR-002 kap. 9).
+    GS::Array<API_Element> toChange;
+    GS::Array<GS::Optional<GS::ObjectState>> errors;
+    for (const GS::ObjectState& elementObj : elements) {
+        API_Element element = {};
+        const GS::ObjectState* elementId = elementObj.Get ("elementId");
+        if (elementId == nullptr) {
+            toChange.Push (element);
+            errors.Push (CreateErrorResponse (APIERR_BADPARS, "elementId is missing"));
+            continue;
+        }
+        element.header.guid = GetGuidFromObjectState (*elementId);
+        const GSErrCode err = ACAPI_Element_Get (&element);
+        if (err != NoError) {
+            errors.Push (CreateErrorResponse (err, "Failed to get element"));
+        } else if (GetElemTypeId (element.header) != API_StairID) {
+            errors.Push (CreateErrorResponse (APIERR_BADID, "Element is not a Stair"));
+        } else {
+            errors.Push (GS::Optional<GS::ObjectState> ());
+        }
+        toChange.Push (element);
+    }
+
+    ACAPI_CallUndoableCommand ("Set Stair Floor Plan Display", [&] () -> GSErrCode {
+        for (UIndex i = 0; i < toChange.GetSize (); ++i) {
+            if (errors[i].HasValue ()) {
+                continue;
+            }
+            API_Element& element = toChange[i];
+            bool changedFpd = false, changedRcpd = false;
+            ApplyStairFloorPlanDisplay (element.stair, *displayOs, changedFpd, changedRcpd);
+            API_Element mask = {};
+            ACAPI_ELEMENT_MASK_CLEAR (mask);
+            if (changedFpd)  ACAPI_ELEMENT_MASK_SET (mask, API_StairType, fpdLayout);
+            if (changedRcpd) ACAPI_ELEMENT_MASK_SET (mask, API_StairType, rcpdLayout);
+            const GSErrCode err = ACAPI_Element_Change (&element, &mask, nullptr, 0, true);
+            if (err != NoError) {
+                errors[i] = CreateErrorResponse (err, "ACAPI_Element_Change of the stair display failed (no recreate fallback: the placed stair's structure defaults read back as 0, a recreate from it would change the stair).");
+            }
+        }
+        return NoError;
+    });
+
+    for (UIndex i = 0; i < toChange.GetSize (); ++i) {
+        if (errors[i].HasValue ()) {
+            stairs (errors[i].Get ());
+            continue;
+        }
+        API_Element readBack = {};
+        readBack.header.guid = toChange[i].header.guid;
+        GS::ObjectState os;
+        os.Add ("elementId", CreateGuidObjectState (readBack.header.guid));
+        if (ACAPI_Element_Get (&readBack) == NoError) {
+            os.Add ("floorPlanDisplay", CreateStairLayoutObjectState (readBack.stair.fpdLayout));
+            os.Add ("ceilingPlanDisplay", CreateStairLayoutObjectState (readBack.stair.rcpdLayout));
+        }
+        stairs (os);
+    }
     return response;
 }
