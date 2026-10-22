@@ -2879,7 +2879,13 @@ var gCommands = [{
                                 "twoRiserPlusGoingMax": { "type": "number" },
                                 "landingLengthMin": { "type": "number" },
                                 "walkingLineOffsetMin": { "type": "number" },
-                                "winderTurnOffsetMin": { "type": "number" }
+                                "winderTurnOffsetMin": { "type": "number" },
+                                "riserGoingRatioMin": { "type": "number" },
+                                "riserGoingRatioMax": { "type": "number" },
+                                "riserPlusGoingMin": { "type": "number" },
+                                "riserPlusGoingMax": { "type": "number" },
+                                "stairPitchMin": { "type": "number", "description": "Angle; unit not documented (NEOVERENE)." },
+                                "stairPitchMax": { "type": "number", "description": "Angle; unit not documented (NEOVERENE)." }
                             },
                             "additionalProperties": false
                         },
@@ -2927,6 +2933,34 @@ var gCommands = [{
                         "keepOnTurnFailure": {
                             "type": "boolean",
                             "description": "Optional, default false. If the turns/segments cannot be applied, keep the plain stair (the item still reports the error) instead of deleting it."
+                        },
+                        "extraTopTread": {
+                            "type": "boolean",
+                            "description": "Optional. API_StairType::extraTopTread (header: 'Extra Top Tread is used to display the top tread'). Exact effect on the last step NOT verified - see ADR-002."
+                        },
+                        "extraBottomTread": {
+                            "type": "boolean",
+                            "description": "Optional. API_StairType::extraBottomTread. Exact effect on the first step NOT verified - see ADR-002."
+                        },
+                        "structureVisible": {
+                            "type": "boolean",
+                            "description": "Optional. API_StairType::structureVisibility - false hides the whole stair structure."
+                        },
+                        "structure": {
+                            "type": "object",
+                            "description": "Optional. Default parameters of the stair structure (API_StairType::structure[role][side]), applied to the roles / sides named here (default: all). Only the given fields are written.",
+                            "properties": {
+                                "roles": { "type": "array", "items": { "type": "string", "enum": ["Run", "Landing"] } },
+                                "sides": { "type": "array", "items": { "type": "string", "enum": ["Left", "Right", "Under"] } },
+                                "structType": { "type": "string", "enum": ["Side", "Monolith", "BeamSupport", "CantileveredSupport"] },
+                                "bottomType": { "type": "string", "enum": ["Stepped", "Flat", "Smooth"] },
+                                "thickness": { "type": "number", "minimum": 0.0 },
+                                "horizontalThickness": { "type": "number", "minimum": 0.0 },
+                                "monolithThickness": { "type": "number", "minimum": 0.0, "description": "Only for a Monolith structure." },
+                                "bottomOversize": { "type": "number", "minimum": 0.0, "description": "Only for a Monolith structure: size of the horizontal bottom." },
+                                "thinning": { "type": "boolean", "description": "Only for a Monolith structure." }
+                            },
+                            "additionalProperties": false
                         },
                         "finishVisible": {
                             "type": "boolean",
