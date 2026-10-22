@@ -2773,7 +2773,7 @@ var gCommands = [{
             },{
                 "name": "CreateStairs",
                 "version": "1.5.0",
-                "description": "Creates Stair elements based on the given baseline and parameters.",
+                "description": "Creates Stair elements based on the given baseline and parameters. Optional turns (landing, winders, divided landing) at inner baseline points, segment types of baseline edges, riser/tread rules, top story link and baseline / walking line position.",
                 "inputScheme": {
         "type": "object",
         "properties": {
@@ -2790,9 +2790,10 @@ var gCommands = [{
                         },
                         "baseLinePoints": {
                             "type": "array",
-                            "description": "2D coordinates defining the stair baseline polyline. Minimum 2 points for a straight stair, 3+ for L-shaped or U-shaped stairs.",
+                            "description": "2D coordinates defining the stair baseline polyline. Minimum 2 points for a straight stair, 3+ for L-shaped or U-shaped stairs. Consecutive points must be at least 5 cm apart.",
                             "items": { "$ref": "#/Coordinate2D" },
-                            "minItems": 2
+                            "minItems": 2,
+                            "maxItems": 64
                         },
                         "zCoordinate": {
                             "type": "number",
@@ -2815,7 +2816,8 @@ var gCommands = [{
                         "stepNum": {
                             "type": "integer",
                             "description": "Number of risers (steps).",
-                            "minimum": 1
+                            "minimum": 1,
+                            "maximum": 400
                         },
                         "riserHeight": {
                             "type": "number",
@@ -2824,8 +2826,107 @@ var gCommands = [{
                         },
                         "treadDepth": {
                             "type": "number",
-                            "description": "Depth (going) of each tread.",
+                            "description": "Depth (going) of each tread. Archicad adjusts it to the riser/tread rules of the stair unless lockTreadDepth is true and the rules allow it (see applyRules / rules).",
                             "exclusiveMinimum": 0.0
+                        },
+                        "lockTreadDepth": {
+                            "type": "boolean",
+                            "description": "Optional. Sets treadDepthLocked (going length locked)."
+                        },
+                        "lockTotalHeight": {
+                            "type": "boolean",
+                            "description": "Optional. Sets totalHeightLocked."
+                        },
+                        "topLinkStoryOffset": {
+                            "type": "integer",
+                            "description": "Optional. Links the top of the stair to the story this many stories above the home story (relativeTopStory, 0 = not linked). Use it with topOffset to fit the stair between two slabs."
+                        },
+                        "topOffset": {
+                            "type": "number",
+                            "description": "Optional. Offset of the stair top from the linked top story."
+                        },
+                        "baseLinePosition": {
+                            "type": "string",
+                            "enum": ["Left", "Right", "Center"],
+                            "description": "Optional. Which side of the flight the baseline is (baselinePosition)."
+                        },
+                        "baseLineOffset": {
+                            "type": "number",
+                            "description": "Optional. Offset of the baseline from that side (baselineOffset)."
+                        },
+                        "walkingLinePosition": {
+                            "type": "string",
+                            "enum": ["Left", "Right", "Center", "Auto"],
+                            "description": "Optional. Position of the walking line (walkingLinePosition)."
+                        },
+                        "walkingLineOffset": {
+                            "type": "number",
+                            "description": "Optional. Offset of the walking line if not centered (walkingLineOffset)."
+                        },
+                        "applyRules": {
+                            "type": "boolean",
+                            "description": "Optional. false switches off every riser/tread rule of the stair (all API_StairRulesData ...Applied flags) before the rules given in 'rules' are switched on. Use it when the stair must keep a given riser height and going that the default rules (e.g. 2R+G) would change."
+                        },
+                        "rules": {
+                            "type": "object",
+                            "description": "Optional. Riser/tread rules of the stair; each given value is set and switched on. Lengths in meters.",
+                            "properties": {
+                                "riserHeightMin": { "type": "number" },
+                                "riserHeightMax": { "type": "number" },
+                                "treadDepthMin": { "type": "number" },
+                                "treadDepthMax": { "type": "number" },
+                                "twoRiserPlusGoingMin": { "type": "number" },
+                                "twoRiserPlusGoingMax": { "type": "number" },
+                                "landingLengthMin": { "type": "number" },
+                                "walkingLineOffsetMin": { "type": "number" },
+                                "winderTurnOffsetMin": { "type": "number" }
+                            },
+                            "additionalProperties": false
+                        },
+                        "turns": {
+                            "type": "array",
+                            "description": "Optional. How the stair turns at inner baseline points: a landing (podest), winders (zabiehajuce stupne) or a divided landing. Applied after a plain create, read back and checked (see ADR-002); points without an entry keep what Archicad derived.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "pointIndex": { "type": "integer", "minimum": 1, "description": "0-based index into baseLinePoints of an inner point (1..n-2)." },
+                                    "type": { "type": "string", "enum": ["None", "Landing", "Winder", "DividedLanding"] },
+                                    "winderStepsBackward": { "type": "integer", "minimum": 0, "description": "Winder: number of winder steps before the corner." },
+                                    "winderStepsForward": { "type": "integer", "minimum": 0, "description": "Winder: number of winder steps after the corner." },
+                                    "numOfWindersType": { "type": "string", "enum": ["Min", "Fix"], "description": "Winder: minimum or fixed number of winders." },
+                                    "winderType": { "type": "string", "enum": ["AuxiliaryWalkingLine", "TwoPoints", "SinglePoint", "PrincipalLines", "DIN", "NZE", "SIP", "AGN"], "description": "Winder construction method." },
+                                    "riserOffsetType": { "type": "string", "enum": ["Min", "Fix"], "description": "Type of the riser offset from the corner (innerWidthOffsetType)." },
+                                    "dividedLandingWinderMode": { "type": "string", "enum": ["Max", "Optimal", "Fix", "Uniform"] },
+                                    "dividedLandingStepNum": { "type": "integer", "minimum": 1 },
+                                    "landingStartOffset": { "type": "number", "minimum": 0.0, "description": "Landing: lead edge offset (min and current)." },
+                                    "landingEndOffset": { "type": "number", "minimum": 0.0, "description": "Landing: trail edge offset (min and current)." },
+                                    "symmetricalLandingOffset": { "type": "boolean" }
+                                },
+                                "additionalProperties": false,
+                                "required": ["pointIndex", "type"]
+                            }
+                        },
+                        "segments": {
+                            "type": "array",
+                            "description": "Optional. Segment type of baseline edges (e.g. a straight landing between two collinear flights).",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "edgeIndex": { "type": "integer", "minimum": 0, "description": "0-based: the edge from baseLinePoints[i] to baseLinePoints[i+1]." },
+                                    "type": { "type": "string", "enum": ["Steps", "Landing", "DividedLanding"] }
+                                },
+                                "additionalProperties": false,
+                                "required": ["edgeIndex", "type"]
+                            }
+                        },
+                        "turnApplyMode": {
+                            "type": "string",
+                            "enum": ["recreate", "change"],
+                            "description": "Optional, default recreate: how turns/segments are applied after the plain create. recreate = create the stair again from the edited read-back baseline data and delete the first one; change = ACAPI_Element_Change with the edited memo (experimental)."
+                        },
+                        "keepOnTurnFailure": {
+                            "type": "boolean",
+                            "description": "Optional, default false. If the turns/segments cannot be applied, keep the plain stair (the item still reports the error) instead of deleting it."
                         },
                         "finishVisible": {
                             "type": "boolean",
@@ -2851,6 +2952,41 @@ var gCommands = [{
         "required": [
             "elements"
         ]
+    }
+            },{
+                "name": "GetStairBaseLineData",
+                "version": "1.7.2",
+                "description": "Returns the baseline and walking line of Stair elements as the API gives them (coords, raw edge and vertex data with turn and segment types), the main stair settings and rules, and the tread / riser counts. A diagnostic command for stairs with landings and winders.",
+                "inputScheme": {
+        "type": "object",
+        "properties": {
+            "elements": {
+                "type": "array",
+                "description": "The Stair elements.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "elementId": { "$ref": "#/ElementId" }
+                    },
+                    "additionalProperties": false,
+                    "required": ["elementId"]
+                }
+            }
+        },
+        "additionalProperties": false,
+        "required": ["elements"]
+    },
+                "outputScheme": {
+        "type": "object",
+        "properties": {
+            "stairs": {
+                "type": "array",
+                "description": "Per stair: the main settings, the baseline and walking line (coords and the raw edge / vertex data with their array indices) and the tread / riser counts; or an error.",
+                "items": { "type": "object" }
+            }
+        },
+        "additionalProperties": false,
+        "required": ["stairs"]
     }
             },{
                 "name": "CreateSlabs",
