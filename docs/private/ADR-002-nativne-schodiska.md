@@ -173,3 +173,12 @@ Príkazy: `CreateStairs.stair{…}` (aplikuje sa prvé, staršie polia ho prepí
 | GDL parametre podprvkov (libId) | libId áno | **nie** | podprvky sú GDL objekty; ich parametre API_StairTreadType neobsahuje (podobne ako pri zábradlí, ADR-001 R1) |
 
 Overiť naživo: `private-tests/test_stairs_full_coverage.py` (každé zapisovateľné pole: zmena → spätné čítanie, výsledok `private-tests/out/stair_coverage.json`, round-trip `createRequest`, recreate geometrie, experimentálny podprvok).
+
+## 13. Živý test buildu cdaaf69 (2026-10-22 večer) → opravy v `full_stairs`
+
+| Zistenie | Oprava |
+|---|---|
+| (k) z čítané 7,25 namiesto 4,25 (podlažie s úrovňou 3,00) | `basePlane.basePoint.z` umiestneného schodiska je **absolútne** (pri vytvorení sa zadáva relatívne k `floorInd`, ArchiCAD ho uloží absolútne); spätné čítanie pripočítavalo úroveň podlažia druhýkrát. `StairAbsoluteBaseZ` vo všetkých čítaniach (GetStairBaseLineData, GetStairDetails, createRequest, kontrola z pri recreate). Test (k) kontroluje aj 3D rozsah. |
+| Posledný bod baseline ArchiCAD posunie (1000 → 999,71) | správanie ArchiCADu (koniec baseline sa prispôsobí stupňom) – test to hlási ako INFO, kontrola polohy platí pre všetky body okrem posledného |
+| (e) hĺbka 0,3235 namiesto 0,34 | dôsledok predošlého bodu (baseline 5,78 → 5,50 m); NEOVERENÉ, prečo; test INFO |
+| `SetStairFloorPlanDisplay` vráti úspech, nič nezmení | `ACAPI_Element_Change` s maskou `fpdLayout` vráti NoError bez účinku. `ModifyStairs`: najprv `ACAPI_Element_ChangeParameters` (len nastavenia, GUID ostáva), spätné čítanie; ak nezachované → `ACAPI_Element_Change`, spätné čítanie; ak stále nie → recreate. `SetStairFloorPlanDisplay` ide cez `ModifyStairs`. |

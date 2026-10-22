@@ -4347,6 +4347,15 @@ API_Coord StairLocalToGlobal (const API_Plane3D& plane, const API_Coord& c)
     return g;
 }
 
+// The base plane of a PLACED stair is in project coordinates: basePoint.z is the absolute base
+// elevation (live 2026-10-22: created with floorInd = story at 3.00 and basePoint.z = 1.25, it read
+// back basePoint.z = 4.25; adding the story level again gave 7.25). Only the create input takes
+// basePoint.z relative to the home story (header.floorInd).
+double StairAbsoluteBaseZ (const API_Element& element)
+{
+    return element.stair.basePlane.basePoint.z;
+}
+
 bool GetStairFirstPointGlobal (const API_Guid& guid, API_Coord& result)
 {
     API_Element stair = {};
@@ -6046,7 +6055,7 @@ GS::Optional<GS::ObjectState> CreateStairsCommand::ChangeAfterCreation (API_Elem
         newElement.stair.basePlane.axisX = placed.stair.basePlane.axisX;
         newElement.stair.basePlane.axisY = placed.stair.basePlane.axisY;
         newElement.stair.basePlane.axisZ = placed.stair.basePlane.axisZ;
-        const double plainZ = GetZPos (placed.header.floorInd, placed.stair.basePlane.basePoint.z, stories);
+        const double plainZ = StairAbsoluteBaseZ (placed);
         API_Coord plainFirst = {};
         const bool hasPlainFirst = GetStairFirstPointGlobal (plainGuid, plainFirst);
         newElement.header.guid = APINULLGuid;
@@ -6087,7 +6096,7 @@ GS::Optional<GS::ObjectState> CreateStairsCommand::ChangeAfterCreation (API_Elem
             API_Element created = {};
             created.header.guid = element.header.guid;
             if (ACAPI_Element_Get (&created) == NoError) {
-                const double dz = plainZ - GetZPos (created.header.floorInd, created.stair.basePlane.basePoint.z, stories);
+                const double dz = plainZ - StairAbsoluteBaseZ (created);
                 if (std::fabs (dz) > 0.0005) {
                     GS::Array<API_Neig> toEdit = { API_Neig (element.header.guid) };
                     API_EditPars editPars = {};
@@ -6274,7 +6283,7 @@ GS::ObjectState GetStairBaseLineDataCommand::Execute (const GS::ObjectState& par
         os.Add ("walkingLineOffset", s.walkingLineOffset);
         {
             const Stories stories = GetStories ();
-            const double zBottom = GetZPos (element.header.floorInd, s.basePlane.basePoint.z, stories);
+            const double zBottom = StairAbsoluteBaseZ (element);
             os.Add ("zCoordinate", zBottom);
             os.Add ("zTop", zBottom + s.totalHeight);
             const auto homeStory = stories.find (element.header.floorInd);
@@ -10353,7 +10362,7 @@ GS::Optional<GS::UniString> SetStairFloorPlanDisplayCommand::GetRawResponseSchem
         "properties": {
             "stairs": {
                 "type": "array",
-                "description": "Per stair: the elementId after the change (ACAPI_Element_Change may give a new one) and the read-back floor plan / ceiling plan display; or an error.",
+                "description": "Per stair: the ModifyStairs result (elementId - new after a recreate -, method changeParameters | change | recreate, notKept) and the read-back floor plan / ceiling plan display; or an error.",
                 "items": { "type": "object" }
             }
         },
@@ -10362,85 +10371,72 @@ GS::Optional<GS::UniString> SetStairFloorPlanDisplayCommand::GetRawResponseSchem
     })";
 }
 
-GS::ObjectState SetStairFloorPlanDisplayCommand::Execute (const GS::ObjectState& parameters, GS::ProcessControl& /*processControl*/) const
+// Copies one field of any type (used to forward floorPlanDisplay without applyTo).
+static void CopyObjectStateField (const GS::ObjectState& from, const GS::String& key, GS::ObjectState& to)
+{
+    switch (from.GetType (key)) {
+        case GS::ObjectState::Bool:   { bool v = false; from.Get (key, v); to.Add (key, v); break; }
+        case GS::ObjectState::Int:
+        case GS::ObjectState::UInt:   { Int32 v = 0; from.Get (key, v); to.Add (key, v); break; }
+        case GS::ObjectState::Real:   { double v = 0.0; from.Get (key, v); to.Add (key, v); break; }
+        case GS::ObjectState::String: { GS::UniString v; from.Get (key, v); to.Add (key, v); break; }
+        case GS::ObjectState::Object: { const GS::ObjectState* v = from.Get (key); if (v != nullptr) to.Add (key, *v); break; }
+        default: break;
+    }
+}
+
+// Live 2026-10-22: ACAPI_Element_Change masked to fpdLayout answered NoError and changed nothing.
+// The command now goes through ModifyStairs (ChangeParameters -> Change -> recreate, with read-back).
+GS::ObjectState SetStairFloorPlanDisplayCommand::Execute (const GS::ObjectState& parameters, GS::ProcessControl& processControl) const
 {
     GS::Array<GS::ObjectState> elements;
     parameters.Get ("elements", elements);
     const GS::ObjectState* displayOs = parameters.Get ("floorPlanDisplay");
-
     GS::ObjectState response;
     const auto& stairs = response.AddList<GS::ObjectState> ("stairs");
     if (displayOs == nullptr) {
         stairs (CreateErrorResponse (APIERR_BADPARS, "floorPlanDisplay is missing"));
         return response;
     }
-    // Validate once before touching anything.
-    {
-        API_StairType probe = {};
-        bool a = false, b = false;
-        if (auto err = ApplyStairFloorPlanDisplay (probe, *displayOs, a, b); err.HasValue ()) {
-            stairs (CreateErrorResponse (APIERR_BADPARS, err.Get ()));
-            return response;
+    bool toFloorPlan = true, toCeiling = false;
+    GS::Array<GS::UniString> applyTo;
+    if (displayOs->Get ("applyTo", applyTo) && !applyTo.IsEmpty ()) {
+        toFloorPlan = false;
+        for (const GS::UniString& a : applyTo) {
+            if (a.IsEqual ("FloorPlan")) toFloorPlan = true;
+            else if (a.IsEqual ("CeilingPlan")) toCeiling = true;
         }
     }
-
-    // Elements are read outside the undoable command (see ProbeElementAccess / ADR-002 kap. 9).
-    GS::Array<API_Element> toChange;
-    GS::Array<GS::Optional<GS::ObjectState>> errors;
-    for (const GS::ObjectState& elementObj : elements) {
-        API_Element element = {};
-        const GS::ObjectState* elementId = elementObj.Get ("elementId");
-        if (elementId == nullptr) {
-            toChange.Push (element);
-            errors.Push (CreateErrorResponse (APIERR_BADPARS, "elementId is missing"));
-            continue;
-        }
-        element.header.guid = GetGuidFromObjectState (*elementId);
-        const GSErrCode err = ACAPI_Element_Get (&element);
-        if (err != NoError) {
-            errors.Push (CreateErrorResponse (err, "Failed to get element"));
-        } else if (GetElemTypeId (element.header) != API_StairID) {
-            errors.Push (CreateErrorResponse (APIERR_BADID, "Element is not a Stair"));
-        } else {
-            errors.Push (GS::Optional<GS::ObjectState> ());
-        }
-        toChange.Push (element);
-    }
-
-    ACAPI_CallUndoableCommand ("Set Stair Floor Plan Display", [&] () -> GSErrCode {
-        for (UIndex i = 0; i < toChange.GetSize (); ++i) {
-            if (errors[i].HasValue ()) {
-                continue;
-            }
-            API_Element& element = toChange[i];
-            bool changedFpd = false, changedRcpd = false;
-            ApplyStairFloorPlanDisplay (element.stair, *displayOs, changedFpd, changedRcpd);
-            API_Element mask = {};
-            ACAPI_ELEMENT_MASK_CLEAR (mask);
-            if (changedFpd)  ACAPI_ELEMENT_MASK_SET (mask, API_StairType, fpdLayout);
-            if (changedRcpd) ACAPI_ELEMENT_MASK_SET (mask, API_StairType, rcpdLayout);
-            const GSErrCode err = ACAPI_Element_Change (&element, &mask, nullptr, 0, true);
-            if (err != NoError) {
-                errors[i] = CreateErrorResponse (err, "ACAPI_Element_Change of the stair display failed (no recreate fallback: the placed stair's structure defaults read back as 0, a recreate from it would change the stair).");
-            }
-        }
-        return NoError;
+    GS::ObjectState layout;
+    displayOs->EnumerateFields ([&] (const GS::String& key) {
+        if (key != "applyTo") CopyObjectStateField (*displayOs, key, layout);
     });
+    GS::ObjectState stair;
+    if (toFloorPlan) stair.Add ("fpdLayout", layout);
+    if (toCeiling) stair.Add ("rcpdLayout", layout);
 
-    for (UIndex i = 0; i < toChange.GetSize (); ++i) {
-        if (errors[i].HasValue ()) {
-            stairs (errors[i].Get ());
-            continue;
+    GS::ObjectState modify;
+    const auto& items = modify.AddList<GS::ObjectState> ("stairs");
+    for (const GS::ObjectState& e : elements) {
+        GS::ObjectState item;
+        if (const GS::ObjectState* id = e.Get ("elementId"); id != nullptr) item.Add ("elementId", *id);
+        item.Add ("stair", stair);
+        items (item);
+    }
+    const GS::ObjectState modified = ModifyStairsCommand ().Execute (modify, processControl);
+    GS::Array<GS::ObjectState> results;
+    modified.Get ("stairs", results);
+    for (const GS::ObjectState& r : results) {
+        GS::ObjectState out = r;
+        if (const GS::ObjectState* id = r.Get ("elementId"); id != nullptr) {
+            API_Element readBack = {};
+            readBack.header.guid = GetGuidFromObjectState (*id);
+            if (ACAPI_Element_Get (&readBack) == NoError) {
+                out.Add ("floorPlanDisplay", CreateStairLayoutObjectState (readBack.stair.fpdLayout));
+                out.Add ("ceilingPlanDisplay", CreateStairLayoutObjectState (readBack.stair.rcpdLayout));
+            }
         }
-        API_Element readBack = {};
-        readBack.header.guid = toChange[i].header.guid;
-        GS::ObjectState os;
-        os.Add ("elementId", CreateGuidObjectState (readBack.header.guid));
-        if (ACAPI_Element_Get (&readBack) == NoError) {
-            os.Add ("floorPlanDisplay", CreateStairLayoutObjectState (readBack.stair.fpdLayout));
-            os.Add ("ceilingPlanDisplay", CreateStairLayoutObjectState (readBack.stair.rcpdLayout));
-        }
-        stairs (os);
+        stairs (out);
     }
     return response;
 }
@@ -10498,7 +10494,7 @@ static double StairGlobalPolylineLength (const API_StairPolylineData& line)
 // A CreateStairs item that rebuilds the stair: global baseline, absolute z + home story, the
 // turns / segments of every inner point / edge and the full writable "stair" settings (defaults
 // filled from the placed subelements; treadDepth from the baseline because it reads back as 1.0).
-static GS::ObjectState BuildStairCreateRequest (const API_Element& element, const API_ElementMemo& memo, API_StairType settings, const Stories& stories, bool treadDepthRequested)
+static GS::ObjectState BuildStairCreateRequest (const API_Element& element, const API_ElementMemo& memo, API_StairType settings, const Stories& /*stories*/, bool treadDepthRequested)
 {
     GS::ObjectState req;
     const API_StairPolylineData& line = memo.stairBaseLine;
@@ -10509,7 +10505,7 @@ static GS::ObjectState BuildStairCreateRequest (const API_Element& element, cons
             points (Create2DCoordinateObjectState (StairLocalToGlobal (element.stair.basePlane, (*line.coords)[k])));
         }
     }
-    req.Add ("zCoordinate", GetZPos (element.header.floorInd, element.stair.basePlane.basePoint.z, stories));
+    req.Add ("zCoordinate", StairAbsoluteBaseZ (element));
     req.Add ("floorIndex", static_cast<Int32> (element.header.floorInd));
     const Int32 vOffset = StairDataIndexOffset (line.vertexData, nCoords);
     const auto& turns = req.AddList<GS::ObjectState> ("turns");
@@ -10563,7 +10559,7 @@ static GS::ObjectState BuildStairDetails (const API_Element& element, const API_
     GS::ObjectState os;
     os.Add ("elementId", CreateGuidObjectState (element.header.guid));
     os.Add ("floorIndex", static_cast<Int32> (element.header.floorInd));
-    const double zBottom = GetZPos (element.header.floorInd, stair.basePlane.basePoint.z, stories);
+    const double zBottom = StairAbsoluteBaseZ (element);
     os.Add ("zCoordinate", zBottom);
     os.Add ("zTop", zBottom + stair.totalHeight);
     os.Add ("stair", ReadStairType (stair, true));
@@ -10817,6 +10813,7 @@ GS::ObjectState ModifyStairsCommand::Execute (const GS::ObjectState& parameters,
         GS::ObjectState result;
         result.Add ("previousElementId", CreateGuidObjectState (element.header.guid));
         API_Guid finalGuid = element.header.guid;
+        API_Guid currentGuid = element.header.guid;   // the stair to delete after a recreate
         GS::UniString changeError;
         bool done = false;
 
@@ -10825,17 +10822,58 @@ GS::ObjectState ModifyStairsCommand::Execute (const GS::ObjectState& parameters,
                 API_Element mask = {};
                 ACAPI_ELEMENT_MASK_CLEAR (mask);
                 SetStairMaskForKeys (mask, touched);
-                GSErrCode changeErr = NoError;
+                // Live 2026-10-22: ACAPI_Element_Change with a fpdLayout mask answered NoError and
+                // changed nothing. So: ACAPI_Element_ChangeParameters (settings only, keeps the GUID),
+                // read back; if the request is not kept, ACAPI_Element_Change, read back; if still
+                // not kept, the recreate below (recreateIfChangeFails).
+                const auto notKeptOf = [&] (const API_Guid& guid) {
+                    GS::Array<GS::UniString> notKeptList;
+                    API_Element rb = {};
+                    rb.header.guid = guid;
+                    API_ElementMemo rbMemo = {};
+                    const GS::OnExit rbGuard ([&rbMemo] () { ACAPI_DisposeElemMemoHdls (&rbMemo); });
+                    if (ACAPI_Element_Get (&rb) != NoError || ACAPI_Element_GetMemo (guid, &rbMemo, APIMemoMask_All) != NoError) {
+                        notKeptList.Push ("stair (read-back failed)");
+                        return notKeptList;
+                    }
+                    FillStairDefaultsFromSubelements (rb.stair, rbMemo);
+                    CollectNotKept (*stairRequest, ReadStairType (rb.stair, false), "stair", notKeptList);
+                    return notKeptList;
+                };
+                GSErrCode paramErr = NoError;
                 ACAPI_CallUndoableCommand ("Modify Stair", [&] () -> GSErrCode {
-                    changeErr = ACAPI_Element_Change (&work, &mask, nullptr, 0, true);
-                    return changeErr;
+                    GS::Array<API_Guid> guids;
+                    guids.Push (element.header.guid);
+                    paramErr = ACAPI_Element_ChangeParameters (guids, &work, nullptr, &mask);
+                    return paramErr;
                 });
-                if (changeErr == NoError) {
-                    finalGuid = work.header.guid;
+                GS::Array<GS::UniString> notKeptNow = paramErr == NoError ? notKeptOf (element.header.guid) : GS::Array<GS::UniString> ();
+                if (paramErr == NoError && notKeptNow.IsEmpty ()) {
                     done = true;
-                    result.Add ("method", GS::UniString ("change"));
+                    result.Add ("method", GS::UniString ("changeParameters"));
                 } else {
-                    changeError = GS::UniString::Printf ("ACAPI_Element_Change failed (%d)", (int) changeErr);
+                    changeError = paramErr != NoError
+                        ? GS::UniString::Printf ("ACAPI_Element_ChangeParameters failed (%d)", (int) paramErr)
+                        : "ACAPI_Element_ChangeParameters did not keep: " + JoinStairErrors (notKeptNow);
+                    API_Element changed = work;
+                    GSErrCode changeErr = NoError;
+                    ACAPI_CallUndoableCommand ("Modify Stair", [&] () -> GSErrCode {
+                        changeErr = ACAPI_Element_Change (&changed, &mask, nullptr, 0, true);
+                        return changeErr;
+                    });
+                    if (changeErr == NoError) {
+                        currentGuid = changed.header.guid;
+                        notKeptNow = notKeptOf (currentGuid);
+                        if (notKeptNow.IsEmpty ()) {
+                            finalGuid = currentGuid;
+                            done = true;
+                            result.Add ("method", GS::UniString ("change"));
+                        } else {
+                            changeError += "; ACAPI_Element_Change did not keep: " + JoinStairErrors (notKeptNow);
+                        }
+                    } else {
+                        changeError += GS::UniString::Printf ("; ACAPI_Element_Change failed (%d)", (int) changeErr);
+                    }
                 }
             } else {
                 done = true;
@@ -10921,7 +10959,7 @@ GS::ObjectState ModifyStairsCommand::Execute (const GS::ObjectState& parameters,
             }
             finalGuid = GetGuidFromObjectState (*newId);
             ACAPI_CallUndoableCommand ("Modify Stair (delete the replaced stair)", [&] () -> GSErrCode {
-                return ACAPI_Element_Delete ({ element.header.guid });
+                return ACAPI_Element_Delete ({ currentGuid });
             });
             result.Add ("method", GS::UniString ("recreate"));
             done = true;

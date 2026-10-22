@@ -3079,7 +3079,7 @@ var gCommands = [{
         "properties": {
             "stairs": {
                 "type": "array",
-                "description": "Per stair: the elementId after the change (ACAPI_Element_Change may give a new one) and the read-back floor plan / ceiling plan display; or an error.",
+                "description": "Per stair: the ModifyStairs result (elementId - new after a recreate -, method changeParameters | change | recreate, notKept) and the read-back floor plan / ceiling plan display; or an error.",
                 "items": { "type": "object" }
             }
         },
