@@ -4816,6 +4816,15 @@ GS::ObjectState DeleteElementsCommand::Execute (const GS::ObjectState& parameter
 
     const GS::Array<API_Guid> elemGuids = elements.Transform<API_Guid> (GetGuidFromElementsArrayItem);
 
+    // Private build: an item that names no element ({"guid": ...} instead of {"elementId": {...}})
+    // or an element that does not exist BEFORE the delete is reported as a failure. Upstream
+    // reports both as success ("never in the project to begin with"), which hid wrong calls.
+    GS::Array<bool> existedBefore;
+    for (const API_Guid& elemGuid : elemGuids) {
+        API_Elem_Head head = {};
+        existedBefore.Push (elemGuid != APINULLGuid && LoadElementHeaderByGuid (elemGuid, head));
+    }
+
     GSErrCode deleteErr = NoError;
     if (!elemGuids.IsEmpty ()) {
         ACAPI_CallUndoableCommand ("DeleteElementsCommand", [&]() {
@@ -4834,7 +4843,14 @@ GS::ObjectState DeleteElementsCommand::Execute (const GS::ObjectState& parameter
     // afterwards. An element that is gone is the asked-for outcome however it
     // got there: deleted by this call, deleted with its owner, or never in the
     // project to begin with.
-    for (const API_Guid& elemGuid : elemGuids) {
+    for (UIndex i = 0; i < elemGuids.GetSize (); ++i) {
+        const API_Guid& elemGuid = elemGuids[i];
+        if (!existedBefore[i]) {
+            executionResults (elemGuid == APINULLGuid
+                ? CreateFailedExecutionResult (APIERR_BADPARS, "The item names no element (expected {\"elementId\": {\"guid\": ...}}).")
+                : CreateFailedExecutionResult (APIERR_BADID, "Element does not exist (nothing was deleted)."));
+            continue;
+        }
         API_Elem_Head elemHead = {};
         if (!LoadElementHeaderByGuid (elemGuid, elemHead)) {
             executionResults (CreateSuccessfulExecutionResult ());

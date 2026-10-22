@@ -4798,58 +4798,12 @@ GS::Optional<GS::UniString> CreateStairsCommand::GetInputParametersSchema () con
     })";
 }
 
-GS::Optional<GS::ObjectState> CreateStairsCommand::SetTypeSpecificParameters (API_Element& element, API_ElementMemo& memo, const Stories& stories, const GS::ObjectState& parameters) const
+// Writes every API_StairType field the request names (story / z, sizes, steps, rules, lines,
+// structure). Used for the create and again for the template of the turn recreate, which must
+// not inherit what Archicad wrote back into the placed stair (Eden 2026-10-22: walking line,
+// going >= 0.25, z relative to the home story).
+static GS::Optional<GS::ObjectState> ApplyStairElementParameters (API_Element& element, const Stories& stories, const GS::ObjectState& parameters)
 {
-    GS::Array<GS::ObjectState> baseLinePoints;
-    parameters.Get ("baseLinePoints", baseLinePoints);
-    if (baseLinePoints.GetSize () < 2) {
-        return CreateErrorResponse (APIERR_BADPARS, "baseLinePoints must have at least 2 points.");
-    }
-    if (baseLinePoints.GetSize () > static_cast<UIndex> (StairMaxBaseLinePoints)) {
-        return CreateErrorResponse (APIERR_BADPARS, GS::UniString::Printf ("baseLinePoints must have at most %d points.", StairMaxBaseLinePoints));
-    }
-    const Int32 nCoords = static_cast<Int32> (baseLinePoints.GetSize ());
-    GS::Array<API_Coord> points;
-    for (const GS::ObjectState& p : baseLinePoints) {
-        const API_Coord c = Get2DCoordinateFromObjectState (p);
-        if (!std::isfinite (c.x) || !std::isfinite (c.y)) {
-            return CreateErrorResponse (APIERR_BADPARS, "baseLinePoints contains a non-finite coordinate.");
-        }
-        points.Push (c);
-    }
-    for (Int32 i = 0; i + 1 < nCoords; ++i) {
-        const double len = std::hypot (points[i + 1].x - points[i].x, points[i + 1].y - points[i].y);
-        if (len < StairMinEdgeLength) {
-            return CreateErrorResponse (APIERR_BADPARS, GS::UniString::Printf ("Baseline edge %d is %.4f m long; the minimum is %.2f m.", i, len, StairMinEdgeLength));
-        }
-    }
-    for (Int32 i = 1; i + 1 < nCoords; ++i) {
-        // A turn back on itself (180 degrees) gives a degenerate stair.
-        const double ax = points[i].x - points[i - 1].x, ay = points[i].y - points[i - 1].y;
-        const double bx = points[i + 1].x - points[i].x, by = points[i + 1].y - points[i].y;
-        const double cross = ax * by - ay * bx;
-        const double dot = ax * bx + ay * by;
-        if (dot < 0.0 && std::fabs (cross) < 1e-9 * std::hypot (ax, ay) * std::hypot (bx, by) + 1e-12) {
-            return CreateErrorResponse (APIERR_BADPARS, GS::UniString::Printf ("The baseline turns back on itself at point %d.", i));
-        }
-    }
-
-    // Turns and segments are validated here so a bad request creates nothing.
-    {
-        GS::Array<StairTurnRequest> turns;
-        GS::Array<StairSegmentRequest> segments;
-        if (auto err = ParseStairTurns (parameters, nCoords, turns); err.HasValue ()) {
-            return CreateErrorResponse (APIERR_BADPARS, err.Get ());
-        }
-        if (auto err = ParseStairSegments (parameters, nCoords, segments); err.HasValue ()) {
-            return CreateErrorResponse (APIERR_BADPARS, err.Get ());
-        }
-        GS::UniString mode;
-        if (parameters.Get ("turnApplyMode", mode) && !mode.IsEqual ("recreate") && !mode.IsEqual ("change")) {
-            return CreateErrorResponse (APIERR_BADPARS, "turnApplyMode must be recreate or change.");
-        }
-    }
-
     double zCoordinate = 0.0;
     parameters.Get ("zCoordinate", zCoordinate);
     const auto floorIndexAndOffset = ResolveFloorIndexAndOffset (parameters, "floorIndex", zCoordinate, stories);
@@ -4986,6 +4940,67 @@ GS::Optional<GS::ObjectState> CreateStairsCommand::SetTypeSpecificParameters (AP
         SetStairRule (*rulesOs, "stairPitchMax", rules.stairPitchMaxValue, rules.stairPitchMaxApplied);
     }
 
+    return {};
+}
+
+GS::Optional<GS::ObjectState> CreateStairsCommand::SetTypeSpecificParameters (API_Element& element, API_ElementMemo& memo, const Stories& stories, const GS::ObjectState& parameters) const
+{
+    GS::Array<GS::ObjectState> baseLinePoints;
+    parameters.Get ("baseLinePoints", baseLinePoints);
+    if (baseLinePoints.GetSize () < 2) {
+        return CreateErrorResponse (APIERR_BADPARS, "baseLinePoints must have at least 2 points.");
+    }
+    if (baseLinePoints.GetSize () > static_cast<UIndex> (StairMaxBaseLinePoints)) {
+        return CreateErrorResponse (APIERR_BADPARS, GS::UniString::Printf ("baseLinePoints must have at most %d points.", StairMaxBaseLinePoints));
+    }
+    const Int32 nCoords = static_cast<Int32> (baseLinePoints.GetSize ());
+    GS::Array<API_Coord> points;
+    for (const GS::ObjectState& p : baseLinePoints) {
+        const API_Coord c = Get2DCoordinateFromObjectState (p);
+        if (!std::isfinite (c.x) || !std::isfinite (c.y)) {
+            return CreateErrorResponse (APIERR_BADPARS, "baseLinePoints contains a non-finite coordinate.");
+        }
+        points.Push (c);
+    }
+    for (Int32 i = 0; i + 1 < nCoords; ++i) {
+        const double len = std::hypot (points[i + 1].x - points[i].x, points[i + 1].y - points[i].y);
+        if (len < StairMinEdgeLength) {
+            return CreateErrorResponse (APIERR_BADPARS, GS::UniString::Printf ("Baseline edge %d is %.4f m long; the minimum is %.2f m.", i, len, StairMinEdgeLength));
+        }
+    }
+    for (Int32 i = 1; i + 1 < nCoords; ++i) {
+        // A turn back on itself (180 degrees) gives a degenerate stair.
+        const double ax = points[i].x - points[i - 1].x, ay = points[i].y - points[i - 1].y;
+        const double bx = points[i + 1].x - points[i].x, by = points[i + 1].y - points[i].y;
+        const double cross = ax * by - ay * bx;
+        const double dot = ax * bx + ay * by;
+        if (dot < 0.0 && std::fabs (cross) < 1e-9 * std::hypot (ax, ay) * std::hypot (bx, by) + 1e-12) {
+            return CreateErrorResponse (APIERR_BADPARS, GS::UniString::Printf ("The baseline turns back on itself at point %d.", i));
+        }
+    }
+
+    // Turns and segments are validated here so a bad request creates nothing.
+    {
+        GS::Array<StairTurnRequest> turns;
+        GS::Array<StairSegmentRequest> segments;
+        if (auto err = ParseStairTurns (parameters, nCoords, turns); err.HasValue ()) {
+            return CreateErrorResponse (APIERR_BADPARS, err.Get ());
+        }
+        if (auto err = ParseStairSegments (parameters, nCoords, segments); err.HasValue ()) {
+            return CreateErrorResponse (APIERR_BADPARS, err.Get ());
+        }
+        GS::UniString mode;
+        if (parameters.Get ("turnApplyMode", mode) && !mode.IsEqual ("recreate") && !mode.IsEqual ("change")) {
+            return CreateErrorResponse (APIERR_BADPARS, "turnApplyMode must be recreate or change.");
+        }
+    }
+
+    // All API_StairType fields of the request; the same function re-applies them to the
+    // template of the recreate in ChangeAfterCreation.
+    if (auto err = ApplyStairElementParameters (element, stories, parameters); err.HasValue ()) {
+        return err;
+    }
+
     // Free existing baseline handles from defaults
     if (memo.stairBaseLine.coords != nullptr) {
         BMKillHandle (reinterpret_cast<GSHandle*>(&memo.stairBaseLine.coords));
@@ -5030,7 +5045,7 @@ GS::Optional<GS::ObjectState> CreateStairsCommand::SetTypeSpecificParameters (AP
     return {};
 }
 
-GS::Optional<GS::ObjectState> CreateStairsCommand::ChangeAfterCreation (API_Element& element, const Stories& /*stories*/, const GS::ObjectState& parameters) const
+GS::Optional<GS::ObjectState> CreateStairsCommand::ChangeAfterCreation (API_Element& element, const Stories& stories, const GS::ObjectState& parameters) const
 {
     GS::Array<GS::ObjectState> baseLinePoints;
     parameters.Get ("baseLinePoints", baseLinePoints);
@@ -5108,12 +5123,25 @@ GS::Optional<GS::ObjectState> CreateStairsCommand::ChangeAfterCreation (API_Elem
         }
         // The template is the placed plain stair as Archicad stores it: its basePlane carries the
         // origin the local read-back coords refer to (the pre-create struct does not).
-        API_Element newElement = {};
-        newElement.header.guid = plainGuid;
-        err = ACAPI_Element_Get (&newElement);
+        // Template: the element the plain create was made from, with every requested field written
+        // again (Archicad may have written derived values back into it), and only the origin and
+        // axes of the base plane taken from the placed stair - the local read-back coords refer to it.
+        API_Element placed = {};
+        placed.header.guid = plainGuid;
+        err = ACAPI_Element_Get (&placed);
         if (err != NoError) {
             return fail (err, "Reading the created Stair back failed.", plainGuid);
         }
+        API_Element newElement = element;
+        if (auto paramErr = ApplyStairElementParameters (newElement, stories, parameters); paramErr.HasValue ()) {
+            return fail (APIERR_BADPARS, "Re-applying the parameters for the recreate failed.", plainGuid);
+        }
+        newElement.stair.basePlane.basePoint.x = placed.stair.basePlane.basePoint.x;
+        newElement.stair.basePlane.basePoint.y = placed.stair.basePlane.basePoint.y;
+        newElement.stair.basePlane.axisX = placed.stair.basePlane.axisX;
+        newElement.stair.basePlane.axisY = placed.stair.basePlane.axisY;
+        newElement.stair.basePlane.axisZ = placed.stair.basePlane.axisZ;
+        const double plainZ = GetZPos (placed.header.floorInd, placed.stair.basePlane.basePoint.z, stories);
         API_Coord plainFirst = {};
         const bool hasPlainFirst = GetStairFirstPointGlobal (plainGuid, plainFirst);
         newElement.header.guid = APINULLGuid;
@@ -5147,6 +5175,27 @@ GS::Optional<GS::ObjectState> CreateStairsCommand::ChangeAfterCreation (API_Elem
                 if (GetStairFirstPointGlobal (element.header.guid, newFirst) && std::hypot (plainFirst.x - newFirst.x, plainFirst.y - newFirst.y) > 0.0005) {
                     return fail (APIERR_GENERAL, GS::UniString::Printf ("The Stair with the turns is still %.3f / %.3f m off after moving it back.",
                         newFirst.x - plainFirst.x, newFirst.y - plainFirst.y), element.header.guid);
+                }
+            }
+        }
+        {
+            API_Element created = {};
+            created.header.guid = element.header.guid;
+            if (ACAPI_Element_Get (&created) == NoError) {
+                const double dz = plainZ - GetZPos (created.header.floorInd, created.stair.basePlane.basePoint.z, stories);
+                if (std::fabs (dz) > 0.0005) {
+                    GS::Array<API_Neig> toEdit = { API_Neig (element.header.guid) };
+                    API_EditPars editPars = {};
+                    editPars.typeID = APIEdit_Drag;
+                    editPars.endC.z = dz;
+                    editPars.withDelete = true;
+                    err = ACAPI_Element_Edit (&toEdit, editPars);
+                    if (err != NoError) {
+                        return fail (err, GS::UniString::Printf ("The Stair with the turns was created %.3f m off in z and moving it back failed.", -dz), element.header.guid);
+                    }
+                    if (!toEdit.IsEmpty () && toEdit[0].guid != APINULLGuid) {
+                        element.header.guid = toEdit[0].guid;
+                    }
                 }
             }
         }
