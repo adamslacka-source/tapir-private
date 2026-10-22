@@ -2942,6 +2942,10 @@ var gCommands = [{
                             "type": "boolean",
                             "description": "Optional. API_StairType::extraBottomTread. Exact effect on the first step NOT verified - see ADR-002."
                         },
+                        "stair": {
+                            "type": "object",
+                            "description": "Optional. Any writable API_StairType member under its API name, nested as GetStairDetails returns it in 'stair' (rules, tread / riser / structure defaults per run / landing and side, fpdLayout / rcpdLayout, symbols, headroom, ...). Applied first; the other fields of this item override it. Unknown or read-only keys are an error. Coverage table: ADR-002 kap. 12."
+                        },
                         "floorPlanDisplay": {
     "type": "object",
     "description": "Floor plan display of the stair (API_StairLayoutData of fpdLayout, and of rcpdLayout with applyTo). Only the given fields are written.",
@@ -3076,6 +3080,93 @@ var gCommands = [{
             "stairs": {
                 "type": "array",
                 "description": "Per stair: the elementId after the change (ACAPI_Element_Change may give a new one) and the read-back floor plan / ceiling plan display; or an error.",
+                "items": { "type": "object" }
+            }
+        },
+        "additionalProperties": false,
+        "required": ["stairs"]
+    }
+            },{
+                "name": "GetStairDetails",
+                "version": "1.7.2",
+                "description": "Returns every API_StairType setting of Stairs under its API name (rules, tread / riser / structure defaults, floor plan and ceiling plan display, symbols, headroom...), the placed treads / risers / structures, the baseline, walking lines and boundaries, and a CreateStairs item that rebuilds the stair.",
+                "inputScheme": {
+        "type": "object",
+        "properties": {
+            "elements": {
+                "type": "array",
+                "description": "The Stair elements.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "elementId": { "$ref": "#/ElementId" }
+                    },
+                    "additionalProperties": false,
+                    "required": ["elementId"]
+                }
+            }
+        },
+        "additionalProperties": false,
+        "required": ["elements"]
+    },
+                "outputScheme": {
+        "type": "object",
+        "properties": {
+            "stairs": {
+                "type": "array",
+                "description": "Per stair: 'stair' = every API_StairType member under its API name (read-only ones included), 'subelements' (treads / risers / structures as placed), baseLine / walkingLine / customWalkingLine / centerWalkingLine / left and right boundary, and 'createRequest' - a CreateStairs item that rebuilds the stair; or an error.",
+                "items": { "type": "object" }
+            }
+        },
+        "additionalProperties": false,
+        "required": ["stairs"]
+    }
+            },{
+                "name": "ModifyStairs",
+                "version": "1.7.2",
+                "description": "Changes existing Stairs: any writable API_StairType setting with ACAPI_Element_Change (masked to the touched members); baseline, z, story, turns or segments - or a setting Change refuses - by recreating the stair at the same place (new GUID reported). Reports the requested fields Archicad did not keep.",
+                "inputScheme": {
+        "type": "object",
+        "properties": {
+            "stairs": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "elementId": { "$ref": "#/ElementId" },
+                        "stair": { "type": "object", "description": "Any writable API_StairType member under its API name, nested as GetStairDetails returns it (see ADR-002 coverage table). Only the given fields change." },
+                        "baseLinePoints": { "type": "array", "items": { "$ref": "#/Coordinate2D" }, "minItems": 2, "description": "New baseline (global). Forces a recreate." },
+                        "zCoordinate": { "type": "number", "description": "New absolute base z. Forces a recreate." },
+                        "floorIndex": { "type": "integer", "description": "New home story (with zCoordinate). Forces a recreate." },
+                        "turns": { "type": "array", "items": { "type": "object" }, "description": "As in CreateStairs (all inner points; missing ones keep the current turn). Forces a recreate." },
+                        "segments": { "type": "array", "items": { "type": "object" }, "description": "As in CreateStairs. Forces a recreate." },
+                        "subelements": {
+                            "type": "object",
+                            "description": "Experimental (NOT verified live): fields of single placed subelements, by their index in GetStairDetails.subelements, changed through the stair memo (APIMemoMask_StairTread / Riser / Structure).",
+                            "properties": {
+                                "treads": { "type": "array", "items": { "type": "object" } },
+                                "risers": { "type": "array", "items": { "type": "object" } },
+                                "structures": { "type": "array", "items": { "type": "object" } }
+                            },
+                            "additionalProperties": false
+                        },
+                        "forceRecreate": { "type": "boolean", "description": "Recreate instead of ACAPI_Element_Change." },
+                        "recreateIfChangeFails": { "type": "boolean", "description": "Default true: when ACAPI_Element_Change refuses the change, the stair is recreated (new GUID, same position)." }
+                    },
+                    "additionalProperties": false,
+                    "required": ["elementId"]
+                }
+            }
+        },
+        "additionalProperties": false,
+        "required": ["stairs"]
+    },
+                "outputScheme": {
+        "type": "object",
+        "properties": {
+            "stairs": {
+                "type": "array",
+                "description": "Per stair: elementId (new one after a recreate), previousElementId, method ('change' | 'recreate'), changeError (why Change was not used), notKept (requested fields Archicad did not keep, from the read-back); or an error.",
                 "items": { "type": "object" }
             }
         },
