@@ -18,6 +18,8 @@ It creates, far from the project origin (x >= 1100 m):
   (b) an L-shaped stair with winders in the corner (turn: Winder),
   (c) a SCH2-like U-shaped stair: winders in the first corner, a landing in the second,
   (d) INFO only: a straight stair with a landing segment between two collinear flights,
+  (e) going 0.34 m at riser 0.172 m (2h+g = 0.684) with applyRules false + z read-back,
+  (f) INFO: extraTopTread / extraBottomTread variants, (g) INFO: structure params / hidden structure,
 then reads every stair back with GetStairBaseLineData and prints PASS/FAIL.
 Only the Python standard library is used.
 """
@@ -263,6 +265,67 @@ try:
         Info ('(d) straight stair with landing segment', json.dumps (element))
 except Exception as e:
     Info ('(d) straight stair with landing segment', str (e))
+
+def ZRange (element):
+    zs = []
+    def Walk (o):
+        if isinstance (o, dict):
+            if isinstance (o.get ('z'), (int, float)):
+                zs.append (o['z'])
+            for v in o.values ():
+                Walk (v)
+        elif isinstance (o, list):
+            for v in o:
+                Walk (v)
+    try:
+        Walk (Tapir ('Get3DGeometryOfElements', {'elements': [element]}))
+    except Exception as e:
+        print ('       Get3DGeometryOfElements failed: {}'.format (e))
+    return (min (zs), max (zs)) if zs else (None, None)
+
+
+# --- (e) going 340 mm at riser 172 mm (2h+g = 684 > 650): rules off --------------
+xe = ORIGIN_X + 40.0
+elementE, stairE = CreateStair ('(e) going 0.34 with applyRules false', {
+    'baseLinePoints': [{'x': xe, 'y': y0}, {'x': xe, 'y': y0 + 17 * 0.34}],
+    'treadDepth': 0.34,
+})
+if stairE and 'error' not in stairE:
+    Check ('(e) going kept at 0.34', abs (stairE['treadDepth'] - 0.34) < 0.001, '{:.4f}'.format (stairE['treadDepth']))
+    Check ('(e) riser 3.10/18', abs (stairE['riserHeight'] - HEIGHT / RISERS) < 0.001, '{:.4f}'.format (stairE['riserHeight']))
+    Check ('(e) read back zCoordinate 0 / zTop 3.10', abs (stairE['zCoordinate']) < 0.001 and abs (stairE['zTop'] - HEIGHT) < 0.001,
+           'z {} .. {}'.format (stairE.get ('zCoordinate'), stairE.get ('zTop')))
+    rules = stairE['rules']
+    Info ('(e) 2R+G rule after applyRules false', 'max {} applied={}'.format (rules['twoRiserPlusGoingMax'], rules['twoRiserPlusGoingMaxApplied']))
+    zMin, zMax = ZRange (elementE)
+    Info ('(e) 3D z range (structure below 0 = the 100 mm problem)', '{} .. {}'.format (zMin, zMax))
+
+# --- (f) INFO: extraTopTread / extraBottomTread effect --------------------------
+for i, (top, bottom) in enumerate (((False, False), (True, False), (False, True), (True, True))):
+    element, stair = CreateStair ('(f) extraTopTread={} extraBottomTread={}'.format (top, bottom), {
+        'baseLinePoints': [{'x': xe + 4.0 + 2.5 * i, 'y': y0}, {'x': xe + 4.0 + 2.5 * i, 'y': y0 + 17 * GOING}],
+        'extraTopTread': top, 'extraBottomTread': bottom,
+    })
+    if stair and 'error' not in stair:
+        Info ('(f) top={} bottom={}'.format (top, bottom), 'treads={} risers={} read back top={} bottom={} 3D z={}'.format (
+            stair['treadCount'], stair['riserCount'], stair['extraTopTread'], stair['extraBottomTread'], ZRange (element)))
+
+# --- (g) INFO: monolith structure with explicit thickness / flat bottom ---------
+element, stair = CreateStair ('(g) monolith structure params', {
+    'baseLinePoints': [{'x': xe + 16.0, 'y': y0}, {'x': xe + 16.0, 'y': y0 + 17 * GOING}],
+    'structure': {'structType': 'Monolith', 'bottomType': 'Flat', 'monolithThickness': 0.15, 'bottomOversize': 0.0, 'thickness': 0.15},
+})
+if stair and 'error' not in stair:
+    under = [s for s in stair['structureDefaults'] if s['role'] == 'Run' and s['side'] == 'Under']
+    Info ('(g) structure read back', json.dumps (under))
+    Info ('(g) 3D z range', str (ZRange (element)))
+element, stair = CreateStair ('(g2) structure hidden', {
+    'baseLinePoints': [{'x': xe + 18.5, 'y': y0}, {'x': xe + 18.5, 'y': y0 + 17 * GOING}],
+    'structureVisible': False,
+})
+if stair and 'error' not in stair:
+    Check ('(g2) structureVisible false kept', stair['structureVisible'] is False, str (stair['structureVisible']))
+    Info ('(g2) 3D z range', str (ZRange (element)))
 
 # --- validation: bad input must give an error, not a crash ----------------------
 try:

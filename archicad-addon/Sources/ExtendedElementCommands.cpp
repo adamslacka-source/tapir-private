@@ -4442,6 +4442,100 @@ void SetStairRule (const GS::ObjectState& rules, const char* field, double& valu
     }
 }
 
+const std::initializer_list<std::pair<const char*, API_StairStructureTypeID>> StairStructTypeTable = {
+    { "Side", APIST_Side }, { "Monolith", APIST_Monolith }, { "BeamSupport", APIST_BeamSupport }, { "CantileveredSupport", APIST_CantileveredSupport }
+};
+const std::initializer_list<std::pair<const char*, API_StairStructBottomTypeID>> StairStructBottomTable = {
+    { "Stepped", APISB_Stepped }, { "Flat", APISB_Flat }, { "Smooth", APISB_Smooth }
+};
+
+const char* StairStructTypeName (API_StairStructureTypeID t)
+{
+    switch (t) {
+        case APIST_Side:                return "Side";
+        case APIST_Monolith:            return "Monolith";
+        case APIST_BeamSupport:         return "BeamSupport";
+        case APIST_CantileveredSupport: return "CantileveredSupport";
+        default:                        return "Unknown";
+    }
+}
+
+const char* StairStructBottomName (API_StairStructBottomTypeID t)
+{
+    switch (t) {
+        case APISB_Stepped: return "Stepped";
+        case APISB_Flat:    return "Flat";
+        case APISB_Smooth:  return "Smooth";
+        default:            return "Unknown";
+    }
+}
+
+// Writes only the given fields into API_StairType::structure[role][side]. The monolith fields live
+// in a union with the side-stringer data, so they are written only where the (resulting)
+// structType is Monolith - never into a side / beam structure.
+GS::Optional<GS::UniString> ApplyStairStructureRequest (API_StairType& stair, const GS::ObjectState& os)
+{
+    bool roles[API_StairPartRoleNum] = { true, true };
+    bool sides[API_StairStructureSideNum] = { true, true, true };
+    GS::Array<GS::UniString> names;
+    if (os.Get ("roles", names) && !names.IsEmpty ()) {
+        roles[APISR_Run] = roles[APISR_Landing] = false;
+        for (const GS::UniString& n : names) {
+            if (n.IsEqual ("Run")) roles[APISR_Run] = true;
+            else if (n.IsEqual ("Landing")) roles[APISR_Landing] = true;
+            else return GS::UniString ("structure.roles: unknown role ") + n;
+        }
+    }
+    names.Clear ();
+    if (os.Get ("sides", names) && !names.IsEmpty ()) {
+        sides[APISS_LeftSide] = sides[APISS_RightSide] = sides[APISS_UnderSide] = false;
+        for (const GS::UniString& n : names) {
+            if (n.IsEqual ("Left")) sides[APISS_LeftSide] = true;
+            else if (n.IsEqual ("Right")) sides[APISS_RightSide] = true;
+            else if (n.IsEqual ("Under")) sides[APISS_UnderSide] = true;
+            else return GS::UniString ("structure.sides: unknown side ") + n;
+        }
+    }
+    GS::Optional<API_StairStructureTypeID> structType;
+    GS::Optional<API_StairStructBottomTypeID> bottomType;
+    if (auto err = GetOptionalStairEnum (os, "structType", StairStructTypeTable, structType); err.HasValue ()) return err;
+    if (auto err = GetOptionalStairEnum (os, "bottomType", StairStructBottomTable, bottomType); err.HasValue ()) return err;
+    const auto thickness = GetOptionalDouble (os, "thickness");
+    const auto horizontalThickness = GetOptionalDouble (os, "horizontalThickness");
+    const auto monolithThickness = GetOptionalDouble (os, "monolithThickness");
+    const auto bottomOversize = GetOptionalDouble (os, "bottomOversize");
+    bool thinning = false;
+    const bool hasThinning = os.Get ("thinning", thinning);
+    const bool wantsMonolithFields = monolithThickness.HasValue () || bottomOversize.HasValue () || hasThinning;
+    for (const GS::Optional<double>* v : { &thickness, &horizontalThickness, &monolithThickness, &bottomOversize }) {
+        if (v->HasValue () && (!std::isfinite (v->Get ()) || v->Get () < 0.0 || v->Get () > 5.0)) {
+            return GS::UniString ("structure: lengths must be 0..5 m.");
+        }
+    }
+    bool monolithWritten = !wantsMonolithFields;
+    for (int role = 0; role < API_StairPartRoleNum; ++role) {
+        if (!roles[role]) continue;
+        for (int side = 0; side < API_StairStructureSideNum; ++side) {
+            if (!sides[side]) continue;
+            API_StairStructureType& st = stair.structure[role][side];
+            if (structType.HasValue ())          st.structType = structType.Get ();
+            if (bottomType.HasValue ())          st.bottomType = bottomType.Get ();
+            if (thickness.HasValue ())           st.thickness = thickness.Get ();
+            if (horizontalThickness.HasValue ()) st.horizontalThickness = horizontalThickness.Get ();
+            if (wantsMonolithFields && st.structType == APIST_Monolith) {
+                if (monolithThickness.HasValue ()) st.data.monolith.monolithThickness = monolithThickness.Get ();
+                if (bottomOversize.HasValue ())    st.data.monolith.bottomOversize = bottomOversize.Get ();
+                if (hasThinning)                   st.data.monolith.thinning = thinning;
+                monolithWritten = true;
+            }
+        }
+    }
+    if (!monolithWritten) {
+        return GS::UniString ("structure: monolithThickness / bottomOversize / thinning need a Monolith structure (set structType: Monolith or use a monolith favorite).");
+    }
+    return {};
+}
+
 } // namespace
 
 CreateStairsCommand::CreateStairsCommand () :
@@ -4556,7 +4650,13 @@ GS::Optional<GS::UniString> CreateStairsCommand::GetInputParametersSchema () con
                                 "twoRiserPlusGoingMax": { "type": "number" },
                                 "landingLengthMin": { "type": "number" },
                                 "walkingLineOffsetMin": { "type": "number" },
-                                "winderTurnOffsetMin": { "type": "number" }
+                                "winderTurnOffsetMin": { "type": "number" },
+                                "riserGoingRatioMin": { "type": "number" },
+                                "riserGoingRatioMax": { "type": "number" },
+                                "riserPlusGoingMin": { "type": "number" },
+                                "riserPlusGoingMax": { "type": "number" },
+                                "stairPitchMin": { "type": "number", "description": "Angle; unit not documented (NEOVERENE)." },
+                                "stairPitchMax": { "type": "number", "description": "Angle; unit not documented (NEOVERENE)." }
                             },
                             "additionalProperties": false
                         },
@@ -4604,6 +4704,34 @@ GS::Optional<GS::UniString> CreateStairsCommand::GetInputParametersSchema () con
                         "keepOnTurnFailure": {
                             "type": "boolean",
                             "description": "Optional, default false. If the turns/segments cannot be applied, keep the plain stair (the item still reports the error) instead of deleting it."
+                        },
+                        "extraTopTread": {
+                            "type": "boolean",
+                            "description": "Optional. API_StairType::extraTopTread (header: 'Extra Top Tread is used to display the top tread'). Exact effect on the last step NOT verified - see ADR-002."
+                        },
+                        "extraBottomTread": {
+                            "type": "boolean",
+                            "description": "Optional. API_StairType::extraBottomTread. Exact effect on the first step NOT verified - see ADR-002."
+                        },
+                        "structureVisible": {
+                            "type": "boolean",
+                            "description": "Optional. API_StairType::structureVisibility - false hides the whole stair structure."
+                        },
+                        "structure": {
+                            "type": "object",
+                            "description": "Optional. Default parameters of the stair structure (API_StairType::structure[role][side]), applied to the roles / sides named here (default: all). Only the given fields are written.",
+                            "properties": {
+                                "roles": { "type": "array", "items": { "type": "string", "enum": ["Run", "Landing"] } },
+                                "sides": { "type": "array", "items": { "type": "string", "enum": ["Left", "Right", "Under"] } },
+                                "structType": { "type": "string", "enum": ["Side", "Monolith", "BeamSupport", "CantileveredSupport"] },
+                                "bottomType": { "type": "string", "enum": ["Stepped", "Flat", "Smooth"] },
+                                "thickness": { "type": "number", "minimum": 0.0 },
+                                "horizontalThickness": { "type": "number", "minimum": 0.0 },
+                                "monolithThickness": { "type": "number", "minimum": 0.0, "description": "Only for a Monolith structure." },
+                                "bottomOversize": { "type": "number", "minimum": 0.0, "description": "Only for a Monolith structure: size of the horizontal bottom." },
+                                "thinning": { "type": "boolean", "description": "Only for a Monolith structure." }
+                            },
+                            "additionalProperties": false
                         },
                         "finishVisible": {
                             "type": "boolean",
@@ -4756,6 +4884,21 @@ GS::Optional<GS::ObjectState> CreateStairsCommand::SetTypeSpecificParameters (AP
         element.stair.walkingLineOffset = walkingLineOffset.Get ();
     }
 
+    if (parameters.Get ("extraTopTread", flag)) {
+        element.stair.extraTopTread = flag;
+    }
+    if (parameters.Get ("extraBottomTread", flag)) {
+        element.stair.extraBottomTread = flag;
+    }
+    if (parameters.Get ("structureVisible", flag)) {
+        element.stair.structureVisibility = flag;
+    }
+    if (const GS::ObjectState* structureOs = parameters.Get ("structure"); structureOs != nullptr) {
+        if (auto err = ApplyStairStructureRequest (element.stair, *structureOs); err.HasValue ()) {
+            return CreateErrorResponse (APIERR_BADPARS, err.Get ());
+        }
+    }
+
     API_StairRulesData& rules = element.stair.rules;
     bool applyRules = true;
     if (parameters.Get ("applyRules", applyRules) && !applyRules) {
@@ -4785,6 +4928,12 @@ GS::Optional<GS::ObjectState> CreateStairsCommand::SetTypeSpecificParameters (AP
         SetStairRule (*rulesOs, "landingLengthMin", rules.landingLengthMinValue, rules.landingLengthMinApplied);
         SetStairRule (*rulesOs, "walkingLineOffsetMin", rules.walkingLineOffsetMinValue, rules.walkingLineOffsetMinApplied);
         SetStairRule (*rulesOs, "winderTurnOffsetMin", rules.winderTurnOffsetMinValue, rules.winderTurnOffsetMinApplied);
+        SetStairRule (*rulesOs, "riserGoingRatioMin", rules.riserGoingRatioMinValue, rules.riserGoingRatioMinApplied);
+        SetStairRule (*rulesOs, "riserGoingRatioMax", rules.riserGoingRatioMaxValue, rules.riserGoingRatioMaxApplied);
+        SetStairRule (*rulesOs, "riserPlusGoingMin", rules.riserPlusGoingMinValue, rules.riserPlusGoingMinApplied);
+        SetStairRule (*rulesOs, "riserPlusGoingMax", rules.riserPlusGoingMaxValue, rules.riserPlusGoingMaxApplied);
+        SetStairRule (*rulesOs, "stairPitchMin", rules.stairPitchMinValue, rules.stairPitchMinApplied);
+        SetStairRule (*rulesOs, "stairPitchMax", rules.stairPitchMaxValue, rules.stairPitchMaxApplied);
     }
 
     // Free existing baseline handles from defaults
@@ -5083,6 +5232,49 @@ GS::ObjectState GetStairBaseLineDataCommand::Execute (const GS::ObjectState& par
         os.Add ("baseLineOffset", s.baselineOffset);
         os.Add ("walkingLinePosition", GS::UniString (LinePositionName (s.walkingLinePosition)));
         os.Add ("walkingLineOffset", s.walkingLineOffset);
+        {
+            const Stories stories = GetStories ();
+            const double zBottom = GetZPos (element.header.floorInd, s.basePlane.basePoint.z, stories);
+            os.Add ("zCoordinate", zBottom);
+            os.Add ("zTop", zBottom + s.totalHeight);
+            const auto homeStory = stories.find (element.header.floorInd);
+            if (homeStory != stories.end ()) {
+                os.Add ("homeStoryLevel", homeStory->second.level);
+            }
+            if (s.relativeTopStory != 0) {
+                const auto topStory = stories.find (static_cast<short> (element.header.floorInd + s.relativeTopStory));
+                if (topStory != stories.end ()) {
+                    os.Add ("topLinkStoryLevel", topStory->second.level);
+                }
+            }
+        }
+        os.Add ("extraTopTread", s.extraTopTread);
+        os.Add ("extraBottomTread", s.extraBottomTread);
+        os.Add ("finishVisible", s.finishVisible);
+        os.Add ("structureVisible", s.structureVisibility);
+        {
+            const auto& structures = os.AddList<GS::ObjectState> ("structureDefaults");
+            const char* roleNames[API_StairPartRoleNum] = { "Run", "Landing" };
+            const char* sideNames[API_StairStructureSideNum] = { "Left", "Right", "Under" };
+            for (int role = 0; role < API_StairPartRoleNum; ++role) {
+                for (int side = 0; side < API_StairStructureSideNum; ++side) {
+                    const API_StairStructureType& st = s.structure[role][side];
+                    GS::ObjectState so;
+                    so.Add ("role", GS::UniString (roleNames[role]));
+                    so.Add ("side", GS::UniString (sideNames[side]));
+                    so.Add ("structType", GS::UniString (StairStructTypeName (st.structType)));
+                    so.Add ("bottomType", GS::UniString (StairStructBottomName (st.bottomType)));
+                    so.Add ("thickness", st.thickness);
+                    so.Add ("horizontalThickness", st.horizontalThickness);
+                    if (st.structType == APIST_Monolith) {
+                        so.Add ("monolithThickness", st.data.monolith.monolithThickness);
+                        so.Add ("bottomOversize", st.data.monolith.bottomOversize);
+                        so.Add ("thinning", st.data.monolith.thinning);
+                    }
+                    structures (so);
+                }
+            }
+        }
 
         GS::ObjectState rules;
         rules.Add ("riserHeightMin", s.rules.riserHeightMinValue);   rules.Add ("riserHeightMinApplied", s.rules.riserHeightMinApplied);
@@ -5094,6 +5286,12 @@ GS::ObjectState GetStairBaseLineDataCommand::Execute (const GS::ObjectState& par
         rules.Add ("landingLengthMin", s.rules.landingLengthMinValue); rules.Add ("landingLengthMinApplied", s.rules.landingLengthMinApplied);
         rules.Add ("walkingLineOffsetMin", s.rules.walkingLineOffsetMinValue); rules.Add ("walkingLineOffsetMinApplied", s.rules.walkingLineOffsetMinApplied);
         rules.Add ("winderTurnOffsetMin", s.rules.winderTurnOffsetMinValue); rules.Add ("winderTurnOffsetMinApplied", s.rules.winderTurnOffsetMinApplied);
+        rules.Add ("riserGoingRatioMin", s.rules.riserGoingRatioMinValue); rules.Add ("riserGoingRatioMinApplied", s.rules.riserGoingRatioMinApplied);
+        rules.Add ("riserGoingRatioMax", s.rules.riserGoingRatioMaxValue); rules.Add ("riserGoingRatioMaxApplied", s.rules.riserGoingRatioMaxApplied);
+        rules.Add ("riserPlusGoingMin", s.rules.riserPlusGoingMinValue); rules.Add ("riserPlusGoingMinApplied", s.rules.riserPlusGoingMinApplied);
+        rules.Add ("riserPlusGoingMax", s.rules.riserPlusGoingMaxValue); rules.Add ("riserPlusGoingMaxApplied", s.rules.riserPlusGoingMaxApplied);
+        rules.Add ("stairPitchMin", s.rules.stairPitchMinValue); rules.Add ("stairPitchMinApplied", s.rules.stairPitchMinApplied);
+        rules.Add ("stairPitchMax", s.rules.stairPitchMaxValue); rules.Add ("stairPitchMaxApplied", s.rules.stairPitchMaxApplied);
         os.Add ("rules", rules);
 
         os.Add ("baseLine", CreateStairPolylineObjectState (memo.stairBaseLine));
