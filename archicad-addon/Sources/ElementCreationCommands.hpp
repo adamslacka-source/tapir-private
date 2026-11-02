@@ -147,6 +147,7 @@ public:
     CreateMeshesCommand ();
     virtual GS::Optional<GS::UniString> GetInputParametersSchema () const override;
     virtual GS::Optional<GS::ObjectState> SetTypeSpecificParameters (API_Element& element, API_ElementMemo& memo, const Stories& stories, const GS::ObjectState& parameters) const override;
+    virtual GS::Optional<GS::ObjectState> ChangeAfterCreation (API_Element& element, const Stories& stories, const GS::ObjectState& parameters) const override;
 };
 
 class CreateCurtainWallsCommand : public CreateElementsCommandBase

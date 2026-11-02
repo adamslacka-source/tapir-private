@@ -153,6 +153,16 @@ static API_Guid GetParentElemOfSectElem (const API_Guid& elemGuid)
     return element.sectElem.parentGuid;
 }
 
+static GS::UniString RenovationStatusToString (API_RenovationStatusType status)
+{
+    switch (status) {
+        case API_ExistingStatus:   return "Existing";
+        case API_DemolishedStatus: return "Demolished";
+        case API_NewStatus:
+        default:                   return "New";
+    }
+}
+
 static GS::UniString StructureTypeToString (API_ModelElemStructureType structureType)
 {
     switch (structureType) {
@@ -165,6 +175,14 @@ static GS::UniString StructureTypeToString (API_ModelElemStructureType structure
         default:
             return "Basic";
     }
+}
+
+// The home story of an element is in its header, so a story can be filtered without activating it.
+static bool IsElementOnHomeStory (const API_Guid& elemGuid, Int32 floorIndex)
+{
+    API_Elem_Head head = {};
+    head.guid = elemGuid;
+    return ACAPI_Element_GetHeader (&head) == NoError && head.floorInd == floorIndex;
 }
 
 template <typename ListProxyType>
@@ -193,6 +211,18 @@ static GSErrCode GetElementsFromCurrentDatabase (const GS::ObjectState& paramete
     GSErrCode err = ACAPI_Element_GetElemList (elemType, &elemList, filterFlags);
     if (err != NoError) {
         return err;
+    }
+
+    Int32 floorIndex = 0;
+    const bool hasFloorIndex = parameters.Get ("floorIndex", floorIndex);
+    if (hasFloorIndex) {
+        GS::Array<API_Guid> elemsOnStory;
+        for (const API_Guid& elemGuid : elemList) {
+            if (IsElementOnHomeStory (elemGuid, floorIndex)) {
+                elemsOnStory.Push (elemGuid);
+            }
+        }
+        elemList = elemsOnStory;
     }
 
     if (elemType == API_ObjectID && !includeSubElemObjects) {
@@ -379,6 +409,10 @@ GS::Optional<GS::UniString> GetElementsByTypeCommand::GetInputParametersSchema (
                 },
                 "minItems": 1
             },
+            "floorIndex": {
+                "type": "integer",
+                "description": "Optional. Keeps only the elements whose home story is this story (API_Elem_Head::floorInd), whichever story is active. Unlike the OnActualFloor filter it needs no story switch and does not consider the elements' story visibility; see GetStories for the indices."
+            },
             "databases": {
                 "$ref": "#/Databases"
             }
@@ -455,6 +489,10 @@ GS::Optional<GS::UniString> GetAllElementsCommand::GetInputParametersSchema () c
                     "$ref": "#/ElementFilter"
                 },
                 "minItems": 1
+            },
+            "floorIndex": {
+                "type": "integer",
+                "description": "Optional. Keeps only the elements whose home story is this story (API_Elem_Head::floorInd), whichever story is active. Unlike the OnActualFloor filter it needs no story switch and does not consider the elements' story visibility; see GetStories for the indices."
             },
             "databases": {
                 "$ref": "#/Databases"
@@ -1102,6 +1140,39 @@ GS::ObjectState GetDetailsOfElementsCommand::Execute (const GS::ObjectState& par
                     elem.beam.useCoverFill, elem.beam.useCoverFillFromSurface, elem.beam.coverFillOrientationComesFrom3D,
                     elem.beam.coverFillType, elem.beam.coverFillForegroundPen, elem.beam.coverFillBackgroundPen,
                     elem.beam.coverFillTransformationType, elem.beam.coverFillTransformation));
+                typeSpecificDetails.Add ("renovationStatus", RenovationStatusToString (elem.header.renovationStatus));
+                typeSpecificDetails.Add ("showReferenceAxis", BeamVisibleLinesToString (elem.beam.showReferenceAxis));
+                typeSpecificDetails.Add ("showContourLines", BeamVisibleLinesToString (elem.beam.showContourLines));
+                typeSpecificDetails.Add ("referencePen", static_cast<Int32> (elem.beam.refPen));
+                typeSpecificDetails.Add ("referenceLineTypeIndex", GetAttributeIndex (elem.beam.refLtype));
+                typeSpecificDetails.Add ("cutContourPen", static_cast<Int32> (elem.beam.cutContourLinePen));
+                typeSpecificDetails.Add ("cutContourLineTypeIndex", GetAttributeIndex (elem.beam.cutContourLineType));
+                typeSpecificDetails.Add ("uncutLinePen", static_cast<Int32> (elem.beam.belowViewLinePen));
+                typeSpecificDetails.Add ("uncutLineTypeIndex", GetAttributeIndex (elem.beam.belowViewLineType));
+                typeSpecificDetails.Add ("overheadLinePen", static_cast<Int32> (elem.beam.aboveViewLinePen));
+                typeSpecificDetails.Add ("overheadLineTypeIndex", GetAttributeIndex (elem.beam.aboveViewLineType));
+                typeSpecificDetails.Add ("hiddenLinePen", static_cast<Int32> (elem.beam.hiddenLinePen));
+                typeSpecificDetails.Add ("hiddenLineTypeIndex", GetAttributeIndex (elem.beam.hiddenLineType));
+                typeSpecificDetails.Add ("displayOption", ElemDisplayOptionToString (elem.beam.displayOption));
+                typeSpecificDetails.Add ("viewDepthLimitation", ViewDepthLimitationToString (elem.beam.viewDepthLimitation));
+                typeSpecificDetails.Add ("uncutProjectionMode", ElemProjectionModeToString (elem.beam.uncutProjectionMode));
+                typeSpecificDetails.Add ("overheadProjectionMode", ElemProjectionModeToString (elem.beam.overheadProjectionMode));
+                typeSpecificDetails.Add ("visibility", CreateStoryVisibilityObjectState (elem.beam.visibility));
+                typeSpecificDetails.Add ("isAutoOnStoryVisibility", elem.beam.isAutoOnStoryVisibility);
+                typeSpecificDetails.Add ("linkToSettings", GS::ObjectState (
+                    "homeStoryDifference", static_cast<Int32> (elem.beam.linkToSettings.homeStoryDifference),
+                    "newCreationMode", elem.beam.linkToSettings.newCreationMode));
+                typeSpecificDetails.Add ("sequence", elem.beam.sequence);
+                typeSpecificDetails.Add ("holeDefaults", GS::ObjectState (
+                    "type", elem.beam.holeType == APIBHole_Circular ? GS::UniString ("Circular") : GS::UniString ("Rectangular"),
+                    "showContour", elem.beam.holeContureOn,
+                    "width", elem.beam.holeWidth,
+                    "height", elem.beam.holeHeight,
+                    "level", elem.beam.holeLevel));
+                typeSpecificDetails.Add ("nSegments", static_cast<Int32> (elem.beam.nSegments));
+                typeSpecificDetails.Add ("nCuts", static_cast<Int32> (elem.beam.nCuts));
+                typeSpecificDetails.Add ("nSchemes", static_cast<Int32> (elem.beam.nSchemes));
+                typeSpecificDetails.Add ("nProfiles", static_cast<Int32> (elem.beam.nProfiles));
                 AddBeamHolesFromMemo (elem.header.guid, typeSpecificDetails, "holes");
                 AddBeamSectionFromMemo (elem.header.guid, typeSpecificDetails);
             } break;
@@ -1534,8 +1605,48 @@ GS::ObjectState GetDetailsOfElementsCommand::Execute (const GS::ObjectState& par
                 typeSpecificDetails.Add ("contourPen",   (Int32)elem.mesh.contPen);
                 typeSpecificDetails.Add ("levelPen",     (Int32)elem.mesh.levelPen);
                 typeSpecificDetails.Add ("lineTypeIndex", GetAttributeIndex (elem.mesh.ltypeInd));
+                typeSpecificDetails.Add ("buildingMaterialId", CreateGuidObjectState (GetAttributeGuidFromIndex (API_BuildingMaterialID, elem.mesh.buildingMaterial)));
+                typeSpecificDetails.Add ("renovationStatus", RenovationStatusToString (elem.header.renovationStatus));
+                typeSpecificDetails.Add ("contourVisibility", CreateStoryVisibilityObjectState (elem.mesh.visibilityCont));
+                typeSpecificDetails.Add ("fillVisibility", CreateStoryVisibilityObjectState (elem.mesh.visibilityFill));
+                typeSpecificDetails.Add ("linkToSettings", GS::ObjectState (
+                    "homeStoryDifference", static_cast<Int32> (elem.mesh.linkToSettings.homeStoryDifference),
+                    "newCreationMode", elem.mesh.linkToSettings.newCreationMode));
+                typeSpecificDetails.Add ("sectionContourPen", static_cast<Int32> (elem.mesh.sectContPen));
+#ifdef ServerMainVers_2700
+                typeSpecificDetails.Add ("cutFillPen", CreateOverriddenPenObjectState (elem.mesh.cutFillPen));
+                typeSpecificDetails.Add ("cutFillBackgroundPen", CreateOverriddenPenObjectState (elem.mesh.cutFillBackgroundPen));
+#endif
+                typeSpecificDetails.Add ("topMaterial", CreateOverriddenMaterialObjectState (elem.mesh.topMat));
+                typeSpecificDetails.Add ("sideMaterial", CreateOverriddenMaterialObjectState (elem.mesh.sideMat));
+                typeSpecificDetails.Add ("bottomMaterial", CreateOverriddenMaterialObjectState (elem.mesh.botMat));
+                typeSpecificDetails.Add ("materialsChained", elem.mesh.materialsChained);
+                {
+                    GS::ObjectState coverFillOs;
+                    coverFillOs.Add ("use", elem.mesh.useFloorFill);
+                    coverFillOs.Add ("foregroundPen", static_cast<Int32> (elem.mesh.floorFillPen));
+                    coverFillOs.Add ("backgroundPen", static_cast<Int32> (elem.mesh.floorFillBGPen));
+                    coverFillOs.Add ("fillId", CreateGuidObjectState (GetAttributeGuidFromIndex (API_FilltypeID, elem.mesh.floorFillInd)));
+                    coverFillOs.Add ("useLocalOrigin", elem.mesh.useLocalOrigo);
+                    coverFillOs.Add ("use3DHatching", elem.mesh.use3DHatching);
+                    coverFillOs.Add ("localOrigin", Create2DCoordinateObjectState (elem.mesh.locOrigo));
+                    coverFillOs.Add ("angle", elem.mesh.fillAngle);
+                    typeSpecificDetails.Add ("coverFill", coverFillOs);
+                }
                 constexpr bool includeZCoords = true;
                 AddPolygonWithHolesFromMemoCoords (elem.header.guid, typeSpecificDetails, "polygonCoordinates", "polygonArcs", "holes", "polygonCoordinates", "polygonArcs", includeZCoords);
+                {
+                    API_ElementMemo polygonMemo = {};
+                    const GS::OnExit polygonGuard ([&polygonMemo] () { ACAPI_DisposeElemMemoHdls (&polygonMemo); });
+                    if (ACAPI_Element_GetMemo (elem.header.guid, &polygonMemo, APIMemoMask_Polygon) == NoError && polygonMemo.vertexIDs != nullptr) {
+                        const auto& vertexIds = typeSpecificDetails.AddList<Int32> ("polygonVertexIds");
+                        const GSSize nVertexIds = BMhGetSize (reinterpret_cast<GSHandle> (polygonMemo.vertexIDs)) / sizeof (UInt32);
+                        // Item 0 is not a vertex: it holds the largest id in use.
+                        for (GSIndex i = 1; i < nVertexIds; ++i) {
+                            vertexIds (static_cast<Int32> ((*polygonMemo.vertexIDs)[i]));
+                        }
+                    }
+                }
                 if (elem.mesh.levelLines.nSubLines > 0) {
                     API_ElementMemo memo = {};
                     const GS::OnExit guard ([&memo] () { ACAPI_DisposeElemMemoHdls (&memo); });
@@ -1546,11 +1657,13 @@ GS::ObjectState GetDetailsOfElementsCommand::Execute (const GS::ObjectState& par
                         for (Int32 i = 0; i < nSublines; ++i) {
                             GS::ObjectState subline;
                             const auto& coordinates = subline.AddList<GS::ObjectState> ("coordinates");
+                            const auto& vertexIds = subline.AddList<Int32> ("vertexIds");
 
                             const Int32 nCoords = (*memo.meshLevelEnds)[i];
                             for (; iCoord < nCoords; ++iCoord) {
                                 const API_MeshLevelCoord& coord = (*memo.meshLevelCoords)[iCoord];
                                 coordinates (Create3DCoordinateObjectState (coord.c));
+                                vertexIds (coord.vertexID);
                             }
                             sublines (subline);
                         }
@@ -4038,6 +4151,10 @@ GS::Optional<GS::UniString> FilterElementsCommand::GetInputParametersSchema () c
                     "$ref": "#/ElementFilter"
                 },
                 "minItems": 1
+            },
+            "floorIndex": {
+                "type": "integer",
+                "description": "Optional. Keeps only the elements whose home story is this story (API_Elem_Head::floorInd), whichever story is active. Unlike the OnActualFloor filter it needs no story switch and does not consider the elements' story visibility; see GetStories for the indices."
             }
         },
         "additionalProperties": false,
@@ -4075,7 +4192,9 @@ GS::ObjectState FilterElementsCommand::Execute (const GS::ObjectState& parameter
     for (const GS::UniString& filter : filters) {
         filterFlags |= ConvertFilterStringToFlag (filter);
     }
-    if (filterFlags == APIFilt_None) {
+    Int32 floorIndex = 0;
+    const bool hasFloorIndex = parameters.Get ("floorIndex", floorIndex);
+    if (filterFlags == APIFilt_None && !hasFloorIndex) {
         return CreateErrorResponse (APIERR_BADPARS, "Invalid or missing filters!");
     }
 
@@ -4089,7 +4208,10 @@ GS::ObjectState FilterElementsCommand::Execute (const GS::ObjectState& parameter
         }
 
         const API_Guid elemGuid = GetGuidFromObjectState (*elementId);
-        if (!ACAPI_Element_Filter (elemGuid, filterFlags)) {
+        if (filterFlags != APIFilt_None && !ACAPI_Element_Filter (elemGuid, filterFlags)) {
+            continue;
+        }
+        if (hasFloorIndex && !IsElementOnHomeStory (elemGuid, floorIndex)) {
             continue;
         }
 
