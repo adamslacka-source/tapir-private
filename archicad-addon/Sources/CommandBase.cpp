@@ -89,6 +89,24 @@ GS::ObjectState CreateSuccessfulExecutionResult ()
         "success", true);
 }
 
+void AddWarningsToResult (GS::ObjectState& result, const GS::Array<GS::UniString>& warnings)
+{
+    if (warnings.IsEmpty ()) {
+        return;
+    }
+    const auto& list = result.AddList<GS::UniString> ("warnings");
+    for (const GS::UniString& warning : warnings) {
+        list (warning);
+    }
+}
+
+GS::ObjectState CreateSuccessfulExecutionResult (const GS::Array<GS::UniString>& warnings)
+{
+    GS::ObjectState result = CreateSuccessfulExecutionResult ();
+    AddWarningsToResult (result, warnings);
+    return result;
+}
+
 // Plain wording for the errors the Change* / Import property and classification calls
 // return, so a caller sees why a definition edit was refused without an error table.
 GS::UniString DescribeDefinitionChangeError (GSErrCode err)

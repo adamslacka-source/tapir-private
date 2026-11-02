@@ -24,6 +24,13 @@ GS::Optional<GS::UniString> ApplyMeshSettings (
     const GS::ObjectState& os,
     bool& changed);
 
+// What Archicad did not keep of the settings in os, for the 'warnings' of a command result.
+GS::Array<GS::UniString> GetBeamSettingsWarnings (const API_Guid& guid, const GS::ObjectState& os);
+GS::Array<GS::UniString> GetMeshSettingsWarnings (const API_Guid& guid, const GS::ObjectState& os);
+
+bool IsHiddenLayer (const API_AttributeIndex& layerIndex);
+bool IsElementLost (const API_Guid& guid);
+
 // The JSON schema properties of ApplyMeshSettings, without the surrounding object.
 extern const char* MeshSettingsSchemaProperties;
 
@@ -51,6 +58,7 @@ public:
     virtual GS::Optional<GS::UniString> GetInputParametersSchema () const override;
     virtual GS::Optional<GS::ObjectState> SetTypeSpecificParameters (API_Element& element, API_ElementMemo& memo, const Stories& stories, const GS::ObjectState& parameters) const override;
     virtual GS::Optional<GS::ObjectState> ChangeAfterCreation (API_Element& element, const Stories& stories, const GS::ObjectState& parameters) const override;
+    virtual GS::Array<GS::UniString> GetCreationWarnings (const API_Element& element, const GS::ObjectState& parameters) const override;
 };
 
 class CreateStairsCommand : public CreateElementsCommandBase

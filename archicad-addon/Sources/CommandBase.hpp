@@ -151,6 +151,8 @@ GS::UniString ElemDisplayOptionToString (API_ElemDisplayOptionsID displayOption)
 bool ElemDisplayOptionFromString (const GS::UniString& str, API_ElemDisplayOptionsID& out);
 GS::UniString ViewDepthLimitationToString (API_ElemViewDepthLimitationsID viewDepthLimitation);
 bool ViewDepthLimitationFromString (const GS::UniString& str, API_ElemViewDepthLimitationsID& out);
+void AddWarningsToResult (GS::ObjectState& result, const GS::Array<GS::UniString>& warnings);
+GS::ObjectState CreateSuccessfulExecutionResult (const GS::Array<GS::UniString>& warnings);
 GS::UniString BeamVisibleLinesToString (API_BeamVisibleLinesID value);
 bool BeamVisibleLinesFromString (const GS::UniString& str, API_BeamVisibleLinesID& out);
 GS::UniString ElemProjectionModeToString (API_ElemProjectionModesID value);

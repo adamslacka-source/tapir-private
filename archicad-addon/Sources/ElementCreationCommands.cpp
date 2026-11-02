@@ -211,7 +211,9 @@ GS::ObjectState	CreateElementsCommandBase::Execute (const GS::ObjectState& param
             notification.elemHead = element.header;
             AddElementNotificationClientCommand::ElementEventHandlerProc (&notification);
 
-            elements (CreateElementIdObjectState (element.header.guid));
+            GS::ObjectState createdElement = CreateElementIdObjectState (element.header.guid);
+            AddWarningsToResult (createdElement, GetCreationWarnings (element, data));
+            elements (createdElement);
         }
 
         // Leave the tool defaults as they were found: applying a favorite is a global
@@ -2886,6 +2888,11 @@ GS::Optional<GS::ObjectState> CreateMeshesCommand::ChangeAfterCreation (API_Elem
         return CreateErrorResponse (err, "The mesh was created, but it could not be read back to check its settings.");
     }
 
+    // Archicad refuses every change of an element on a hidden layer.
+    if (IsHiddenLayer (fresh.header.layer)) {
+        return {};
+    }
+
     const API_Element before = fresh;
     bool changed = false;
     const GS::Optional<GS::UniString> settingsError = ApplyMeshSettings (fresh, mask, parameters, changed);
@@ -2904,6 +2911,11 @@ GS::Optional<GS::ObjectState> CreateMeshesCommand::ChangeAfterCreation (API_Elem
     }
     element.header = fresh.header;
     return {};
+}
+
+GS::Array<GS::UniString> CreateMeshesCommand::GetCreationWarnings (const API_Element& element, const GS::ObjectState& parameters) const
+{
+    return GetMeshSettingsWarnings (element.header.guid, parameters);
 }
 
 CreateCurtainWallsCommand::CreateCurtainWallsCommand () :
