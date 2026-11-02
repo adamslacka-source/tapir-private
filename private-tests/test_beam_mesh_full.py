@@ -6,7 +6,7 @@ GetElementsByType / GetAllElements / FilterElements and the story switch of Chan
 Run it after the Archicad restart, ONLY on a scratch new file or on a copy of a project:
 
     python test_beam_mesh_full.py --self-check          # the project guard only, no connection
-    python test_beam_mesh_full.py [--port 19723] [--cleanup] [--only beam,mesh,layers,filter,story]
+    python test_beam_mesh_full.py [--port 19723] [--cleanup] [--only beam,mesh,wallmorph,layers,filter,story]
 
 It refuses to run if the project is Kamenne.pln or cesty.pln, if the project cannot be identified,
 or if it cannot decide which of several running Archicad instances to use. The project is checked
@@ -82,7 +82,7 @@ def SelfCheck ():
 parser = argparse.ArgumentParser (description='Full coverage test of the Beam and Mesh tools.')
 parser.add_argument ('--port', type=int, default=None)
 parser.add_argument ('--cleanup', action='store_true', help='delete the test elements at the end')
-parser.add_argument ('--only', default='beam,mesh,layers,filter,story', help='comma separated: beam, mesh, layers, filter, story')
+parser.add_argument ('--only', default='beam,mesh,wallmorph,layers,filter,story', help='comma separated: beam, mesh, wallmorph, layers, filter, story')
 parser.add_argument ('--self-check', action='store_true', help='test the project guard without any connection, then exit')
 args = parser.parse_args ()
 
@@ -141,7 +141,7 @@ port = ChoosePort ()
 info = ProjectInfo (port)
 print ('Port {} project {}'.format (port, 'Untitled' if info.get ('isUntitled') else info.get ('projectName', '')))
 
-WRITE_COMMANDS = ('CreateBeams', 'ModifyBeams', 'CreateMeshes', 'ModifyMeshes', 'DeleteElements', 'ChangeWindow', 'CreateLayers', 'SetDetailsOfElements')
+WRITE_COMMANDS = ('CreateBeams', 'ModifyBeams', 'CreateMeshes', 'ModifyMeshes', 'DeleteElements', 'ChangeWindow', 'CreateLayers', 'SetDetailsOfElements', 'CreateWalls', 'ModifyWalls', 'CreateMorphs', 'ModifyMorphs')
 
 
 def Tapir (command, parameters=None):
@@ -587,8 +587,31 @@ def TestStory ():
         Record ('story', 'shown on ' + name, 'PASS' if seen[name] == expected else 'NOT KEPT', 'expected {} seen {}'.format (sorted (expected), sorted (seen[name])))
 
 
+# ------------------------------------------------------------------------------------------------
+# The same story visibility mask on Wall and Morph
+# ------------------------------------------------------------------------------------------------
+
+def TestWallMorphVisibility ():
+    print ('\n--- Wall and Morph visibility ---')
+    cases = ({'showOnHome': True, 'showAllAbove': True, 'showAllBelow': True}, {'showOnHome': True, 'showRelAbove': 1, 'showRelBelow': 1})
+    for visibility in cases:
+        label = 'Modify visibility={}'.format (json.dumps (visibility)[:28])
+        with Guarded ('wall', label):
+            x = NextX ()
+            wall = Created (Tapir ('CreateWalls', {'wallsData': [{'begCoordinate': {'x': x, 'y': Y0 + 40}, 'endCoordinate': {'x': x + 5, 'y': Y0 + 40}, 'zCoordinate': 0.0, 'height': 2.5}]}), 'CreateWalls')
+            result = Tapir ('ModifyWalls', {'wallsWithDetails': [{'elementId': wall, 'visibility': visibility}]})['executionResults'][0]
+            Rated ('wall', label, visibility, visibility, Tsd (wall).get ('visibility')) if result.get ('success') else Record ('wall', label, 'ERROR', result)
+        for field in ('showContour', 'showFill'):
+            label = 'Modify {}={}'.format (field, json.dumps (visibility)[:28])
+            with Guarded ('morph', label):
+                x = NextX ()
+                morph = Created (Tapir ('CreateMorphs', {'morphsData': [{'basePoint': {'x': x, 'y': Y0 + 50, 'z': 0.0}, 'size': {'x': 1.0, 'y': 1.0, 'z': 1.0}}]}), 'CreateMorphs')
+                result = Tapir ('ModifyMorphs', {'morphsWithDetails': [{'elementId': morph, field: visibility}]})['executionResults'][0]
+                Rated ('morph', label, visibility, visibility, Tsd (morph).get (field)) if result.get ('success') else Record ('morph', label, 'ERROR', result)
+
+
 only = {part.strip () for part in args.only.split (',')}
-sections = [('beam', TestBeam), ('mesh', TestMesh), ('layers', TestLayers), ('filter', TestFilter), ('story', TestStory)]
+sections = [('beam', TestBeam), ('mesh', TestMesh), ('wallmorph', TestWallMorphVisibility), ('layers', TestLayers), ('filter', TestFilter), ('story', TestStory)]
 try:
     for name, section in sections:
         if name in only:
