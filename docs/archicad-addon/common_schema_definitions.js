@@ -2233,6 +2233,11 @@ var gSchemaDefinitions = {
                 "items": {
                     "$ref": "#/Coordinate3D"
                 }
+            },
+            "vertexIds": {
+                "type": "array",
+                "description": "The vertex ids of the coordinates (reported on Get, ignored on Create and Modify).",
+                "items": { "type": "integer" }
             }
         },
         "additionalProperties": false,
@@ -6857,7 +6862,37 @@ var gSchemaDefinitions = {
             "profileId": {
                 "$ref": "#/AttributeId",
                 "description": "Present when the cross section uses a custom extruded profile rather than a building material."
-            }
+            },
+            "renovationStatus": { "$ref": "#/RenovationStatus" },
+            "showReferenceAxis": { "$ref": "#/BeamVisibleLines" },
+            "showContourLines": { "$ref": "#/BeamVisibleLines" },
+            "referencePen": { "type": "integer" },
+            "referenceLineTypeIndex": { "type": "integer" },
+            "cutContourPen": { "type": "integer" },
+            "cutContourLineTypeIndex": { "type": "integer" },
+            "uncutLinePen": { "type": "integer" },
+            "uncutLineTypeIndex": { "type": "integer" },
+            "overheadLinePen": { "type": "integer" },
+            "overheadLineTypeIndex": { "type": "integer" },
+            "hiddenLinePen": { "type": "integer" },
+            "hiddenLineTypeIndex": { "type": "integer" },
+            "displayOption": { "$ref": "#/DisplayOption" },
+            "viewDepthLimitation": { "$ref": "#/ViewDepthLimitation" },
+            "uncutProjectionMode": { "$ref": "#/ElemProjectionMode" },
+            "overheadProjectionMode": { "$ref": "#/ElemProjectionMode" },
+            "visibility": { "$ref": "#/StoryVisibility" },
+            "isAutoOnStoryVisibility": { "type": "boolean" },
+            "linkToSettings": { "$ref": "#/LinkToSettings" },
+            "sequence": { "type": "integer" },
+            "holeDefaults": { "$ref": "#/BeamHoleDefaults" },
+            "nSegments": { "type": "integer", "description": "Read-only." },
+            "nCuts": { "type": "integer", "description": "Read-only." },
+            "nSchemes": { "type": "integer", "description": "Read-only." },
+            "nProfiles": { "type": "integer", "description": "Read-only." },
+            "segments": { "type": "array", "items": { "$ref": "#/BeamSegment" } },
+            "cuts": { "type": "array", "items": { "$ref": "#/AssemblySegmentCut" } },
+            "schemes": { "type": "array", "items": { "$ref": "#/AssemblySegmentScheme" } },
+            "gables": { "type": "array", "items": { "$ref": "#/BeamGable" } }
         },
         "additionalProperties": false,
         "required": [
@@ -6870,6 +6905,111 @@ var gSchemaDefinitions = {
             "arcAngle",
             "verticalCurveHeight"
         ]
+    },
+    "RenovationStatus": {
+        "type": "string",
+        "description": "The renovation status of the element (API_RenovationStatusType).",
+        "enum": ["Existing", "New", "Demolished"]
+    },
+    "BeamVisibleLines": {
+        "type": "string",
+        "description": "API_BeamVisibleLinesID: show always, hide always, or follow the model view options.",
+        "enum": ["ShowAlways", "HideAlways", "ByMVO"]
+    },
+    "ElemProjectionMode": {
+        "type": "string",
+        "description": "API_ElemProjectionModesID.",
+        "enum": ["Symbolic", "Projected", "Hybrid"]
+    },
+    "BeamHoleDefaults": {
+        "type": "object",
+        "description": "The hole settings of the beam tool on the element (holeType, holeContureOn, holeWidth, holeHeight, holeLevel). The placed holes are in 'holes'.",
+        "properties": {
+            "type": { "$ref": "#/BeamHoleType" },
+            "showContour": { "type": "boolean" },
+            "width": { "type": "number" },
+            "height": { "type": "number" },
+            "level": { "type": "number", "description": "Distance between the center of the hole and the top of the beam." }
+        },
+        "additionalProperties": false
+    },
+    "BeamSegment": {
+        "type": "object",
+        "description": "One beam segment (API_BeamSegmentType). index, segmentId, structureType, profileType and relativeHomeStoryLevel are reported on Get and ignored on Create and Modify, so that an item read back can be sent again.",
+        "properties": {
+            "index": { "type": "integer" },
+            "segmentId": { "$ref": "#/ElementId" },
+            "structureType": { "type": "string", "enum": ["Basic", "Profile"] },
+            "profileType": { "type": "integer" },
+            "relativeHomeStoryLevel": { "type": "number" },
+            "buildingMaterialId": { "$ref": "#/AttributeId", "description": "Makes the structure Basic." },
+            "profileId": { "$ref": "#/AttributeId", "description": "Makes the structure Profile; wins over buildingMaterialId." },
+            "circleBased": { "type": "boolean" },
+            "width": { "type": "number", "description": "Nominal width." },
+            "height": { "type": "number", "description": "Nominal height." },
+            "isWidthAndHeightLinked": { "type": "boolean" },
+            "isHomogeneous": { "type": "boolean", "description": "False makes a tapered segment that ends with endWidth and endHeight." },
+            "endWidth": { "type": "number" },
+            "endHeight": { "type": "number" },
+            "isEndWidthAndHeightLinked": { "type": "boolean" },
+            "leftMaterial": { "$ref": "#/OverriddenMaterial" },
+            "topMaterial": { "$ref": "#/OverriddenMaterial" },
+            "rightMaterial": { "$ref": "#/OverriddenMaterial" },
+            "bottomMaterial": { "$ref": "#/OverriddenMaterial" },
+            "endsMaterial": { "$ref": "#/OverriddenMaterial" },
+            "extrusionMaterial": { "$ref": "#/OverriddenMaterial" },
+            "materialsChained": { "type": "boolean" }
+        },
+        "additionalProperties": false
+    },
+    "AssemblySegmentCut": {
+        "type": "object",
+        "description": "A cut at the end of a segment (API_AssemblySegmentCutData).",
+        "properties": {
+            "type": { "type": "string", "enum": ["Horizontal", "Vertical", "Custom"] },
+            "customAngle": { "type": "number", "description": "The angle in radians for the Custom type." }
+        },
+        "additionalProperties": false
+    },
+    "AssemblySegmentScheme": {
+        "type": "object",
+        "description": "The length of a segment (API_AssemblySegmentSchemeData).",
+        "properties": {
+            "lengthType": { "type": "string", "enum": ["Fixed", "Proportional"] },
+            "fixedLength": { "type": "number", "description": "Used for the Fixed type." },
+            "lengthProportion": { "type": "number", "description": "Used for the Proportional type." }
+        },
+        "additionalProperties": false
+    },
+    "BeamGable": {
+        "type": "object",
+        "description": "A cut plane of the beam (API_Gable), in the local coordinate system of the beam.",
+        "properties": {
+            "a": { "type": "number" },
+            "b": { "type": "number" },
+            "c": { "type": "number" },
+            "d": { "type": "number" },
+            "xb": { "type": "number", "description": "Beginning distance of the vertical cut planes from the local origin." },
+            "xe": { "type": "number", "description": "End distance of the vertical cut planes from the local origin." },
+            "nx": { "type": "number" },
+            "ny": { "type": "number" }
+        },
+        "additionalProperties": false
+    },
+    "MeshCoverFill": {
+        "type": "object",
+        "description": "Floor plan cover fill of a Mesh. Only the given members change.",
+        "properties": {
+            "use": { "type": "boolean", "description": "useFloorFill." },
+            "foregroundPen": { "type": "integer", "description": "floorFillPen." },
+            "backgroundPen": { "type": "integer", "description": "floorFillBGPen." },
+            "fillId": { "$ref": "#/AttributeId", "description": "floorFillInd." },
+            "useLocalOrigin": { "type": "boolean", "description": "useLocalOrigo: the fill follows the element." },
+            "localOrigin": { "$ref": "#/Coordinate2D", "description": "locOrigo: the base of the fill reference vector." },
+            "angle": { "type": "number", "description": "fillAngle in radians." },
+            "use3DHatching": { "type": "boolean", "description": "Marked 'reserved for internal use' in API_MeshType." }
+        },
+        "additionalProperties": false
     },
     "RoofDetails": {
         "type": "object",
@@ -7912,6 +8052,25 @@ var gSchemaDefinitions = {
                 "type": "integer",
                 "description": "Line type attribute index for the mesh contour."
             },
+            "buildingMaterialId": {
+                "$ref": "#/AttributeId",
+                "description": "The building material of the mesh. The surface overrides stay as they are."
+            },
+            "layerIndex": { "type": "integer", "description": "Layer attribute index. On Create it decides the layer instead of the Mesh tool default. Do not combine with layerId." },
+            "layerId": { "$ref": "#/AttributeId", "description": "Layer attribute id, the alternative of layerIndex." },
+            "renovationStatus": { "$ref": "#/RenovationStatus" },
+            "visibility": { "$ref": "#/StoryVisibility", "description": "Shorthand for contourVisibility and fillVisibility together. Only the given members change." },
+            "contourVisibility": { "$ref": "#/StoryVisibility", "description": "Stories showing the contour (visibilityCont). Only the given members change." },
+            "fillVisibility": { "$ref": "#/StoryVisibility", "description": "Stories showing the cover fill (visibilityFill). Only the given members change." },
+            "linkToSettings": { "$ref": "#/LinkToSettings" },
+            "sectionContourPen": { "type": "integer", "description": "Contour pen of the fill in sections (sectContPen)." },
+            "cutFillPen": { "$ref": "#/OverriddenPen" },
+            "cutFillBackgroundPen": { "$ref": "#/OverriddenPen" },
+            "topMaterial": { "$ref": "#/OverriddenMaterial" },
+            "sideMaterial": { "$ref": "#/OverriddenMaterial" },
+            "bottomMaterial": { "$ref": "#/OverriddenMaterial" },
+            "materialsChained": { "type": "boolean" },
+            "coverFill": { "$ref": "#/MeshCoverFill" },
             "polygonCoordinates": {
                 "type": "array",
                 "description": "The 3D coordinates of the outline polygon of the mesh. Replaces the existing boundary entirely.",
@@ -7976,6 +8135,24 @@ var gSchemaDefinitions = {
             "lineTypeIndex": {
                 "type": "integer",
                 "description": "Line type attribute index for the mesh contour."
+            },
+            "buildingMaterialId": { "$ref": "#/AttributeId" },
+            "renovationStatus": { "$ref": "#/RenovationStatus" },
+            "contourVisibility": { "$ref": "#/StoryVisibility" },
+            "fillVisibility": { "$ref": "#/StoryVisibility" },
+            "linkToSettings": { "$ref": "#/LinkToSettings" },
+            "sectionContourPen": { "type": "integer" },
+            "cutFillPen": { "$ref": "#/OverriddenPen" },
+            "cutFillBackgroundPen": { "$ref": "#/OverriddenPen" },
+            "topMaterial": { "$ref": "#/OverriddenMaterial" },
+            "sideMaterial": { "$ref": "#/OverriddenMaterial" },
+            "bottomMaterial": { "$ref": "#/OverriddenMaterial" },
+            "materialsChained": { "type": "boolean" },
+            "coverFill": { "$ref": "#/MeshCoverFill" },
+            "polygonVertexIds": {
+                "type": "array",
+                "description": "The vertex ids of the polygon, in the order of the outline and the holes (read-only).",
+                "items": { "type": "integer" }
             },
             "polygonCoordinates": {
                 "type": "array",
@@ -10895,17 +11072,7 @@ var gSchemaDefinitions = {
                 "$ref": "#/CoverFillTransformation"
             }
         },
-        "additionalProperties": false,
-        "required": [
-            "use",
-            "useFromSurface",
-            "orientationComesFrom3D",
-            "fillId",
-            "foregroundPen",
-            "backgroundPen",
-            "transformationType",
-            "transformation"
-        ]
+        "additionalProperties": false
     },
     "CoverFillTransformation": {
         "type": "object",

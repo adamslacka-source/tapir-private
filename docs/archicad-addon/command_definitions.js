@@ -1112,6 +1112,10 @@ var gCommands = [{
                 },
                 "minItems": 1
             },
+            "floorIndex": {
+                "type": "integer",
+                "description": "Optional. Keeps only the elements whose home story is this story (API_Elem_Head::floorInd), whichever story is active. Unlike the OnActualFloor filter it needs no story switch and does not consider the elements' story visibility; see GetStories for the indices."
+            },
             "databases": {
                 "$ref": "#/Databases"
             }
@@ -1137,6 +1141,10 @@ var gCommands = [{
                     "$ref": "#/ElementFilter"
                 },
                 "minItems": 1
+            },
+            "floorIndex": {
+                "type": "integer",
+                "description": "Optional. Keeps only the elements whose home story is this story (API_Elem_Head::floorInd), whichever story is active. Unlike the OnActualFloor filter it needs no story switch and does not consider the elements' story visibility; see GetStories for the indices."
             },
             "databases": {
                 "$ref": "#/Databases"
@@ -1198,6 +1206,10 @@ var gCommands = [{
                     "$ref": "#/ElementFilter"
                 },
                 "minItems": 1
+            },
+            "floorIndex": {
+                "type": "integer",
+                "description": "Optional. Keeps only the elements whose home story is this story (API_Elem_Head::floorInd), whichever story is active. Unlike the OnActualFloor filter it needs no story switch and does not consider the elements' story visibility; see GetStories for the indices."
             }
         },
         "additionalProperties": false,
@@ -2748,7 +2760,46 @@ var gCommands = [{
                         "profileId": {
                             "$ref": "#/AttributeId",
                             "description": "Switches the cross section to this custom extruded profile (circleBased becomes false). Applied to all segments."
-                        }
+                        },
+                        "holes": {
+                            "type": "array",
+                            "description": "The holes of the new beam.",
+                            "items": { "$ref": "#/BeamHoleModification" }
+                        },
+                        "layerIndex": { "type": "integer", "description": "Layer attribute index. On Create it decides the layer instead of the Beam tool default. Do not combine with layerId." },
+                        "layerId": { "$ref": "#/AttributeId", "description": "Layer attribute id, the alternative of layerIndex." },
+                        "renovationStatus": { "$ref": "#/RenovationStatus" },
+                        "showReferenceAxis": { "$ref": "#/BeamVisibleLines", "description": "API_BeamType::showReferenceAxis." },
+                        "showContourLines": { "$ref": "#/BeamVisibleLines", "description": "API_BeamType::showContourLines." },
+                        "referencePen": { "type": "integer", "description": "Pen of the reference line (refPen)." },
+                        "referenceLineTypeIndex": { "type": "integer", "description": "Line type attribute index of the reference line (refLtype)." },
+                        "cutContourPen": { "type": "integer", "description": "Pen of the cut lines (cutContourLinePen)." },
+                        "cutContourLineTypeIndex": { "type": "integer", "description": "Line type attribute index of the cut lines (cutContourLineType)." },
+                        "uncutLinePen": { "type": "integer", "description": "Pen of the uncut lines (belowViewLinePen)." },
+                        "uncutLineTypeIndex": { "type": "integer", "description": "Line type attribute index of the uncut lines (belowViewLineType)." },
+                        "overheadLinePen": { "type": "integer", "description": "Pen of the overhead lines (aboveViewLinePen)." },
+                        "overheadLineTypeIndex": { "type": "integer", "description": "Line type attribute index of the overhead lines (aboveViewLineType)." },
+                        "hiddenLinePen": { "type": "integer", "description": "Pen of the hidden lines (hiddenLinePen)." },
+                        "hiddenLineTypeIndex": { "type": "integer", "description": "Line type attribute index of the hidden lines (hiddenLineType)." },
+                        "displayOption": { "$ref": "#/DisplayOption" },
+                        "viewDepthLimitation": { "$ref": "#/ViewDepthLimitation" },
+                        "uncutProjectionMode": { "$ref": "#/ElemProjectionMode" },
+                        "overheadProjectionMode": { "$ref": "#/ElemProjectionMode" },
+                        "visibility": { "$ref": "#/StoryVisibility", "description": "Stories the beam is shown on. Only the given members change." },
+                        "isAutoOnStoryVisibility": { "type": "boolean", "description": "Recalculate the story visibility from the elevation of the beam. Set it to false to keep an explicit visibility." },
+                        "linkToSettings": { "$ref": "#/LinkToSettings" },
+                        "sequence": { "type": "integer", "minimum": 0, "maximum": 999, "description": "Order of beams meeting with the same priority." },
+                        "isFlipped": { "type": "boolean", "description": "Mirrors a profiled beam." },
+                        "beamShape": { "type": "string", "enum": ["Straight", "HorizontallyCurved", "VerticallyCurved"] },
+                        "holeDefaults": { "$ref": "#/BeamHoleDefaults" },
+                        "cutFillPen": { "$ref": "#/OverriddenPen" },
+                        "cutFillBackgroundPen": { "$ref": "#/OverriddenPen" },
+                        "coverFill": { "$ref": "#/CoverFill", "description": "Cover fill of the floor plan. Only the given members change." },
+                        "allSegments": { "$ref": "#/BeamSegment", "description": "Settings written to every segment, before 'segments'." },
+                        "segments": { "type": "array", "items": { "$ref": "#/BeamSegment" }, "minItems": 1, "description": "Per segment settings, in order. A different number of items changes the number of segments: added segments copy the last one, and the lengths become equal proportions unless 'schemes' is given." },
+                        "cuts": { "type": "array", "items": { "$ref": "#/AssemblySegmentCut" }, "minItems": 2, "description": "The cuts at the segment ends: exactly segment count + 1 items." },
+                        "schemes": { "type": "array", "items": { "$ref": "#/AssemblySegmentScheme" }, "minItems": 1, "description": "The segment lengths: exactly segment count items." },
+                        "gables": { "type": "array", "items": { "$ref": "#/BeamGable" }, "description": "Replaces the cut planes of the beam (API_Gable)." }
                     },
                     "additionalProperties": false,
                     "required": ["begCoordinate", "endCoordinate", "zCoordinate"]
@@ -5839,7 +5890,22 @@ var gCommands = [{
                             "$ref": "#/MeshSubline"
                         },
                         "minItems": 1
-                    }
+                    },
+                    "layerIndex": { "type": "integer", "description": "Layer attribute index. On Create it decides the layer instead of the Mesh tool default. Do not combine with layerId." },
+                    "layerId": { "$ref": "#/AttributeId", "description": "Layer attribute id, the alternative of layerIndex." },
+                    "renovationStatus": { "$ref": "#/RenovationStatus" },
+                    "visibility": { "$ref": "#/StoryVisibility", "description": "Shorthand for contourVisibility and fillVisibility together. Only the given members change." },
+                    "contourVisibility": { "$ref": "#/StoryVisibility", "description": "Stories showing the contour (visibilityCont). Only the given members change." },
+                    "fillVisibility": { "$ref": "#/StoryVisibility", "description": "Stories showing the cover fill (visibilityFill). Only the given members change." },
+                    "linkToSettings": { "$ref": "#/LinkToSettings" },
+                    "sectionContourPen": { "type": "integer", "description": "Contour pen of the fill in sections (sectContPen)." },
+                    "cutFillPen": { "$ref": "#/OverriddenPen" },
+                    "cutFillBackgroundPen": { "$ref": "#/OverriddenPen" },
+                    "topMaterial": { "$ref": "#/OverriddenMaterial" },
+                    "sideMaterial": { "$ref": "#/OverriddenMaterial" },
+                    "bottomMaterial": { "$ref": "#/OverriddenMaterial" },
+                    "materialsChained": { "type": "boolean" },
+                    "coverFill": { "$ref": "#/MeshCoverFill" }
                 },
                 "additionalProperties": false,
                 "required": [
@@ -6272,6 +6338,7 @@ var gCommands = [{
                     "type": "object",
                     "properties": {
                         "elementId": { "$ref": "#/ElementId" },
+                        "floorIndex": { "type": "integer", "description": "Moves the beam to this home story; its level stays relative to the story." },
                         "begCoordinate": { "$ref": "#/Coordinate2D" },
                         "endCoordinate": { "$ref": "#/Coordinate2D" },
                         "level": { "type": "number" },
@@ -6279,9 +6346,7 @@ var gCommands = [{
                         "slantAngle": { "type": "number" },
                         "arcAngle": { "type": "number" },
                         "verticalCurveHeight": { "type": "number" },
-                        "beamShape": { "type": "string", "enum": ["Straight", "HorizontallyCurved", "VerticallyCurved"] },
                         "isSlanted": { "type": "boolean" },
-                        "isFlipped": { "type": "boolean" },
                         "profileAngle": { "type": "number" },
                         "anchorPoint": { "$ref": "#/BeamAnchorPoint" },
                         "width": { "type": "number", "exclusiveMinimum": 0.0, "description": "Cross section width of the beam. Applied to all segments." },
@@ -6297,9 +6362,40 @@ var gCommands = [{
                                 "$ref": "#/BeamHoleModification"
                             }
                         },
+                        "layerIndex": { "type": "integer", "description": "Layer attribute index. On Create it decides the layer instead of the Beam tool default. Do not combine with layerId." },
+                        "layerId": { "$ref": "#/AttributeId", "description": "Layer attribute id, the alternative of layerIndex." },
+                        "renovationStatus": { "$ref": "#/RenovationStatus" },
+                        "showReferenceAxis": { "$ref": "#/BeamVisibleLines", "description": "API_BeamType::showReferenceAxis." },
+                        "showContourLines": { "$ref": "#/BeamVisibleLines", "description": "API_BeamType::showContourLines." },
+                        "referencePen": { "type": "integer", "description": "Pen of the reference line (refPen)." },
+                        "referenceLineTypeIndex": { "type": "integer", "description": "Line type attribute index of the reference line (refLtype)." },
+                        "cutContourPen": { "type": "integer", "description": "Pen of the cut lines (cutContourLinePen)." },
+                        "cutContourLineTypeIndex": { "type": "integer", "description": "Line type attribute index of the cut lines (cutContourLineType)." },
+                        "uncutLinePen": { "type": "integer", "description": "Pen of the uncut lines (belowViewLinePen)." },
+                        "uncutLineTypeIndex": { "type": "integer", "description": "Line type attribute index of the uncut lines (belowViewLineType)." },
+                        "overheadLinePen": { "type": "integer", "description": "Pen of the overhead lines (aboveViewLinePen)." },
+                        "overheadLineTypeIndex": { "type": "integer", "description": "Line type attribute index of the overhead lines (aboveViewLineType)." },
+                        "hiddenLinePen": { "type": "integer", "description": "Pen of the hidden lines (hiddenLinePen)." },
+                        "hiddenLineTypeIndex": { "type": "integer", "description": "Line type attribute index of the hidden lines (hiddenLineType)." },
+                        "displayOption": { "$ref": "#/DisplayOption" },
+                        "viewDepthLimitation": { "$ref": "#/ViewDepthLimitation" },
+                        "uncutProjectionMode": { "$ref": "#/ElemProjectionMode" },
+                        "overheadProjectionMode": { "$ref": "#/ElemProjectionMode" },
+                        "visibility": { "$ref": "#/StoryVisibility", "description": "Stories the beam is shown on. Only the given members change." },
+                        "isAutoOnStoryVisibility": { "type": "boolean", "description": "Recalculate the story visibility from the elevation of the beam. Set it to false to keep an explicit visibility." },
+                        "linkToSettings": { "$ref": "#/LinkToSettings" },
+                        "sequence": { "type": "integer", "minimum": 0, "maximum": 999, "description": "Order of beams meeting with the same priority." },
+                        "isFlipped": { "type": "boolean", "description": "Mirrors a profiled beam." },
+                        "beamShape": { "type": "string", "enum": ["Straight", "HorizontallyCurved", "VerticallyCurved"] },
+                        "holeDefaults": { "$ref": "#/BeamHoleDefaults" },
                         "cutFillPen": { "$ref": "#/OverriddenPen" },
                         "cutFillBackgroundPen": { "$ref": "#/OverriddenPen" },
-                        "coverFill": { "$ref": "#/CoverFill" }
+                        "coverFill": { "$ref": "#/CoverFill", "description": "Cover fill of the floor plan. Only the given members change." },
+                        "allSegments": { "$ref": "#/BeamSegment", "description": "Settings written to every segment, before 'segments'." },
+                        "segments": { "type": "array", "items": { "$ref": "#/BeamSegment" }, "minItems": 1, "description": "Per segment settings, in order. A different number of items changes the number of segments: added segments copy the last one, and the lengths become equal proportions unless 'schemes' is given." },
+                        "cuts": { "type": "array", "items": { "$ref": "#/AssemblySegmentCut" }, "minItems": 2, "description": "The cuts at the segment ends: exactly segment count + 1 items." },
+                        "schemes": { "type": "array", "items": { "$ref": "#/AssemblySegmentScheme" }, "minItems": 1, "description": "The segment lengths: exactly segment count items." },
+                        "gables": { "type": "array", "items": { "$ref": "#/BeamGable" }, "description": "Replaces the cut planes of the beam (API_Gable)." }
                     },
                     "additionalProperties": false,
                     "required": ["elementId"]
