@@ -177,6 +177,14 @@ static GSErrCode GetElementsFromCurrentDatabase (const GS::ObjectState& paramete
     }
 
     bool includeSubElemObjects = false;
+// The home story of an element is in its header, so a story can be filtered without activating it.
+static bool IsElementOnHomeStory (const API_Guid& elemGuid, Int32 floorIndex)
+{
+    API_Elem_Head head = {};
+    head.guid = elemGuid;
+    return ACAPI_Element_GetHeader (&head) == NoError && head.floorInd == floorIndex;
+}
+
     API_ElemFilterFlags filterFlags = APIFilt_None;
     GS::Array<GS::UniString> filters;
     if (parameters.Get ("filters", filters)) {
@@ -205,6 +213,18 @@ static GSErrCode GetElementsFromCurrentDatabase (const GS::ObjectState& paramete
             }
         }
     } else {
+    Int32 floorIndex = 0;
+    const bool hasFloorIndex = parameters.Get ("floorIndex", floorIndex);
+    if (hasFloorIndex) {
+        GS::Array<API_Guid> elemsOnStory;
+        for (const API_Guid& elemGuid : elemList) {
+            if (IsElementOnHomeStory (elemGuid, floorIndex)) {
+                elemsOnStory.Push (elemGuid);
+            }
+        }
+        elemList = elemsOnStory;
+    }
+
         for (const API_Guid& elemGuid : elemList) {
             elementsListProxy (CreateElementIdObjectState (GetParentElemOfSectElem (elemGuid)));
         }
@@ -389,6 +409,10 @@ GS::Optional<GS::UniString> GetElementsByTypeCommand::GetInputParametersSchema (
         ]
     })";
 }
+            "floorIndex": {
+                "type": "integer",
+                "description": "Optional. Keeps only the elements whose home story is this story (API_Elem_Head::floorInd), whichever story is active. Unlike the OnActualFloor filter it needs no story switch and does not consider the elements' story visibility; see GetStories for the indices."
+            },
 
 GS::Optional<GS::UniString> GetElementsByTypeCommand::GetRawResponseSchema () const
 {
@@ -466,6 +490,10 @@ GS::Optional<GS::UniString> GetAllElementsCommand::GetInputParametersSchema () c
 }
 
 GetDetailsOfElementsCommand::GetDetailsOfElementsCommand () :
+            "floorIndex": {
+                "type": "integer",
+                "description": "Optional. Keeps only the elements whose home story is this story (API_Elem_Head::floorInd), whichever story is active. Unlike the OnActualFloor filter it needs no story switch and does not consider the elements' story visibility; see GetStories for the indices."
+            },
     CommandBase (CommonSchema::Used)
 {
 }
@@ -4075,7 +4103,9 @@ GS::ObjectState FilterElementsCommand::Execute (const GS::ObjectState& parameter
     for (const GS::UniString& filter : filters) {
         filterFlags |= ConvertFilterStringToFlag (filter);
     }
-    if (filterFlags == APIFilt_None) {
+    Int32 floorIndex = 0;
+    const bool hasFloorIndex = parameters.Get ("floorIndex", floorIndex);
+    if (filterFlags == APIFilt_None && !hasFloorIndex) {
         return CreateErrorResponse (APIERR_BADPARS, "Invalid or missing filters!");
     }
 
@@ -4089,7 +4119,10 @@ GS::ObjectState FilterElementsCommand::Execute (const GS::ObjectState& parameter
         }
 
         const API_Guid elemGuid = GetGuidFromObjectState (*elementId);
-        if (!ACAPI_Element_Filter (elemGuid, filterFlags)) {
+        if (filterFlags != APIFilt_None && !ACAPI_Element_Filter (elemGuid, filterFlags)) {
+            continue;
+        }
+        if (hasFloorIndex && !IsElementOnHomeStory (elemGuid, floorIndex)) {
             continue;
         }
 
@@ -4123,6 +4156,10 @@ GS::Optional<GS::UniString> HighlightElementsCommand::GetInputParametersSchema (
                 "items": {
                     "type": "array",
                     "description": "Color of the highlighted element as an [r, g, b, a] array. Each component must be in the 0-255 range.",
+            },
+            "floorIndex": {
+                "type": "integer",
+                "description": "Optional. Keeps only the elements whose home story is this story (API_Elem_Head::floorInd), whichever story is active. Unlike the OnActualFloor filter it needs no story switch and does not consider the elements' story visibility; see GetStories for the indices."
                     "items": {
                         "type": "integer"
                     },
