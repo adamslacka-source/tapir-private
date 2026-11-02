@@ -27,6 +27,11 @@ var gSchemaDefinitions = {
         "properties": {
             "elementId": {
                 "$ref": "#/ElementId"
+            },
+            "warnings": {
+                "type": "array",
+                "description": "The settings of the request that Archicad did not keep. Only present when there are some.",
+                "items": { "type": "string" }
             }
         },
         "additionalProperties": false,
@@ -2872,6 +2877,11 @@ var gSchemaDefinitions = {
             "success": {
                 "type": "boolean",
                 "enum": [ true ]
+            },
+            "warnings": {
+                "type": "array",
+                "description": "The settings of the request that Archicad did not keep. Only present when there are some.",
+                "items": { "type": "string" }
             }
         },
         "additionalProperties": false,

@@ -949,13 +949,13 @@ GS::ObjectState ExecuteCreateWithElements (const GS::String& commandName, Func&&
 }
 
 template<typename Func>
-GS::ObjectState ExecuteModifyWithResults (const GS::String& commandName, Func&& modifyFunc)
+GS::ObjectState ExecuteModifyWithResults (const GS::String& commandName, Func&& modifyFunc, const bool* undoRequested = nullptr)
 {
     GS::Array<GS::ObjectState> results;
 
     ACAPI_CallUndoableCommand (commandName, [&]() -> GSErrCode {
         modifyFunc (results);
-        return NoError;
+        return undoRequested != nullptr && *undoRequested ? APIERR_CANCEL : NoError;
     });
 
     return CreateExecutionResultResponse (results);
@@ -2468,11 +2468,16 @@ static GS::Optional<GS::UniString> ApplyRenovationField (API_Element& element, A
         changed = true; \
     } \
 }
+// ACAPI_ELEMENT_MASK_SET marks only the first byte of a member, and for a structure that selects
+// only its first member: measured on API_StoryVisibility, where showOnHome changed and the others
+// did not. This one marks the members of a structure too.
+#define TAPIR_MASK_WHOLE_MEMBER(structType, member) \
+    std::memset (&reinterpret_cast<structType*> (&mask)->member, 0xFF, sizeof (reinterpret_cast<structType*> (&mask)->member))
 #define TAPIR_VISIBILITY_FIELD(structType, target, jsonName, member) { \
     GS::ObjectState visibilityOs; \
     if (os.Get (jsonName, visibilityOs)) { \
         MergeStoryVisibility (visibilityOs, target.member); \
-        ACAPI_ELEMENT_MASK_SET (mask, structType, member); \
+        TAPIR_MASK_WHOLE_MEMBER (structType, member); \
         changed = true; \
     } \
 }
@@ -2480,7 +2485,7 @@ static GS::Optional<GS::UniString> ApplyRenovationField (API_Element& element, A
     GS::ObjectState linkOs; \
     if (os.Get ("linkToSettings", linkOs)) { \
         MergeLinkToSettings (linkOs, target.linkToSettings); \
-        ACAPI_ELEMENT_MASK_SET (mask, structType, linkToSettings); \
+        TAPIR_MASK_WHOLE_MEMBER (structType, linkToSettings); \
         changed = true; \
     } \
 }
@@ -2532,6 +2537,11 @@ static GS::Optional<GS::UniString> ApplyBeamSettings (API_Element& element, API_
     TAPIR_ENUM_FIELD (API_BeamType, beam, "overheadProjectionMode", overheadProjectionMode, API_ElemProjectionModesID, ElemProjectionModeFromString);
     TAPIR_VISIBILITY_FIELD (API_BeamType, beam, "visibility", visibility);
     TAPIR_BOOL_FIELD (API_BeamType, beam, "isAutoOnStoryVisibility", isAutoOnStoryVisibility);
+    // With the automatic visibility on, Archicad overwrites an explicit one.
+    if (os.Contains ("visibility") && !os.Contains ("isAutoOnStoryVisibility")) {
+        beam.isAutoOnStoryVisibility = false;
+        ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, isAutoOnStoryVisibility);
+    }
     TAPIR_LINK_FIELD (API_BeamType, beam);
     TAPIR_BOOL_FIELD (API_BeamType, beam, "isFlipped", isFlipped);
 
@@ -2550,6 +2560,15 @@ static GS::Optional<GS::UniString> ApplyBeamSettings (API_Element& element, API_
             beam.beamShape = API_VerticallyCurvedBeam;
         } else if (beamShapeStr == "Straight") {
             beam.beamShape = API_StraightBeam;
+            // Archicad derives the curved shape back from a remaining curve.
+            if (!os.Contains ("arcAngle")) {
+                beam.curveAngle = 0.0;
+                ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, curveAngle);
+            }
+            if (!os.Contains ("verticalCurveHeight")) {
+                beam.verticalCurveHeight = 0.0;
+                ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, verticalCurveHeight);
+            }
         } else {
             return GS::UniString ("Invalid 'beamShape': ") + beamShapeStr;
         }
@@ -2618,7 +2637,7 @@ static GS::Optional<GS::UniString> ApplyBeamSettings (API_Element& element, API_
         ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, coverFillForegroundPen);
         ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, coverFillBackgroundPen);
         ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, coverFillTransformationType);
-        ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, coverFillTransformation);
+        TAPIR_MASK_WHOLE_MEMBER (API_BeamType, coverFillTransformation);
         changed = true;
     }
     return {};
@@ -2684,7 +2703,7 @@ static GS::Optional<GS::UniString> ApplyMeshSettingsImpl (API_Element& element, 
         const GS::ObjectState* localOriginOs = coverFillOs.Get ("localOrigin");
         if (localOriginOs != nullptr) {
             mesh.locOrigo = Get2DCoordinateFromObjectState (*localOriginOs);
-            ACAPI_ELEMENT_MASK_SET (mask, API_MeshType, locOrigo);
+            TAPIR_MASK_WHOLE_MEMBER (API_MeshType, locOrigo);
         }
         if (coverFillOs.Get ("angle", mesh.fillAngle)) {
             ACAPI_ELEMENT_MASK_SET (mask, API_MeshType, fillAngle);
@@ -4340,8 +4359,8 @@ static const char* BeamSettingsSchemaProperties = R"(
                         "layerIndex": { "type": "integer", "description": "Layer attribute index. On Create it decides the layer instead of the Beam tool default. Do not combine with layerId." },
                         "layerId": { "$ref": "#/AttributeId", "description": "Layer attribute id, the alternative of layerIndex." },
                         "renovationStatus": { "$ref": "#/RenovationStatus" },
-                        "showReferenceAxis": { "$ref": "#/BeamVisibleLines", "description": "API_BeamType::showReferenceAxis." },
-                        "showContourLines": { "$ref": "#/BeamVisibleLines", "description": "API_BeamType::showContourLines." },
+                        "showReferenceAxis": { "$ref": "#/BeamVisibleLines", "description": "API_BeamType::showReferenceAxis. Archicad keeps HideAlways and ByMVO; ShowAlways becomes ByMVO, with a warning." },
+                        "showContourLines": { "$ref": "#/BeamVisibleLines", "description": "API_BeamType::showContourLines. Archicad keeps ShowAlways and ByMVO; HideAlways becomes ByMVO, with a warning." },
                         "referencePen": { "type": "integer", "description": "Pen of the reference line (refPen)." },
                         "referenceLineTypeIndex": { "type": "integer", "description": "Line type attribute index of the reference line (refLtype)." },
                         "cutContourPen": { "type": "integer", "description": "Pen of the cut lines (cutContourLinePen)." },
@@ -4353,16 +4372,16 @@ static const char* BeamSettingsSchemaProperties = R"(
                         "hiddenLinePen": { "type": "integer", "description": "Pen of the hidden lines (hiddenLinePen)." },
                         "hiddenLineTypeIndex": { "type": "integer", "description": "Line type attribute index of the hidden lines (hiddenLineType)." },
                         "displayOption": { "$ref": "#/DisplayOption" },
-                        "viewDepthLimitation": { "$ref": "#/ViewDepthLimitation" },
+                        "viewDepthLimitation": { "$ref": "#/ViewDepthLimitation", "description": "Only the display options Standard and StandardWithAbstract keep another value than EntireElement." },
                         "uncutProjectionMode": { "$ref": "#/ElemProjectionMode" },
                         "overheadProjectionMode": { "$ref": "#/ElemProjectionMode" },
-                        "visibility": { "$ref": "#/StoryVisibility", "description": "Stories the beam is shown on. Only the given members change." },
-                        "isAutoOnStoryVisibility": { "type": "boolean", "description": "Recalculate the story visibility from the elevation of the beam. Set it to false to keep an explicit visibility." },
+                        "visibility": { "$ref": "#/StoryVisibility", "description": "Stories the beam is shown on. Only the given members change. Sets isAutoOnStoryVisibility to false, unless that is given too." },
+                        "isAutoOnStoryVisibility": { "type": "boolean", "description": "Recalculate the story visibility from the elevation of the beam; Archicad then overwrites an explicit visibility." },
                         "linkToSettings": { "$ref": "#/LinkToSettings" },
-                        "sequence": { "type": "integer", "minimum": 0, "maximum": 999, "description": "Order of beams meeting with the same priority." },
+                        "sequence": { "type": "integer", "description": "API_BeamType::sequence. Measured: Archicad reports 5000 by default and replaces any value written, with a warning." },
                         "isFlipped": { "type": "boolean", "description": "Mirrors a profiled beam." },
                         "beamShape": { "type": "string", "enum": ["Straight", "HorizontallyCurved", "VerticallyCurved"] },
-                        "holeDefaults": { "$ref": "#/BeamHoleDefaults" },
+                        "holeDefaults": { "$ref": "#/BeamHoleDefaults", "description": "Measured: Archicad does not store these on a placed beam, with a warning. Use 'holes'." },
                         "cutFillPen": { "$ref": "#/OverriddenPen" },
                         "cutFillBackgroundPen": { "$ref": "#/OverriddenPen" },
                         "coverFill": { "$ref": "#/CoverFill", "description": "Cover fill of the floor plan. Only the given members change." },
@@ -4370,11 +4389,162 @@ static const char* BeamSettingsSchemaProperties = R"(
                         "segments": { "type": "array", "items": { "$ref": "#/BeamSegment" }, "minItems": 1, "description": "Per segment settings, in order. A different number of items changes the number of segments: added segments copy the last one, and the lengths become equal proportions unless 'schemes' is given." },
                         "cuts": { "type": "array", "items": { "$ref": "#/AssemblySegmentCut" }, "minItems": 2, "description": "The cuts at the segment ends: exactly segment count + 1 items." },
                         "schemes": { "type": "array", "items": { "$ref": "#/AssemblySegmentScheme" }, "minItems": 1, "description": "The segment lengths: exactly segment count items." },
-                        "gables": { "type": "array", "items": { "$ref": "#/BeamGable" }, "description": "Replaces the cut planes of the beam (API_Gable)." })";
+                        "gables": { "type": "array", "items": { "$ref": "#/BeamGable" }, "description": "The cut planes of the beam (API_Gable). CreateBeams only: ModifyBeams refuses them, because ACAPI_Element_Change fails on them and deletes the beam." })";
 
 GS::Optional<GS::UniString> ApplyMeshSettings (API_Element& element, API_Element& mask, const GS::ObjectState& os, bool& changed)
 {
     return ApplyMeshSettingsImpl (element, mask, os, changed);
+}
+
+template <typename OptionalType>
+static bool IsSameOptional (const OptionalType& a, const OptionalType& b)
+{
+    return a.hasValue == b.hasValue && (!a.hasValue || std::memcmp (&a.value, &b.value, sizeof (a.value)) == 0);
+}
+
+// What Archicad did not keep of a request: the element as it is now, against the same element with
+// the request written on it. Each setting is compared separately, so that a command can say which
+// one was dropped instead of reporting a plain success. Limits measured on AC29, see
+// docs/private/beam-mesh-field-map.md.
+#define TAPIR_WARN_MEMBER(expectedElem, actualElem, jsonName, member, hint) \
+    if (os.Contains (jsonName) && std::memcmp (&expectedElem.member, &actualElem.member, sizeof (actualElem.member)) != 0) { \
+        warnings.Push (GS::UniString ("Archicad did not keep '" jsonName "'." hint)); \
+    }
+#define TAPIR_WARN_OPTIONAL(expectedElem, actualElem, jsonName, member) \
+    if (os.Contains (jsonName) && !IsSameOptional (expectedElem.member, actualElem.member)) { \
+        warnings.Push (GS::UniString ("Archicad did not keep '" jsonName "'.")); \
+    }
+#define TAPIR_WARN_HIDDEN_LAYER(actualElem) \
+    if ((os.Contains ("layerIndex") || os.Contains ("layerId")) && IsHiddenLayer (actualElem.header.layer)) { \
+        warnings.Push (GS::UniString ("The element is on a hidden layer: Archicad refuses every change of it, also moving it to another layer, until the layer is shown.")); \
+    }
+
+GS::Array<GS::UniString> GetBeamSettingsWarnings (const API_Guid& guid, const GS::ObjectState& os)
+{
+    GS::Array<GS::UniString> warnings;
+    API_Element actual = {};
+    actual.header.guid = guid;
+    if (ACAPI_Element_Get (&actual) != NoError) {
+        return warnings;
+    }
+    API_Element expected = actual;
+    API_Element mask = {};
+    ACAPI_ELEMENT_MASK_CLEAR (mask);
+    bool changed = false;
+    if (ApplyBeamSettings (expected, mask, os, changed).HasValue ()) {
+        return warnings;
+    }
+
+    TAPIR_WARN_MEMBER (expected, actual, "layerIndex", header.layer, "");
+    TAPIR_WARN_MEMBER (expected, actual, "layerId", header.layer, "");
+    TAPIR_WARN_MEMBER (expected, actual, "renovationStatus", header.renovationStatus, "");
+    TAPIR_WARN_MEMBER (expected, actual, "showReferenceAxis", beam.showReferenceAxis, " The axis can only be HideAlways or ByMVO: ShowAlways becomes ByMVO.");
+    TAPIR_WARN_MEMBER (expected, actual, "showContourLines", beam.showContourLines, " The contour can only be ShowAlways or ByMVO: HideAlways becomes ByMVO.");
+    TAPIR_WARN_MEMBER (expected, actual, "referencePen", beam.refPen, "");
+    TAPIR_WARN_MEMBER (expected, actual, "referenceLineTypeIndex", beam.refLtype, "");
+    TAPIR_WARN_MEMBER (expected, actual, "cutContourPen", beam.cutContourLinePen, "");
+    TAPIR_WARN_MEMBER (expected, actual, "cutContourLineTypeIndex", beam.cutContourLineType, "");
+    TAPIR_WARN_MEMBER (expected, actual, "uncutLinePen", beam.belowViewLinePen, "");
+    TAPIR_WARN_MEMBER (expected, actual, "uncutLineTypeIndex", beam.belowViewLineType, "");
+    TAPIR_WARN_MEMBER (expected, actual, "overheadLinePen", beam.aboveViewLinePen, "");
+    TAPIR_WARN_MEMBER (expected, actual, "overheadLineTypeIndex", beam.aboveViewLineType, "");
+    TAPIR_WARN_MEMBER (expected, actual, "hiddenLinePen", beam.hiddenLinePen, "");
+    TAPIR_WARN_MEMBER (expected, actual, "hiddenLineTypeIndex", beam.hiddenLineType, "");
+    TAPIR_WARN_MEMBER (expected, actual, "displayOption", beam.displayOption, "");
+    TAPIR_WARN_MEMBER (expected, actual, "viewDepthLimitation", beam.viewDepthLimitation, " Only the display options Standard and StandardWithAbstract allow another value than EntireElement.");
+    TAPIR_WARN_MEMBER (expected, actual, "uncutProjectionMode", beam.uncutProjectionMode, " With the display option OutLinesOnly the uncut mode also decides the overhead mode.");
+    TAPIR_WARN_MEMBER (expected, actual, "overheadProjectionMode", beam.overheadProjectionMode, " With the display option OutLinesOnly the uncut mode also decides the overhead mode.");
+    TAPIR_WARN_MEMBER (expected, actual, "visibility", beam.visibility, " A beam keeps an explicit visibility only with isAutoOnStoryVisibility false.");
+    TAPIR_WARN_MEMBER (expected, actual, "isAutoOnStoryVisibility", beam.isAutoOnStoryVisibility, "");
+    TAPIR_WARN_MEMBER (expected, actual, "sequence", beam.sequence, " Archicad replaces the value with its own number; the order of beams cannot be set this way.");
+    TAPIR_WARN_MEMBER (expected, actual, "isFlipped", beam.isFlipped, " It applies to profiled beams only.");
+    TAPIR_WARN_MEMBER (expected, actual, "beamShape", beam.beamShape, "");
+    TAPIR_WARN_MEMBER (expected, actual, "holeDefaults", beam.holeType, " Archicad does not store the hole settings on a placed beam, give 'holes' instead.");
+    if (os.Contains ("holeDefaults") && (expected.beam.holeWidth != actual.beam.holeWidth || expected.beam.holeHeight != actual.beam.holeHeight || expected.beam.holeLevel != actual.beam.holeLevel || expected.beam.holeContureOn != actual.beam.holeContureOn)) {
+        warnings.Push (GS::UniString ("Archicad did not keep 'holeDefaults'. Archicad does not store the hole settings on a placed beam, give 'holes' instead."));
+    }
+#ifdef ServerMainVers_2700
+    TAPIR_WARN_OPTIONAL (expected, actual, "cutFillPen", beam.cutFillPen);
+    TAPIR_WARN_OPTIONAL (expected, actual, "cutFillBackgroundPen", beam.cutFillBackgroundPen);
+#endif
+    if (os.Contains ("coverFill") && (
+            expected.beam.useCoverFill != actual.beam.useCoverFill ||
+            expected.beam.useCoverFillFromSurface != actual.beam.useCoverFillFromSurface ||
+            expected.beam.coverFillOrientationComesFrom3D != actual.beam.coverFillOrientationComesFrom3D ||
+            std::memcmp (&expected.beam.coverFillType, &actual.beam.coverFillType, sizeof (actual.beam.coverFillType)) != 0 ||
+            expected.beam.coverFillForegroundPen != actual.beam.coverFillForegroundPen ||
+            expected.beam.coverFillBackgroundPen != actual.beam.coverFillBackgroundPen ||
+            expected.beam.coverFillTransformationType != actual.beam.coverFillTransformationType ||
+            std::memcmp (&expected.beam.coverFillTransformation, &actual.beam.coverFillTransformation, sizeof (actual.beam.coverFillTransformation)) != 0)) {
+        warnings.Push (GS::UniString ("Archicad did not keep every member of 'coverFill'."));
+    }
+    TAPIR_WARN_HIDDEN_LAYER (actual);
+    return warnings;
+}
+
+GS::Array<GS::UniString> GetMeshSettingsWarnings (const API_Guid& guid, const GS::ObjectState& os)
+{
+    GS::Array<GS::UniString> warnings;
+    API_Element actual = {};
+    actual.header.guid = guid;
+    if (ACAPI_Element_Get (&actual) != NoError) {
+        return warnings;
+    }
+    API_Element expected = actual;
+    API_Element mask = {};
+    ACAPI_ELEMENT_MASK_CLEAR (mask);
+    bool changed = false;
+    if (ApplyMeshSettings (expected, mask, os, changed).HasValue ()) {
+        return warnings;
+    }
+
+    TAPIR_WARN_MEMBER (expected, actual, "layerIndex", header.layer, "");
+    TAPIR_WARN_MEMBER (expected, actual, "layerId", header.layer, "");
+    TAPIR_WARN_MEMBER (expected, actual, "renovationStatus", header.renovationStatus, "");
+    TAPIR_WARN_MEMBER (expected, actual, "visibility", mesh.visibilityCont, " The contour of a mesh is always shown on its home story.");
+    TAPIR_WARN_MEMBER (expected, actual, "visibility", mesh.visibilityFill, "");
+    TAPIR_WARN_MEMBER (expected, actual, "contourVisibility", mesh.visibilityCont, " The contour of a mesh is always shown on its home story.");
+    TAPIR_WARN_MEMBER (expected, actual, "fillVisibility", mesh.visibilityFill, "");
+    TAPIR_WARN_MEMBER (expected, actual, "sectionContourPen", mesh.sectContPen, "");
+    TAPIR_WARN_MEMBER (expected, actual, "materialsChained", mesh.materialsChained, "");
+#ifdef ServerMainVers_2700
+    TAPIR_WARN_OPTIONAL (expected, actual, "cutFillPen", mesh.cutFillPen);
+    TAPIR_WARN_OPTIONAL (expected, actual, "cutFillBackgroundPen", mesh.cutFillBackgroundPen);
+#endif
+    TAPIR_WARN_OPTIONAL (expected, actual, "topMaterial", mesh.topMat);
+    TAPIR_WARN_OPTIONAL (expected, actual, "sideMaterial", mesh.sideMat);
+    TAPIR_WARN_OPTIONAL (expected, actual, "bottomMaterial", mesh.botMat);
+    if (os.Contains ("coverFill") && (
+            expected.mesh.useFloorFill != actual.mesh.useFloorFill ||
+            expected.mesh.floorFillPen != actual.mesh.floorFillPen ||
+            expected.mesh.floorFillBGPen != actual.mesh.floorFillBGPen ||
+            std::memcmp (&expected.mesh.floorFillInd, &actual.mesh.floorFillInd, sizeof (actual.mesh.floorFillInd)) != 0 ||
+            expected.mesh.useLocalOrigo != actual.mesh.useLocalOrigo ||
+            expected.mesh.use3DHatching != actual.mesh.use3DHatching ||
+            expected.mesh.locOrigo.x != actual.mesh.locOrigo.x ||
+            expected.mesh.locOrigo.y != actual.mesh.locOrigo.y ||
+            expected.mesh.fillAngle != actual.mesh.fillAngle)) {
+        warnings.Push (GS::UniString ("Archicad did not keep every member of 'coverFill'."));
+    }
+    TAPIR_WARN_HIDDEN_LAYER (actual);
+    return warnings;
+}
+
+bool IsHiddenLayer (const API_AttributeIndex& layerIndex)
+{
+    API_Attribute layer = {};
+    layer.header.typeID = API_LayerID;
+    layer.header.index = layerIndex;
+    return ACAPI_Attribute_Get (&layer) == NoError && (layer.header.flags & APILay_Hidden) != 0;
+}
+
+// A failed ACAPI_Element_Change can leave the element deleted (measured: gables on a beam). The
+// caller then undoes the whole command instead of losing the element.
+bool IsElementLost (const API_Guid& guid)
+{
+    API_Elem_Head head = {};
+    head.guid = guid;
+    return ACAPI_Element_GetHeader (&head) != NoError;
 }
 
 const char* MeshSettingsSchemaProperties = R"(
@@ -4624,6 +4794,11 @@ GS::Optional<GS::ObjectState> CreateBeamsCommand::ChangeAfterCreation (API_Eleme
         return CreateErrorResponse (err, "The beam was created, but it could not be read back to check its settings.");
     }
 
+    // Archicad refuses every change of an element on a hidden layer.
+    if (IsHiddenLayer (fresh.header.layer)) {
+        return {};
+    }
+
     const API_Element before = fresh;
     bool changed = false;
     GS::Optional<GS::UniString> applyError = ApplyBeamSettings (fresh, mask, parameters, changed);
@@ -4679,6 +4854,11 @@ GS::Optional<GS::ObjectState> CreateBeamsCommand::ChangeAfterCreation (API_Eleme
     }
     element.header = fresh.header;
     return {};
+}
+
+GS::Array<GS::UniString> CreateBeamsCommand::GetCreationWarnings (const API_Element& element, const GS::ObjectState& parameters) const
+{
+    return GetBeamSettingsWarnings (element.header.guid, parameters);
 }
 
 // ============================================================================
@@ -9092,7 +9272,8 @@ GS::ObjectState ModifyBeamsCommand::Execute (const GS::ObjectState& parameters, 
         return CreateErrorResponse (APIERR_BADPARS, error.Get ());
     }
 
-    return ExecuteModifyWithResults ("Modify Beams", [&](GS::Array<GS::ObjectState>& results) {
+    bool elementLost = false;
+    const GS::ObjectState response = ExecuteModifyWithResults ("Modify Beams", [&](GS::Array<GS::ObjectState>& results) {
         for (const auto& item : items) {
             if (item.Get ("elementId") == nullptr) {
                 results.Push (CreateFailedExecutionResult (APIERR_BADPARS, "Missing required 'elementId' field."));
@@ -9139,14 +9320,11 @@ GS::ObjectState ModifyBeamsCommand::Execute (const GS::ObjectState& parameters, 
                 }
                 memoMask |= APIMemoMask_BeamSegment | APIMemoMask_AssemblySegmentCut | APIMemoMask_AssemblySegmentScheme;
             }
-            GS::Array<GS::ObjectState> gables;
-            if (item.Get ("gables", gables)) {
-                settingsError = BuildBeamGablesMemo (memo, gables);
-                if (settingsError.HasValue ()) {
-                    results.Push (CreateFailedExecutionResult (APIERR_MEMFULL, settingsError.Get ()));
-                    continue;
-                }
-                memoMask |= APIMemoMask_Gables;
+            if (item.Contains ("gables")) {
+                // Measured on AC29: ACAPI_Element_Change fails with APIERR_GENERAL on gables that
+                // ACAPI_Element_Create accepts, and the beam is gone afterwards.
+                results.Push (CreateFailedExecutionResult (APIERR_BADPARS, "ModifyBeams does not change 'gables': Archicad fails on it and deletes the beam. Give them to CreateBeams."));
+                continue;
             }
             GS::Array<GS::ObjectState> holes;
             if (item.Get ("holes", holes)) {
@@ -9161,15 +9339,19 @@ GS::ObjectState ModifyBeamsCommand::Execute (const GS::ObjectState& parameters, 
             if (memoMask != 0) {
                 err = ACAPI_Element_Change (&element, &mask, &memo, memoMask, true);
                 if (err != NoError) {
-                    results.Push (CreateFailedExecutionResult (err, "Failed to modify beam memo data (segments, cuts, schemes, gables or holes)."));
+                    if (IsElementLost (element.header.guid)) {
+                        elementLost = true;
+                        return;
+                    }
+                    results.Push (CreateFailedExecutionResult (err, "Failed to modify beam memo data (segments, cuts, schemes or holes)."));
                     continue;
                 }
                 if (hasSectionFields) {
                     bool sectionOk = ApplyBeamSectionToMemo (element.header.guid, item);
-                    results.Push (sectionOk ? CreateSuccessfulExecutionResult () : CreateFailedExecutionResult (APIERR_GENERAL, "Failed to modify beam cross section."));
+                    results.Push (sectionOk ? CreateSuccessfulExecutionResult (GetBeamSettingsWarnings (element.header.guid, item)) : CreateFailedExecutionResult (APIERR_GENERAL, "Failed to modify beam cross section."));
                     continue;
                 }
-                results.Push (CreateSuccessfulExecutionResult ());
+                results.Push (CreateSuccessfulExecutionResult (GetBeamSettingsWarnings (element.header.guid, item)));
                 continue;
             }
 
@@ -9181,20 +9363,28 @@ GS::ObjectState ModifyBeamsCommand::Execute (const GS::ObjectState& parameters, 
             if (changed) {
                 err = ACAPI_Element_Change (&element, &mask, nullptr, 0, true);
                 if (err != NoError) {
-                    results.Push (CreateFailedExecutionResult (err, "Failed to modify beam."));
+                    if (IsElementLost (element.header.guid)) {
+                        elementLost = true;
+                        return;
+                    }
+                    results.Push (CreateFailedExecutionResult (err, err == APIERR_HIDDENLAY ? "The beam is on a hidden layer: Archicad refuses every change of it until the layer is shown." : "Failed to modify beam."));
                     continue;
                 }
             }
 
             if (hasSectionFields) {
                 bool sectionOk = ApplyBeamSectionToMemo (element.header.guid, item);
-                results.Push (sectionOk ? CreateSuccessfulExecutionResult () : CreateFailedExecutionResult (APIERR_GENERAL, "Failed to modify beam cross section."));
+                results.Push (sectionOk ? CreateSuccessfulExecutionResult (GetBeamSettingsWarnings (element.header.guid, item)) : CreateFailedExecutionResult (APIERR_GENERAL, "Failed to modify beam cross section."));
                 continue;
             }
 
-            results.Push (CreateSuccessfulExecutionResult ());
+            results.Push (CreateSuccessfulExecutionResult (GetBeamSettingsWarnings (element.header.guid, item)));
         }
-    });
+    }, &elementLost);
+    if (elementLost) {
+        return CreateErrorResponse (APIERR_GENERAL, "Archicad deleted a beam when its change failed, so the whole command was undone and nothing changed.");
+    }
+    return response;
 }
 
 ModifySlabsCommand::ModifySlabsCommand () :
@@ -10675,6 +10865,7 @@ GS::ObjectState ModifyMeshesCommand::Execute (const GS::ObjectState& parameters,
     GS::ObjectState response;
     const auto& executionResults = response.AddList<GS::ObjectState> ("executionResults");
 
+    bool elementLost = false;
     ACAPI_CallUndoableCommand ("ModifyMeshes", [&] () -> GSErrCode {
         for (const GS::ObjectState& meshEntry : meshesData) {
             const GS::ObjectState* elementId = meshEntry.Get ("elementId");
@@ -10867,15 +11058,22 @@ GS::ObjectState ModifyMeshesCommand::Execute (const GS::ObjectState& parameters,
 
             err = ACAPI_Element_Change (&elem, &mask, memoChangeMask != 0 ? &memo : nullptr, memoChangeMask, true);
             if (err != NoError) {
-                executionResults (CreateFailedExecutionResult (err, "Failed to modify mesh"));
+                if (IsElementLost (elem.header.guid)) {
+                    elementLost = true;
+                    return APIERR_CANCEL;
+                }
+                executionResults (CreateFailedExecutionResult (err, err == APIERR_HIDDENLAY ? "The mesh is on a hidden layer: Archicad refuses every change of it until the layer is shown." : "Failed to modify mesh"));
                 continue;
             }
 
-            executionResults (CreateSuccessfulExecutionResult ());
+            executionResults (CreateSuccessfulExecutionResult (GetMeshSettingsWarnings (elem.header.guid, *meshData)));
         }
 
         return NoError;
     });
+    if (elementLost) {
+        return CreateErrorResponse (APIERR_GENERAL, "Archicad deleted a mesh when its change failed, so the whole command was undone and nothing changed.");
+    }
 
     return response;
 }
