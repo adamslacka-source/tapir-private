@@ -18,9 +18,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <map>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -1379,6 +1381,42 @@ bool ViewDepthLimitationFromString (const GS::UniString& s, API_ElemViewDepthLim
     return false;
 }
 
+GS::UniString BeamVisibleLinesToString (API_BeamVisibleLinesID value)
+{
+    switch (value) {
+        case APIBeamLineHideAlways: return "HideAlways";
+        case APIBeamLineByMVO:      return "ByMVO";
+        case APIBeamLineShowAlways:
+        default:                    return "ShowAlways";
+    }
+}
+
+bool BeamVisibleLinesFromString (const GS::UniString& s, API_BeamVisibleLinesID& out)
+{
+    if (s == "ShowAlways") { out = APIBeamLineShowAlways; return true; }
+    if (s == "HideAlways") { out = APIBeamLineHideAlways; return true; }
+    if (s == "ByMVO")      { out = APIBeamLineByMVO; return true; }
+    return false;
+}
+
+GS::UniString ElemProjectionModeToString (API_ElemProjectionModesID value)
+{
+    switch (value) {
+        case API_Projected: return "Projected";
+        case API_Hybrid:    return "Hybrid";
+        case API_Symbolic:
+        default:            return "Symbolic";
+    }
+}
+
+bool ElemProjectionModeFromString (const GS::UniString& s, API_ElemProjectionModesID& out)
+{
+    if (s == "Symbolic")  { out = API_Symbolic; return true; }
+    if (s == "Projected") { out = API_Projected; return true; }
+    if (s == "Hybrid")    { out = API_Hybrid; return true; }
+    return false;
+}
+
 namespace {
 
 void AddAdditionalPolyToMemo (
@@ -2312,6 +2350,576 @@ bool ApplyColumnDetails (API_Element& element, API_Element& mask, const GS::Obje
     return changed;
 }
 
+// Story visibility is merged, so that a partial object leaves the other members as they are.
+static void MergeStoryVisibility (const GS::ObjectState& os, API_StoryVisibility& visibility)
+{
+    os.Get ("showOnHome", visibility.showOnHome);
+    os.Get ("showAllAbove", visibility.showAllAbove);
+    os.Get ("showAllBelow", visibility.showAllBelow);
+    Int32 stories = 0;
+    if (os.Get ("showRelAbove", stories)) {
+        visibility.showRelAbove = static_cast<short> (stories);
+    }
+    if (os.Get ("showRelBelow", stories)) {
+        visibility.showRelBelow = static_cast<short> (stories);
+    }
+}
+
+static void MergeLinkToSettings (const GS::ObjectState& os, API_LinkToSettings& link)
+{
+    Int32 homeStoryDifference = 0;
+    if (os.Get ("homeStoryDifference", homeStoryDifference)) {
+        link.homeStoryDifference = static_cast<short> (homeStoryDifference);
+    }
+    os.Get ("newCreationMode", link.newCreationMode);
+}
+
+// layerIndex or layerId of a Beam or a Mesh. The layer has to exist and must not be locked.
+static GS::Optional<GS::UniString> ApplyLayerFields (API_Element& element, API_Element& mask, const GS::ObjectState& os, bool& changed)
+{
+    const GS::ObjectState* layerIdOs = os.Get ("layerId");
+    Int32 layerIndex = 0;
+    const bool hasLayerIndex = os.Get ("layerIndex", layerIndex);
+    if (layerIdOs == nullptr && !hasLayerIndex) {
+        return {};
+    }
+    if (layerIdOs != nullptr && hasLayerIndex) {
+        return GS::UniString ("Give either 'layerIndex' or 'layerId', not both.");
+    }
+
+    API_Attribute layer = {};
+    layer.header.typeID = API_LayerID;
+    if (layerIdOs != nullptr) {
+        layer.header.guid = GetGuidFromObjectState (*layerIdOs);
+    } else {
+        layer.header.index = ACAPI_CreateAttributeIndex (layerIndex);
+    }
+    if (ACAPI_Attribute_Get (&layer) != NoError) {
+        return GS::UniString ("'layerIndex' / 'layerId' does not refer to an existing layer.");
+    }
+    if ((layer.header.flags & APILay_Locked) != 0) {
+        return GS::UniString ("The given layer is locked.");
+    }
+    element.header.layer = layer.header.index;
+    ACAPI_ELEMENT_MASK_SET (mask, API_Elem_Head, layer);
+    changed = true;
+    return {};
+}
+
+// The other settings of the element header that a tool dialog offers for a Beam or a Mesh.
+static GS::Optional<GS::UniString> ApplyRenovationField (API_Element& element, API_Element& mask, const GS::ObjectState& os, bool& changed)
+{
+    GS::UniString status;
+    if (!os.Get ("renovationStatus", status)) {
+        return {};
+    }
+    if (status == "Existing") {
+        element.header.renovationStatus = API_ExistingStatus;
+    } else if (status == "New") {
+        element.header.renovationStatus = API_NewStatus;
+    } else if (status == "Demolished") {
+        element.header.renovationStatus = API_DemolishedStatus;
+    } else {
+        return GS::UniString ("Invalid 'renovationStatus': ") + status;
+    }
+    ACAPI_ELEMENT_MASK_SET (mask, API_Elem_Head, renovationStatus);
+    changed = true;
+    return {};
+}
+
+// Field setters of ApplyBeamSettings and ApplyMeshSettings: each one writes a member and its mask
+// bit only when the JSON field is present. They expect 'os', 'mask' and 'changed' in scope.
+#define TAPIR_PEN_FIELD(structType, target, jsonName, member) { \
+    Int32 penValue = 0; \
+    if (os.Get (jsonName, penValue)) { \
+        target.member = static_cast<short> (penValue); \
+        ACAPI_ELEMENT_MASK_SET (mask, structType, member); \
+        changed = true; \
+    } \
+}
+#define TAPIR_LINETYPE_FIELD(structType, target, jsonName, member) { \
+    Int32 lineTypeValue = 0; \
+    if (os.Get (jsonName, lineTypeValue)) { \
+        if (lineTypeValue < 0) { \
+            return GS::UniString ("'" jsonName "' must not be negative."); \
+        } \
+        target.member = ACAPI_CreateAttributeIndex (lineTypeValue); \
+        ACAPI_ELEMENT_MASK_SET (mask, structType, member); \
+        changed = true; \
+    } \
+}
+#define TAPIR_BOOL_FIELD(structType, target, jsonName, member) { \
+    bool boolValue = false; \
+    if (os.Get (jsonName, boolValue)) { \
+        target.member = boolValue; \
+        ACAPI_ELEMENT_MASK_SET (mask, structType, member); \
+        changed = true; \
+    } \
+}
+#define TAPIR_ENUM_FIELD(structType, target, jsonName, member, enumType, fromString) { \
+    GS::UniString enumString; \
+    if (os.Get (jsonName, enumString)) { \
+        enumType enumValue; \
+        if (!fromString (enumString, enumValue)) { \
+            return GS::UniString ("Invalid '" jsonName "': ") + enumString; \
+        } \
+        target.member = enumValue; \
+        ACAPI_ELEMENT_MASK_SET (mask, structType, member); \
+        changed = true; \
+    } \
+}
+#define TAPIR_VISIBILITY_FIELD(structType, target, jsonName, member) { \
+    GS::ObjectState visibilityOs; \
+    if (os.Get (jsonName, visibilityOs)) { \
+        MergeStoryVisibility (visibilityOs, target.member); \
+        ACAPI_ELEMENT_MASK_SET (mask, structType, member); \
+        changed = true; \
+    } \
+}
+#define TAPIR_LINK_FIELD(structType, target) { \
+    GS::ObjectState linkOs; \
+    if (os.Get ("linkToSettings", linkOs)) { \
+        MergeLinkToSettings (linkOs, target.linkToSettings); \
+        ACAPI_ELEMENT_MASK_SET (mask, structType, linkToSettings); \
+        changed = true; \
+    } \
+}
+#define TAPIR_OVERRIDDEN_PEN_FIELD(structType, target, jsonName, member) { \
+    GS::ObjectState overriddenPenOs; \
+    if (os.Get (jsonName, overriddenPenOs)) { \
+        target.member = GetOverriddenPenFromObjectState (overriddenPenOs); \
+        ACAPI_ELEMENT_MASK_SET (mask, structType, member); \
+        changed = true; \
+    } \
+}
+#define TAPIR_MATERIAL_FIELD(structType, target, jsonName, member) { \
+    GS::ObjectState materialOs; \
+    if (os.Get (jsonName, materialOs)) { \
+        target.member = GetOverriddenMaterialFromObjectState (materialOs); \
+        ACAPI_ELEMENT_MASK_SET (mask, structType, member); \
+        changed = true; \
+    } \
+}
+
+// Every Beam setting that lives in API_BeamType and is written the same way by CreateBeams and
+// ModifyBeams. See docs/private/beam-mesh-field-map.md.
+static GS::Optional<GS::UniString> ApplyBeamSettings (API_Element& element, API_Element& mask, const GS::ObjectState& os, bool& changed)
+{
+    GS::Optional<GS::UniString> headerError = ApplyLayerFields (element, mask, os, changed);
+    if (!headerError.HasValue ()) {
+        headerError = ApplyRenovationField (element, mask, os, changed);
+    }
+    if (headerError.HasValue ()) {
+        return headerError;
+    }
+
+    API_BeamType& beam = element.beam;
+    TAPIR_ENUM_FIELD (API_BeamType, beam, "showReferenceAxis", showReferenceAxis, API_BeamVisibleLinesID, BeamVisibleLinesFromString);
+    TAPIR_ENUM_FIELD (API_BeamType, beam, "showContourLines", showContourLines, API_BeamVisibleLinesID, BeamVisibleLinesFromString);
+    TAPIR_PEN_FIELD (API_BeamType, beam, "referencePen", refPen);
+    TAPIR_LINETYPE_FIELD (API_BeamType, beam, "referenceLineTypeIndex", refLtype);
+    TAPIR_PEN_FIELD (API_BeamType, beam, "cutContourPen", cutContourLinePen);
+    TAPIR_LINETYPE_FIELD (API_BeamType, beam, "cutContourLineTypeIndex", cutContourLineType);
+    TAPIR_PEN_FIELD (API_BeamType, beam, "uncutLinePen", belowViewLinePen);
+    TAPIR_LINETYPE_FIELD (API_BeamType, beam, "uncutLineTypeIndex", belowViewLineType);
+    TAPIR_PEN_FIELD (API_BeamType, beam, "overheadLinePen", aboveViewLinePen);
+    TAPIR_LINETYPE_FIELD (API_BeamType, beam, "overheadLineTypeIndex", aboveViewLineType);
+    TAPIR_PEN_FIELD (API_BeamType, beam, "hiddenLinePen", hiddenLinePen);
+    TAPIR_LINETYPE_FIELD (API_BeamType, beam, "hiddenLineTypeIndex", hiddenLineType);
+    TAPIR_ENUM_FIELD (API_BeamType, beam, "displayOption", displayOption, API_ElemDisplayOptionsID, ElemDisplayOptionFromString);
+    TAPIR_ENUM_FIELD (API_BeamType, beam, "viewDepthLimitation", viewDepthLimitation, API_ElemViewDepthLimitationsID, ViewDepthLimitationFromString);
+    TAPIR_ENUM_FIELD (API_BeamType, beam, "uncutProjectionMode", uncutProjectionMode, API_ElemProjectionModesID, ElemProjectionModeFromString);
+    TAPIR_ENUM_FIELD (API_BeamType, beam, "overheadProjectionMode", overheadProjectionMode, API_ElemProjectionModesID, ElemProjectionModeFromString);
+    TAPIR_VISIBILITY_FIELD (API_BeamType, beam, "visibility", visibility);
+    TAPIR_BOOL_FIELD (API_BeamType, beam, "isAutoOnStoryVisibility", isAutoOnStoryVisibility);
+    TAPIR_LINK_FIELD (API_BeamType, beam);
+    TAPIR_BOOL_FIELD (API_BeamType, beam, "isFlipped", isFlipped);
+
+    Int32 sequence = 0;
+    if (os.Get ("sequence", sequence)) {
+        beam.sequence = sequence;
+        ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, sequence);
+        changed = true;
+    }
+
+    GS::UniString beamShapeStr;
+    if (os.Get ("beamShape", beamShapeStr)) {
+        if (beamShapeStr == "HorizontallyCurved") {
+            beam.beamShape = API_HorizontallyCurvedBeam;
+        } else if (beamShapeStr == "VerticallyCurved") {
+            beam.beamShape = API_VerticallyCurvedBeam;
+        } else if (beamShapeStr == "Straight") {
+            beam.beamShape = API_StraightBeam;
+        } else {
+            return GS::UniString ("Invalid 'beamShape': ") + beamShapeStr;
+        }
+        ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, beamShape);
+        changed = true;
+    }
+
+    GS::ObjectState holeDefaultsOs;
+    if (os.Get ("holeDefaults", holeDefaultsOs)) {
+        GS::UniString holeType;
+        if (holeDefaultsOs.Get ("type", holeType)) {
+            beam.holeType = (holeType == "Circular") ? APIBHole_Circular : APIBHole_Rectangular;
+            ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, holeType);
+        }
+        if (holeDefaultsOs.Get ("showContour", beam.holeContureOn)) {
+            ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, holeContureOn);
+        }
+        if (holeDefaultsOs.Get ("width", beam.holeWidth)) {
+            ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, holeWidth);
+        }
+        if (holeDefaultsOs.Get ("height", beam.holeHeight)) {
+            ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, holeHeight);
+        }
+        if (holeDefaultsOs.Get ("level", beam.holeLevel)) {
+            ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, holeLevel);
+        }
+        changed = true;
+    }
+
+#ifdef ServerMainVers_2700
+    TAPIR_OVERRIDDEN_PEN_FIELD (API_BeamType, beam, "cutFillPen", cutFillPen);
+    TAPIR_OVERRIDDEN_PEN_FIELD (API_BeamType, beam, "cutFillBackgroundPen", cutFillBackgroundPen);
+#endif
+
+    GS::ObjectState coverFillOs;
+    if (os.Get ("coverFill", coverFillOs)) {
+        coverFillOs.Get ("use", beam.useCoverFill);
+        coverFillOs.Get ("useFromSurface", beam.useCoverFillFromSurface);
+        coverFillOs.Get ("orientationComesFrom3D", beam.coverFillOrientationComesFrom3D);
+        GS::ObjectState fillIdOs;
+        if (coverFillOs.Get ("fillId", fillIdOs)) {
+            if (!ResolveAttributeIndex (fillIdOs, API_FilltypeID, beam.coverFillType)) {
+                return GS::UniString ("Invalid 'coverFill.fillId'.");
+            }
+        }
+        Int32 foregroundPen = 0;
+        if (coverFillOs.Get ("foregroundPen", foregroundPen)) {
+            beam.coverFillForegroundPen = static_cast<short> (foregroundPen);
+        }
+        Int32 backgroundPen = 0;
+        if (coverFillOs.Get ("backgroundPen", backgroundPen)) {
+            beam.coverFillBackgroundPen = static_cast<short> (backgroundPen);
+        }
+        GS::UniString transformationTypeStr;
+        if (coverFillOs.Get ("transformationType", transformationTypeStr)) {
+            beam.coverFillTransformationType = CoverFillTransformationTypeFromString (transformationTypeStr);
+        }
+        GS::ObjectState transformationOs;
+        if (coverFillOs.Get ("transformation", transformationOs)) {
+            beam.coverFillTransformation = GetCoverFillTransformationFromObjectState (transformationOs);
+        }
+        ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, useCoverFill);
+        ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, useCoverFillFromSurface);
+        ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, coverFillOrientationComesFrom3D);
+        ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, coverFillType);
+        ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, coverFillForegroundPen);
+        ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, coverFillBackgroundPen);
+        ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, coverFillTransformationType);
+        ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, coverFillTransformation);
+        changed = true;
+    }
+    return {};
+}
+
+// Every Mesh setting of API_MeshType that CreateMeshes and ModifyMeshes did not have before. The
+// existing fields (level, skirt, ridges, showLines, contourPen, levelPen, lineTypeIndex) stay where
+// they were. See docs/private/beam-mesh-field-map.md.
+static GS::Optional<GS::UniString> ApplyMeshSettingsImpl (API_Element& element, API_Element& mask, const GS::ObjectState& os, bool& changed)
+{
+    GS::Optional<GS::UniString> headerError = ApplyLayerFields (element, mask, os, changed);
+    if (!headerError.HasValue ()) {
+        headerError = ApplyRenovationField (element, mask, os, changed);
+    }
+    if (headerError.HasValue ()) {
+        return headerError;
+    }
+
+    API_MeshType& mesh = element.mesh;
+    // API_MeshType has two visibilities; 'visibility' is the shorthand for both.
+    TAPIR_VISIBILITY_FIELD (API_MeshType, mesh, "visibility", visibilityCont);
+    TAPIR_VISIBILITY_FIELD (API_MeshType, mesh, "visibility", visibilityFill);
+    TAPIR_VISIBILITY_FIELD (API_MeshType, mesh, "contourVisibility", visibilityCont);
+    TAPIR_VISIBILITY_FIELD (API_MeshType, mesh, "fillVisibility", visibilityFill);
+    TAPIR_LINK_FIELD (API_MeshType, mesh);
+    TAPIR_PEN_FIELD (API_MeshType, mesh, "sectionContourPen", sectContPen);
+#ifdef ServerMainVers_2700
+    TAPIR_OVERRIDDEN_PEN_FIELD (API_MeshType, mesh, "cutFillPen", cutFillPen);
+    TAPIR_OVERRIDDEN_PEN_FIELD (API_MeshType, mesh, "cutFillBackgroundPen", cutFillBackgroundPen);
+#endif
+    TAPIR_MATERIAL_FIELD (API_MeshType, mesh, "topMaterial", topMat);
+    TAPIR_MATERIAL_FIELD (API_MeshType, mesh, "sideMaterial", sideMat);
+    TAPIR_MATERIAL_FIELD (API_MeshType, mesh, "bottomMaterial", botMat);
+    TAPIR_BOOL_FIELD (API_MeshType, mesh, "materialsChained", materialsChained);
+
+    GS::ObjectState coverFillOs;
+    if (os.Get ("coverFill", coverFillOs)) {
+        if (coverFillOs.Get ("use", mesh.useFloorFill)) {
+            ACAPI_ELEMENT_MASK_SET (mask, API_MeshType, useFloorFill);
+        }
+        Int32 pen = 0;
+        if (coverFillOs.Get ("foregroundPen", pen)) {
+            mesh.floorFillPen = static_cast<short> (pen);
+            ACAPI_ELEMENT_MASK_SET (mask, API_MeshType, floorFillPen);
+        }
+        if (coverFillOs.Get ("backgroundPen", pen)) {
+            mesh.floorFillBGPen = static_cast<short> (pen);
+            ACAPI_ELEMENT_MASK_SET (mask, API_MeshType, floorFillBGPen);
+        }
+        GS::ObjectState fillIdOs;
+        if (coverFillOs.Get ("fillId", fillIdOs)) {
+            if (!ResolveAttributeIndex (fillIdOs, API_FilltypeID, mesh.floorFillInd)) {
+                return GS::UniString ("Invalid 'coverFill.fillId'.");
+            }
+            ACAPI_ELEMENT_MASK_SET (mask, API_MeshType, floorFillInd);
+        }
+        if (coverFillOs.Get ("useLocalOrigin", mesh.useLocalOrigo)) {
+            ACAPI_ELEMENT_MASK_SET (mask, API_MeshType, useLocalOrigo);
+        }
+        if (coverFillOs.Get ("use3DHatching", mesh.use3DHatching)) {
+            ACAPI_ELEMENT_MASK_SET (mask, API_MeshType, use3DHatching);
+        }
+        const GS::ObjectState* localOriginOs = coverFillOs.Get ("localOrigin");
+        if (localOriginOs != nullptr) {
+            mesh.locOrigo = Get2DCoordinateFromObjectState (*localOriginOs);
+            ACAPI_ELEMENT_MASK_SET (mask, API_MeshType, locOrigo);
+        }
+        if (coverFillOs.Get ("angle", mesh.fillAngle)) {
+            ACAPI_ELEMENT_MASK_SET (mask, API_MeshType, fillAngle);
+        }
+        changed = true;
+    }
+    return {};
+}
+
+// The fields of one BeamSegment item (API_BeamSegmentType); read-only ones of a GetDetailsOfElements
+// item are ignored, so a segment read back can be sent again.
+static GS::Optional<GS::UniString> ApplyBeamSegmentFields (API_BeamSegmentType& segment, const GS::ObjectState& os)
+{
+    API_AssemblySegmentData& data = segment.assemblySegmentData;
+    os.Get ("isWidthAndHeightLinked", data.isWidthAndHeightLinked);
+    os.Get ("width", data.nominalWidth);
+    os.Get ("height", data.nominalHeight);
+    os.Get ("isHomogeneous", data.isHomogeneous);
+    os.Get ("isEndWidthAndHeightLinked", data.isEndWidthAndHeightLinked);
+    os.Get ("endWidth", data.endWidth);
+    os.Get ("endHeight", data.endHeight);
+    os.Get ("circleBased", data.circleBased);
+
+    const GS::ObjectState* profileIdOs = os.Get ("profileId");
+    const GS::ObjectState* buildingMaterialIdOs = os.Get ("buildingMaterialId");
+    if (profileIdOs != nullptr) {
+        if (!ResolveAttributeIndex (*profileIdOs, API_ProfileID, data.profileAttr)) {
+            return GS::UniString ("Invalid segment 'profileId'.");
+        }
+        data.modelElemStructureType = API_ProfileStructure;
+        data.circleBased = false;
+    } else if (buildingMaterialIdOs != nullptr) {
+        if (!ResolveAttributeIndex (*buildingMaterialIdOs, API_BuildingMaterialID, data.buildingMaterial)) {
+            return GS::UniString ("Invalid segment 'buildingMaterialId'.");
+        }
+        data.modelElemStructureType = API_BasicStructure;
+    }
+
+    const auto applyMaterial = [&os] (const char* name, API_OverriddenAttribute& material) {
+        const GS::ObjectState* materialOs = os.Get (name);
+        if (materialOs != nullptr) {
+            material = GetOverriddenMaterialFromObjectState (*materialOs);
+        }
+    };
+    applyMaterial ("leftMaterial", segment.leftMaterial);
+    applyMaterial ("topMaterial", segment.topMaterial);
+    applyMaterial ("rightMaterial", segment.rightMaterial);
+    applyMaterial ("bottomMaterial", segment.bottomMaterial);
+    applyMaterial ("endsMaterial", segment.endsMaterial);
+    applyMaterial ("extrusionMaterial", segment.extrusionMaterial);
+    os.Get ("materialsChained", segment.materialsChained);
+    return {};
+}
+
+static bool HasBeamSegmentMemoFields (const GS::ObjectState& os)
+{
+    return os.Contains ("allSegments") || os.Contains ("segments") || os.Contains ("cuts") || os.Contains ("schemes");
+}
+
+template <typename ItemType>
+static void ResizeAssemblyArray (ItemType*& items, GSSize oldCount, GSSize newCount)
+{
+    ItemType* resized = reinterpret_cast<ItemType*> (BMAllocatePtr (newCount * sizeof (ItemType), ALLOCATE_CLEAR, 0));
+    for (GSSize i = 0; i < newCount; ++i) {
+        resized[i] = items[GS::Min (i, oldCount - 1)];
+    }
+    GSPtr oldItems = reinterpret_cast<GSPtr> (items);
+    BMKillPtr (&oldItems);
+    items = resized;
+}
+
+// allSegments, segments, cuts and schemes on the memo the caller read or got from the tool defaults
+// (the pattern of the Element_Test example: nSegments, nCuts and nSchemes follow the arrays). Sets
+// the mask bits of the counts when the number of segments changes.
+static GS::Optional<GS::UniString> ApplyBeamSegmentsToMemo (API_Element& element, API_Element& mask, API_ElementMemo& memo, const GS::ObjectState& os)
+{
+    if (memo.beamSegments == nullptr || memo.assemblySegmentCuts == nullptr || memo.assemblySegmentSchemes == nullptr) {
+        return GS::UniString ("The beam has no segment data to change.");
+    }
+
+    GSSize nSegments = BMGetPtrSize (reinterpret_cast<GSPtr> (memo.beamSegments)) / sizeof (API_BeamSegmentType);
+    GSSize nCuts = BMGetPtrSize (reinterpret_cast<GSPtr> (memo.assemblySegmentCuts)) / sizeof (API_AssemblySegmentCutData);
+    GSSize nSchemes = BMGetPtrSize (reinterpret_cast<GSPtr> (memo.assemblySegmentSchemes)) / sizeof (API_AssemblySegmentSchemeData);
+    if (nSegments <= 0 || nCuts <= 0 || nSchemes <= 0) {
+        return GS::UniString ("The beam has no segment data to change.");
+    }
+
+    GS::Array<GS::ObjectState> segments;
+    const bool hasSegments = os.Get ("segments", segments);
+    if (hasSegments && static_cast<GSSize> (segments.GetSize ()) != nSegments) {
+        const GSSize newCount = segments.GetSize ();
+        // The end cut stays at the end, the inner cuts copy the first one.
+        const API_AssemblySegmentCutData firstCut = memo.assemblySegmentCuts[0];
+        const API_AssemblySegmentCutData endCut = memo.assemblySegmentCuts[nCuts - 1];
+        ResizeAssemblyArray (memo.assemblySegmentCuts, nCuts, newCount + 1);
+        for (GSSize i = 1; i < newCount; ++i) {
+            memo.assemblySegmentCuts[i] = firstCut;
+        }
+        memo.assemblySegmentCuts[newCount] = endCut;
+        ResizeAssemblyArray (memo.beamSegments, nSegments, newCount);
+        ResizeAssemblyArray (memo.assemblySegmentSchemes, nSchemes, newCount);
+        for (GSSize i = 0; i < newCount; ++i) {
+            memo.assemblySegmentSchemes[i].lengthType = APIAssemblySegment_Proportional;
+            memo.assemblySegmentSchemes[i].lengthProportion = 1.0 / static_cast<double> (newCount);
+        }
+        nSegments = newCount;
+        nCuts = newCount + 1;
+        nSchemes = newCount;
+        element.beam.nSegments = static_cast<UInt32> (nSegments);
+        element.beam.nCuts = static_cast<UInt32> (nCuts);
+        element.beam.nSchemes = static_cast<UInt32> (nSchemes);
+        ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, nSegments);
+        ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, nCuts);
+        ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, nSchemes);
+    }
+
+    const GS::ObjectState* allSegmentsOs = os.Get ("allSegments");
+    if (allSegmentsOs != nullptr) {
+        for (GSSize i = 0; i < nSegments; ++i) {
+            GS::Optional<GS::UniString> error = ApplyBeamSegmentFields (memo.beamSegments[i], *allSegmentsOs);
+            if (error.HasValue ()) {
+                return error;
+            }
+        }
+    }
+    if (hasSegments) {
+        for (GSSize i = 0; i < nSegments; ++i) {
+            GS::Optional<GS::UniString> error = ApplyBeamSegmentFields (memo.beamSegments[i], segments[static_cast<UIndex> (i)]);
+            if (error.HasValue ()) {
+                return error;
+            }
+        }
+    }
+
+    GS::Array<GS::ObjectState> cuts;
+    if (os.Get ("cuts", cuts)) {
+        if (static_cast<GSSize> (cuts.GetSize ()) != nCuts) {
+            return GS::UniString::Printf ("'cuts' must have %d items (segment count + 1).", static_cast<int> (nCuts));
+        }
+        for (GSSize i = 0; i < nCuts; ++i) {
+            const GS::ObjectState& cutOs = cuts[static_cast<UIndex> (i)];
+            API_AssemblySegmentCutData& cut = memo.assemblySegmentCuts[i];
+            GS::UniString type;
+            if (cutOs.Get ("type", type)) {
+                if (type == "Horizontal") {
+                    cut.cutType = APIAssemblySegmentCut_Horizontal;
+                } else if (type == "Vertical") {
+                    cut.cutType = APIAssemblySegmentCut_Vertical;
+                } else if (type == "Custom") {
+                    cut.cutType = APIAssemblySegmentCut_Custom;
+                } else {
+                    return GS::UniString ("Invalid cut 'type': ") + type;
+                }
+            }
+            cutOs.Get ("customAngle", cut.customAngle);
+        }
+    }
+
+    GS::Array<GS::ObjectState> schemes;
+    if (os.Get ("schemes", schemes)) {
+        if (static_cast<GSSize> (schemes.GetSize ()) != nSchemes) {
+            return GS::UniString::Printf ("'schemes' must have %d items (the segment count).", static_cast<int> (nSchemes));
+        }
+        for (GSSize i = 0; i < nSchemes; ++i) {
+            const GS::ObjectState& schemeOs = schemes[static_cast<UIndex> (i)];
+            API_AssemblySegmentSchemeData& scheme = memo.assemblySegmentSchemes[i];
+            GS::UniString lengthType;
+            if (schemeOs.Get ("lengthType", lengthType)) {
+                if (lengthType == "Fixed") {
+                    scheme.lengthType = APIAssemblySegment_Fixed;
+                } else if (lengthType == "Proportional") {
+                    scheme.lengthType = APIAssemblySegment_Proportional;
+                } else {
+                    return GS::UniString ("Invalid scheme 'lengthType': ") + lengthType;
+                }
+            }
+            schemeOs.Get ("fixedLength", scheme.fixedLength);
+            schemeOs.Get ("lengthProportion", scheme.lengthProportion);
+        }
+    }
+    return {};
+}
+
+static GS::Optional<GS::UniString> BuildBeamHolesMemo (API_ElementMemo& memo, const GS::Array<GS::ObjectState>& holes)
+{
+    if (memo.beamHoles != nullptr) {
+        BMKillHandle (reinterpret_cast<GSHandle*> (&memo.beamHoles));
+    }
+    const GSSize nHoles = holes.GetSize ();
+    memo.beamHoles = reinterpret_cast<API_Beam_Hole**> (BMAllocateHandle (GS::Max<GSSize> (nHoles, 1) * sizeof (API_Beam_Hole), ALLOCATE_CLEAR, 0));
+    if (memo.beamHoles == nullptr) {
+        return GS::UniString ("Failed to allocate memory for beam holes.");
+    }
+    for (GSIndex i = 0; i < nHoles; ++i) {
+        const GS::ObjectState& holeOs = holes[i];
+        API_Beam_Hole& hole = (*memo.beamHoles)[i];
+        hole = {};
+        hole.holeID = static_cast<Int32> (i + 1);
+        GS::UniString typeStr;
+        holeOs.Get ("type", typeStr);
+        hole.holeType = (typeStr == "Circular") ? APIBHole_Circular : APIBHole_Rectangular;
+        holeOs.Get ("showContour", hole.holeContureOn);
+        holeOs.Get ("centerX", hole.centerx);
+        holeOs.Get ("centerZ", hole.centerz);
+        holeOs.Get ("width", hole.width);
+        holeOs.Get ("height", hole.height);
+    }
+    return {};
+}
+
+static GS::Optional<GS::UniString> BuildBeamGablesMemo (API_ElementMemo& memo, const GS::Array<GS::ObjectState>& gables)
+{
+    if (memo.gables != nullptr) {
+        BMKillHandle (reinterpret_cast<GSHandle*> (&memo.gables));
+    }
+    const GSSize nGables = gables.GetSize ();
+    memo.gables = reinterpret_cast<API_Gable**> (BMAllocateHandle (nGables * sizeof (API_Gable), ALLOCATE_CLEAR, 0));
+    if (memo.gables == nullptr) {
+        return GS::UniString ("Failed to allocate memory for beam gables.");
+    }
+    for (GSIndex i = 0; i < nGables; ++i) {
+        const GS::ObjectState& gableOs = gables[i];
+        API_Gable& gable = (*memo.gables)[i];
+        gableOs.Get ("a", gable.a);
+        gableOs.Get ("b", gable.b);
+        gableOs.Get ("c", gable.c);
+        gableOs.Get ("d", gable.d);
+        gableOs.Get ("xb", gable.xb);
+        gableOs.Get ("xe", gable.xe);
+        gableOs.Get ("nx", gable.nx);
+        gableOs.Get ("ny", gable.ny);
+    }
+    return {};
+}
+
 bool ApplyBeamDetails (API_Element& element, API_Element& mask, const GS::ObjectState& details)
 {
     bool changed = false;
@@ -2366,28 +2974,10 @@ bool ApplyBeamDetails (API_Element& element, API_Element& mask, const GS::Object
         ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, verticalCurveHeight);
         changed = true;
     }
-    GS::UniString beamShapeStr;
-    if (details.Get ("beamShape", beamShapeStr)) {
-        if (beamShapeStr == "HorizontallyCurved") {
-            element.beam.beamShape = API_HorizontallyCurvedBeam;
-        } else if (beamShapeStr == "VerticallyCurved") {
-            element.beam.beamShape = API_VerticallyCurvedBeam;
-        } else {
-            element.beam.beamShape = API_StraightBeam;
-        }
-        ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, beamShape);
-        changed = true;
-    }
     bool isSlanted = false;
     if (details.Get ("isSlanted", isSlanted)) {
         element.beam.isSlanted = isSlanted;
         ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, isSlanted);
-        changed = true;
-    }
-    bool isFlipped = false;
-    if (details.Get ("isFlipped", isFlipped)) {
-        element.beam.isFlipped = isFlipped;
-        ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, isFlipped);
         changed = true;
     }
     auto profileAngle = GetOptionalDouble (details, "profileAngle");
@@ -2400,55 +2990,6 @@ bool ApplyBeamDetails (API_Element& element, API_Element& mask, const GS::Object
     if (details.Get ("anchorPoint", anchorPointStr)) {
         element.beam.anchorPoint = static_cast<short> (AnchorIdFromString (anchorPointStr));
         ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, anchorPoint);
-        changed = true;
-    }
-#ifdef ServerMainVers_2700
-    GS::ObjectState cutFillPenOs;
-    if (details.Get ("cutFillPen", cutFillPenOs)) {
-        element.beam.cutFillPen = GetOverriddenPenFromObjectState (cutFillPenOs);
-        ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, cutFillPen);
-        changed = true;
-    }
-    GS::ObjectState cutFillBackgroundPenOs;
-    if (details.Get ("cutFillBackgroundPen", cutFillBackgroundPenOs)) {
-        element.beam.cutFillBackgroundPen = GetOverriddenPenFromObjectState (cutFillBackgroundPenOs);
-        ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, cutFillBackgroundPen);
-        changed = true;
-    }
-#endif
-    GS::ObjectState coverFillOs;
-    if (details.Get ("coverFill", coverFillOs)) {
-        coverFillOs.Get ("use", element.beam.useCoverFill);
-        coverFillOs.Get ("useFromSurface", element.beam.useCoverFillFromSurface);
-        coverFillOs.Get ("orientationComesFrom3D", element.beam.coverFillOrientationComesFrom3D);
-        GS::ObjectState fillIdOs;
-        if (coverFillOs.Get ("fillId", fillIdOs)) {
-            element.beam.coverFillType = GetAttributeIndexFromGuid (API_FilltypeID, GetGuidFromObjectState (fillIdOs));
-        }
-        Int32 foregroundPen = 0;
-        if (coverFillOs.Get ("foregroundPen", foregroundPen)) {
-            element.beam.coverFillForegroundPen = static_cast<short> (foregroundPen);
-        }
-        Int32 backgroundPen = 0;
-        if (coverFillOs.Get ("backgroundPen", backgroundPen)) {
-            element.beam.coverFillBackgroundPen = static_cast<short> (backgroundPen);
-        }
-        GS::UniString transformationTypeStr;
-        if (coverFillOs.Get ("transformationType", transformationTypeStr)) {
-            element.beam.coverFillTransformationType = CoverFillTransformationTypeFromString (transformationTypeStr);
-        }
-        GS::ObjectState transformationOs;
-        if (coverFillOs.Get ("transformation", transformationOs)) {
-            element.beam.coverFillTransformation = GetCoverFillTransformationFromObjectState (transformationOs);
-        }
-        ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, useCoverFill);
-        ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, useCoverFillFromSurface);
-        ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, coverFillOrientationComesFrom3D);
-        ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, coverFillType);
-        ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, coverFillForegroundPen);
-        ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, coverFillBackgroundPen);
-        ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, coverFillTransformationType);
-        ACAPI_ELEMENT_MASK_SET (mask, API_BeamType, coverFillTransformation);
         changed = true;
     }
     return changed;
@@ -3795,6 +4336,64 @@ GS::Optional<GS::ObjectState> CreateWallsCommand::SetTypeSpecificParameters (API
     return {};
 }
 
+static const char* BeamSettingsSchemaProperties = R"(
+                        "layerIndex": { "type": "integer", "description": "Layer attribute index. On Create it decides the layer instead of the Beam tool default. Do not combine with layerId." },
+                        "layerId": { "$ref": "#/AttributeId", "description": "Layer attribute id, the alternative of layerIndex." },
+                        "renovationStatus": { "$ref": "#/RenovationStatus" },
+                        "showReferenceAxis": { "$ref": "#/BeamVisibleLines", "description": "API_BeamType::showReferenceAxis." },
+                        "showContourLines": { "$ref": "#/BeamVisibleLines", "description": "API_BeamType::showContourLines." },
+                        "referencePen": { "type": "integer", "description": "Pen of the reference line (refPen)." },
+                        "referenceLineTypeIndex": { "type": "integer", "description": "Line type attribute index of the reference line (refLtype)." },
+                        "cutContourPen": { "type": "integer", "description": "Pen of the cut lines (cutContourLinePen)." },
+                        "cutContourLineTypeIndex": { "type": "integer", "description": "Line type attribute index of the cut lines (cutContourLineType)." },
+                        "uncutLinePen": { "type": "integer", "description": "Pen of the uncut lines (belowViewLinePen)." },
+                        "uncutLineTypeIndex": { "type": "integer", "description": "Line type attribute index of the uncut lines (belowViewLineType)." },
+                        "overheadLinePen": { "type": "integer", "description": "Pen of the overhead lines (aboveViewLinePen)." },
+                        "overheadLineTypeIndex": { "type": "integer", "description": "Line type attribute index of the overhead lines (aboveViewLineType)." },
+                        "hiddenLinePen": { "type": "integer", "description": "Pen of the hidden lines (hiddenLinePen)." },
+                        "hiddenLineTypeIndex": { "type": "integer", "description": "Line type attribute index of the hidden lines (hiddenLineType)." },
+                        "displayOption": { "$ref": "#/DisplayOption" },
+                        "viewDepthLimitation": { "$ref": "#/ViewDepthLimitation" },
+                        "uncutProjectionMode": { "$ref": "#/ElemProjectionMode" },
+                        "overheadProjectionMode": { "$ref": "#/ElemProjectionMode" },
+                        "visibility": { "$ref": "#/StoryVisibility", "description": "Stories the beam is shown on. Only the given members change." },
+                        "isAutoOnStoryVisibility": { "type": "boolean", "description": "Recalculate the story visibility from the elevation of the beam. Set it to false to keep an explicit visibility." },
+                        "linkToSettings": { "$ref": "#/LinkToSettings" },
+                        "sequence": { "type": "integer", "minimum": 0, "maximum": 999, "description": "Order of beams meeting with the same priority." },
+                        "isFlipped": { "type": "boolean", "description": "Mirrors a profiled beam." },
+                        "beamShape": { "type": "string", "enum": ["Straight", "HorizontallyCurved", "VerticallyCurved"] },
+                        "holeDefaults": { "$ref": "#/BeamHoleDefaults" },
+                        "cutFillPen": { "$ref": "#/OverriddenPen" },
+                        "cutFillBackgroundPen": { "$ref": "#/OverriddenPen" },
+                        "coverFill": { "$ref": "#/CoverFill", "description": "Cover fill of the floor plan. Only the given members change." },
+                        "allSegments": { "$ref": "#/BeamSegment", "description": "Settings written to every segment, before 'segments'." },
+                        "segments": { "type": "array", "items": { "$ref": "#/BeamSegment" }, "minItems": 1, "description": "Per segment settings, in order. A different number of items changes the number of segments: added segments copy the last one, and the lengths become equal proportions unless 'schemes' is given." },
+                        "cuts": { "type": "array", "items": { "$ref": "#/AssemblySegmentCut" }, "minItems": 2, "description": "The cuts at the segment ends: exactly segment count + 1 items." },
+                        "schemes": { "type": "array", "items": { "$ref": "#/AssemblySegmentScheme" }, "minItems": 1, "description": "The segment lengths: exactly segment count items." },
+                        "gables": { "type": "array", "items": { "$ref": "#/BeamGable" }, "description": "Replaces the cut planes of the beam (API_Gable)." })";
+
+GS::Optional<GS::UniString> ApplyMeshSettings (API_Element& element, API_Element& mask, const GS::ObjectState& os, bool& changed)
+{
+    return ApplyMeshSettingsImpl (element, mask, os, changed);
+}
+
+const char* MeshSettingsSchemaProperties = R"(
+                    "layerIndex": { "type": "integer", "description": "Layer attribute index. On Create it decides the layer instead of the Mesh tool default. Do not combine with layerId." },
+                    "layerId": { "$ref": "#/AttributeId", "description": "Layer attribute id, the alternative of layerIndex." },
+                    "renovationStatus": { "$ref": "#/RenovationStatus" },
+                    "visibility": { "$ref": "#/StoryVisibility", "description": "Shorthand for contourVisibility and fillVisibility together. Only the given members change." },
+                    "contourVisibility": { "$ref": "#/StoryVisibility", "description": "Stories showing the contour (visibilityCont). Only the given members change." },
+                    "fillVisibility": { "$ref": "#/StoryVisibility", "description": "Stories showing the cover fill (visibilityFill). Only the given members change." },
+                    "linkToSettings": { "$ref": "#/LinkToSettings" },
+                    "sectionContourPen": { "type": "integer", "description": "Contour pen of the fill in sections (sectContPen)." },
+                    "cutFillPen": { "$ref": "#/OverriddenPen" },
+                    "cutFillBackgroundPen": { "$ref": "#/OverriddenPen" },
+                    "topMaterial": { "$ref": "#/OverriddenMaterial" },
+                    "sideMaterial": { "$ref": "#/OverriddenMaterial" },
+                    "bottomMaterial": { "$ref": "#/OverriddenMaterial" },
+                    "materialsChained": { "type": "boolean" },
+                    "coverFill": { "$ref": "#/MeshCoverFill" })";
+
 CreateBeamsCommand::CreateBeamsCommand () :
     CreateElementsCommandBase ("CreateBeams", API_BeamID, "beamsData")
 {
@@ -3802,7 +4401,7 @@ CreateBeamsCommand::CreateBeamsCommand () :
 
 GS::Optional<GS::UniString> CreateBeamsCommand::GetInputParametersSchema () const
 {
-    return R"({
+    return GS::UniString (R"({
         "type": "object",
         "properties": {
             "beamsData": {
@@ -3861,7 +4460,12 @@ GS::Optional<GS::UniString> CreateBeamsCommand::GetInputParametersSchema () cons
                         "profileId": {
                             "$ref": "#/AttributeId",
                             "description": "Switches the cross section to this custom extruded profile (circleBased becomes false). Applied to all segments."
-                        }
+                        },
+                        "holes": {
+                            "type": "array",
+                            "description": "The holes of the new beam.",
+                            "items": { "$ref": "#/BeamHoleModification" }
+                        },)") + GS::UniString (BeamSettingsSchemaProperties) + R"(
                     },
                     "additionalProperties": false,
                     "required": ["begCoordinate", "endCoordinate", "zCoordinate"]
@@ -3968,6 +4572,112 @@ GS::Optional<GS::ObjectState> CreateBeamsCommand::SetTypeSpecificParameters (API
         }
     }
 
+    API_Element mask = {};
+    ACAPI_ELEMENT_MASK_CLEAR (mask);
+    bool changed = false;
+    GS::Optional<GS::UniString> settingsError = ApplyBeamSettings (element, mask, parameters, changed);
+    if (!settingsError.HasValue () && HasBeamSegmentMemoFields (parameters)) {
+        settingsError = ApplyBeamSegmentsToMemo (element, mask, memo, parameters);
+    }
+    GS::Array<GS::ObjectState> holes;
+    if (!settingsError.HasValue () && parameters.Get ("holes", holes) && !holes.IsEmpty ()) {
+        settingsError = BuildBeamHolesMemo (memo, holes);
+    }
+    GS::Array<GS::ObjectState> gables;
+    if (!settingsError.HasValue () && parameters.Get ("gables", gables) && !gables.IsEmpty ()) {
+        settingsError = BuildBeamGablesMemo (memo, gables);
+    }
+    if (settingsError.HasValue ()) {
+        return CreateErrorResponse (APIERR_BADPARS, settingsError.Get ());
+    }
+
+    return {};
+}
+
+// Archicad is not documented to keep every member given to ACAPI_Element_Create (the railing and
+// the stair turned out not to), so what the new beam did not keep is written again with a masked
+// change. Nothing happens for a request without these fields, nor when Archicad kept them.
+GS::Optional<GS::ObjectState> CreateBeamsCommand::ChangeAfterCreation (API_Element& element, const Stories& /*stories*/, const GS::ObjectState& parameters) const
+{
+    GS::Array<GS::ObjectState> holes;
+    const bool hasHoles = parameters.Get ("holes", holes) && !holes.IsEmpty ();
+    GS::Array<GS::ObjectState> gables;
+    const bool hasGables = parameters.Get ("gables", gables) && !gables.IsEmpty ();
+    const bool hasSegmentFields = HasBeamSegmentMemoFields (parameters);
+
+    API_Element mask = {};
+    ACAPI_ELEMENT_MASK_CLEAR (mask);
+    bool hasSettings = false;
+    {
+        API_Element dryRun = element;
+        ApplyBeamSettings (dryRun, mask, parameters, hasSettings);
+        ACAPI_ELEMENT_MASK_CLEAR (mask);
+    }
+    if (!hasSettings && !hasHoles && !hasGables && !hasSegmentFields) {
+        return {};
+    }
+
+    API_Element fresh = {};
+    fresh.header.guid = element.header.guid;
+    GSErrCode err = ACAPI_Element_Get (&fresh);
+    if (err != NoError) {
+        return CreateErrorResponse (err, "The beam was created, but it could not be read back to check its settings.");
+    }
+
+    const API_Element before = fresh;
+    bool changed = false;
+    GS::Optional<GS::UniString> applyError = ApplyBeamSettings (fresh, mask, parameters, changed);
+    // A creation instruction, not a setting: writing it again could move the beam to another story.
+    fresh.beam.linkToSettings = before.beam.linkToSettings;
+
+    API_ElementMemo memo = {};
+    const GS::OnExit memoGuard ([&memo] () { ACAPI_DisposeElemMemoHdls (&memo); });
+    UInt64 memoMask = 0;
+    const UInt64 segmentMasks = APIMemoMask_BeamSegment | APIMemoMask_AssemblySegmentCut | APIMemoMask_AssemblySegmentScheme;
+    const UInt64 readMask = (hasSegmentFields ? segmentMasks : 0) | (hasHoles ? APIMemoMask_BeamHole : 0) | (hasGables ? APIMemoMask_Gables : 0);
+    if (!applyError.HasValue () && readMask != 0) {
+        err = ACAPI_Element_GetMemo (fresh.header.guid, &memo, readMask);
+        if (err != NoError) {
+            return CreateErrorResponse (err, "The beam was created, but its memo could not be read back.");
+        }
+        if (hasSegmentFields) {
+            const auto bytesOf = [] (const void* items) {
+                const char* begin = reinterpret_cast<const char*> (items);
+                const GSSize size = items != nullptr ? BMGetPtrSize (reinterpret_cast<GSPtr> (const_cast<void*> (items))) : 0;
+                return std::vector<char> (begin, begin + size);
+            };
+            const std::vector<char> segmentsBefore = bytesOf (memo.beamSegments);
+            const std::vector<char> cutsBefore = bytesOf (memo.assemblySegmentCuts);
+            const std::vector<char> schemesBefore = bytesOf (memo.assemblySegmentSchemes);
+            applyError = ApplyBeamSegmentsToMemo (fresh, mask, memo, parameters);
+            if (!applyError.HasValue () && (segmentsBefore != bytesOf (memo.beamSegments) || cutsBefore != bytesOf (memo.assemblySegmentCuts) || schemesBefore != bytesOf (memo.assemblySegmentSchemes))) {
+                memoMask |= segmentMasks;
+            }
+        }
+        const auto isSameCount = [] (GSHandle handle, GSSize itemSize, GS::USize expected) {
+            return handle != nullptr && static_cast<GS::USize> (BMhGetSize (handle) / itemSize) == expected;
+        };
+        if (!applyError.HasValue () && hasHoles && !isSameCount (reinterpret_cast<GSHandle> (memo.beamHoles), sizeof (API_Beam_Hole), holes.GetSize ())) {
+            applyError = BuildBeamHolesMemo (memo, holes);
+            memoMask |= APIMemoMask_BeamHole;
+        }
+        if (!applyError.HasValue () && hasGables && !isSameCount (reinterpret_cast<GSHandle> (memo.gables), sizeof (API_Gable), gables.GetSize ())) {
+            applyError = BuildBeamGablesMemo (memo, gables);
+            memoMask |= APIMemoMask_Gables;
+        }
+    }
+    if (applyError.HasValue ()) {
+        return CreateErrorResponse (APIERR_BADPARS, GS::UniString ("The beam was created, but: ") + applyError.Get ());
+    }
+
+    if (memoMask == 0 && std::memcmp (static_cast<const void*> (&before), static_cast<const void*> (&fresh), sizeof (API_Element)) == 0) {
+        return {};
+    }
+    err = ACAPI_Element_Change (&fresh, &mask, memoMask != 0 ? &memo : nullptr, memoMask, true);
+    if (err != NoError) {
+        return CreateErrorResponse (err, "The beam was created, but Archicad refused to apply its settings.");
+    }
+    element.header = fresh.header;
     return {};
 }
 
@@ -8325,7 +9035,7 @@ GS::String ModifyBeamsCommand::GetName () const
 
 GS::Optional<GS::UniString> ModifyBeamsCommand::GetInputParametersSchema () const
 {
-    return R"({
+    return GS::UniString (R"({
         "type": "object",
         "properties": {
             "beamsWithDetails": {
@@ -8334,6 +9044,7 @@ GS::Optional<GS::UniString> ModifyBeamsCommand::GetInputParametersSchema () cons
                     "type": "object",
                     "properties": {
                         "elementId": { "$ref": "#/ElementId" },
+                        "floorIndex": { "type": "integer", "description": "Moves the beam to this home story; its level stays relative to the story." },
                         "begCoordinate": { "$ref": "#/Coordinate2D" },
                         "endCoordinate": { "$ref": "#/Coordinate2D" },
                         "level": { "type": "number" },
@@ -8341,9 +9052,7 @@ GS::Optional<GS::UniString> ModifyBeamsCommand::GetInputParametersSchema () cons
                         "slantAngle": { "type": "number" },
                         "arcAngle": { "type": "number" },
                         "verticalCurveHeight": { "type": "number" },
-                        "beamShape": { "type": "string", "enum": ["Straight", "HorizontallyCurved", "VerticallyCurved"] },
                         "isSlanted": { "type": "boolean" },
-                        "isFlipped": { "type": "boolean" },
                         "profileAngle": { "type": "number" },
                         "anchorPoint": { "$ref": "#/BeamAnchorPoint" },
                         "width": { "type": "number", "exclusiveMinimum": 0.0, "description": "Cross section width of the beam. Applied to all segments." },
@@ -8358,10 +9067,7 @@ GS::Optional<GS::UniString> ModifyBeamsCommand::GetInputParametersSchema () cons
                             "items": {
                                 "$ref": "#/BeamHoleModification"
                             }
-                        },
-                        "cutFillPen": { "$ref": "#/OverriddenPen" },
-                        "cutFillBackgroundPen": { "$ref": "#/OverriddenPen" },
-                        "coverFill": { "$ref": "#/CoverFill" }
+                        },)") + GS::UniString (BeamSettingsSchemaProperties) + R"(
                     },
                     "additionalProperties": false,
                     "required": ["elementId"]
@@ -8403,36 +9109,59 @@ GS::ObjectState ModifyBeamsCommand::Execute (const GS::ObjectState& parameters, 
             API_Element mask = {};
             ACAPI_ELEMENT_MASK_CLEAR (mask);
             bool changed = ApplyBeamDetails (element, mask, item);
+            GS::Optional<GS::UniString> settingsError = ApplyBeamSettings (element, mask, item, changed);
+            if (settingsError.HasValue ()) {
+                results.Push (CreateFailedExecutionResult (APIERR_BADPARS, settingsError.Get ()));
+                continue;
+            }
+            Int32 floorIndex = 0;
+            if (item.Get ("floorIndex", floorIndex)) {
+                element.header.floorInd = static_cast<short> (floorIndex);
+                ACAPI_ELEMENT_MASK_SET (mask, API_Elem_Head, floorInd);
+                changed = true;
+            }
             const bool hasSectionFields = item.Contains ("width") || item.Contains ("height") || item.Contains ("isWidthAndHeightLinked") || item.Contains ("circleBased") || item.Contains ("buildingMaterialId") || item.Contains ("profileId");
 
-            GS::Array<GS::ObjectState> holes;
-            if (item.Get ("holes", holes)) {
-                API_ElementMemo memo = {};
-                const GS::OnExit cleanup ([&]() { ACAPI_DisposeElemMemoHdls (&memo); });
-                const GSSize nHoles = holes.GetSize ();
-                memo.beamHoles = reinterpret_cast<API_Beam_Hole**> (BMAllocateHandle (GS::Max<GSSize> (nHoles, 1) * sizeof (API_Beam_Hole), ALLOCATE_CLEAR, 0));
-                if (memo.beamHoles == nullptr) {
-                    results.Push (CreateFailedExecutionResult (APIERR_MEMFULL, "Failed to allocate memory for beam holes."));
+            API_ElementMemo memo = {};
+            const GS::OnExit cleanup ([&]() { ACAPI_DisposeElemMemoHdls (&memo); });
+            UInt64 memoMask = 0;
+            // Read first: ACAPI_Element_GetMemo resets the whole memo structure.
+            if (HasBeamSegmentMemoFields (item)) {
+                err = ACAPI_Element_GetMemo (element.header.guid, &memo, APIMemoMask_BeamSegment | APIMemoMask_AssemblySegmentCut | APIMemoMask_AssemblySegmentScheme);
+                if (err != NoError) {
+                    results.Push (CreateFailedExecutionResult (err, "Failed to read the beam segments."));
                     continue;
                 }
-                for (GSIndex i = 0; i < nHoles; ++i) {
-                    const GS::ObjectState& holeOs = holes[i];
-                    API_Beam_Hole& hole = (*memo.beamHoles)[i];
-                    hole = {};
-                    hole.holeID = static_cast<Int32> (i + 1);
-                    GS::UniString typeStr;
-                    holeOs.Get ("type", typeStr);
-                    hole.holeType = (typeStr == "Circular") ? APIBHole_Circular : APIBHole_Rectangular;
-                    holeOs.Get ("showContour", hole.holeContureOn);
-                    holeOs.Get ("centerX", hole.centerx);
-                    holeOs.Get ("centerZ", hole.centerz);
-                    holeOs.Get ("width", hole.width);
-                    holeOs.Get ("height", hole.height);
+                settingsError = ApplyBeamSegmentsToMemo (element, mask, memo, item);
+                if (settingsError.HasValue ()) {
+                    results.Push (CreateFailedExecutionResult (APIERR_BADPARS, settingsError.Get ()));
+                    continue;
                 }
+                memoMask |= APIMemoMask_BeamSegment | APIMemoMask_AssemblySegmentCut | APIMemoMask_AssemblySegmentScheme;
+            }
+            GS::Array<GS::ObjectState> gables;
+            if (item.Get ("gables", gables)) {
+                settingsError = BuildBeamGablesMemo (memo, gables);
+                if (settingsError.HasValue ()) {
+                    results.Push (CreateFailedExecutionResult (APIERR_MEMFULL, settingsError.Get ()));
+                    continue;
+                }
+                memoMask |= APIMemoMask_Gables;
+            }
+            GS::Array<GS::ObjectState> holes;
+            if (item.Get ("holes", holes)) {
+                settingsError = BuildBeamHolesMemo (memo, holes);
+                if (settingsError.HasValue ()) {
+                    results.Push (CreateFailedExecutionResult (APIERR_MEMFULL, settingsError.Get ()));
+                    continue;
+                }
+                memoMask |= APIMemoMask_BeamHole;
+            }
 
-                err = ACAPI_Element_Change (&element, &mask, &memo, APIMemoMask_BeamHole, true);
+            if (memoMask != 0) {
+                err = ACAPI_Element_Change (&element, &mask, &memo, memoMask, true);
                 if (err != NoError) {
-                    results.Push (CreateFailedExecutionResult (err, "Failed to modify beam holes."));
+                    results.Push (CreateFailedExecutionResult (err, "Failed to modify beam memo data (segments, cuts, schemes, gables or holes)."));
                     continue;
                 }
                 if (hasSectionFields) {
@@ -10060,6 +10789,22 @@ GS::ObjectState ModifyMeshesCommand::Execute (const GS::ObjectState& parameters,
             if (meshData->Get ("lineTypeIndex", lineTypeIndex) && lineTypeIndex > 0) {
                 elem.mesh.ltypeInd = ACAPI_CreateAttributeIndex (lineTypeIndex);
                 ACAPI_ELEMENT_MASK_SET (mask, API_MeshType, ltypeInd);
+            }
+
+            bool settingsChanged = false;
+            const GS::Optional<GS::UniString> settingsError = ApplyMeshSettings (elem, mask, *meshData, settingsChanged);
+            if (settingsError.HasValue ()) {
+                executionResults (CreateFailedExecutionResult (APIERR_BADPARS, settingsError.Get ()));
+                continue;
+            }
+            // Unlike CreateMeshes this keeps the surface overrides, they are separate fields here.
+            const GS::ObjectState* buildingMaterialIdOs = meshData->Get ("buildingMaterialId");
+            if (buildingMaterialIdOs != nullptr) {
+                if (!ResolveAttributeIndex (*buildingMaterialIdOs, API_BuildingMaterialID, elem.mesh.buildingMaterial)) {
+                    executionResults (CreateFailedExecutionResult (APIERR_BADPARS, "Invalid mesh building material."));
+                    continue;
+                }
+                ACAPI_ELEMENT_MASK_SET (mask, API_MeshType, buildingMaterial);
             }
 
             UInt64 memoChangeMask = 0;

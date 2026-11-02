@@ -16,6 +16,17 @@ void BuildMeshSublinesMemoFromGeometry (
     API_ElementMemo& memo,
     const GS::Array<GS::ObjectState>& sublines);
 
+// Shared by CreateMeshes and ModifyMeshes: the layer, story visibility, cover fill, surface and pen
+// settings of the Mesh. Writes the mask bits; returns an error text on an invalid value.
+GS::Optional<GS::UniString> ApplyMeshSettings (
+    API_Element& element,
+    API_Element& mask,
+    const GS::ObjectState& os,
+    bool& changed);
+
+// The JSON schema properties of ApplyMeshSettings, without the surrounding object.
+extern const char* MeshSettingsSchemaProperties;
+
 // Shared by CreateSlabsCommand (ElementCreationCommands.cpp) and ModifySlabsCommand: applies the
 // 'structureType' / 'buildingMaterialId' / 'compositeId' fields of details to element.slab.
 // mask may be nullptr on create. Returns an error text on an invalid or conflicting selection.
@@ -39,6 +50,7 @@ public:
     CreateBeamsCommand ();
     virtual GS::Optional<GS::UniString> GetInputParametersSchema () const override;
     virtual GS::Optional<GS::ObjectState> SetTypeSpecificParameters (API_Element& element, API_ElementMemo& memo, const Stories& stories, const GS::ObjectState& parameters) const override;
+    virtual GS::Optional<GS::ObjectState> ChangeAfterCreation (API_Element& element, const Stories& stories, const GS::ObjectState& parameters) const override;
 };
 
 class CreateStairsCommand : public CreateElementsCommandBase

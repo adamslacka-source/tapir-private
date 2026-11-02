@@ -591,7 +591,7 @@ void AddBeamSectionFromMemo (const API_Guid& elemGuid, GS::ObjectState& os)
 {
     API_ElementMemo memo = {};
     const GS::OnExit guard ([&memo] () { ACAPI_DisposeElemMemoHdls (&memo); });
-    if (ACAPI_Element_GetMemo (elemGuid, &memo, APIMemoMask_BeamSegment) != NoError || memo.beamSegments == nullptr) {
+    if (ACAPI_Element_GetMemo (elemGuid, &memo, APIMemoMask_BeamSegment | APIMemoMask_AssemblySegmentCut | APIMemoMask_AssemblySegmentScheme | APIMemoMask_Gables) != NoError || memo.beamSegments == nullptr) {
         return;
     }
     const GSSize nSegments = BMGetPtrSize (reinterpret_cast<GSPtr> (memo.beamSegments)) / sizeof (API_BeamSegmentType);
@@ -607,6 +607,71 @@ void AddBeamSectionFromMemo (const API_Guid& elemGuid, GS::ObjectState& os)
         os.Add ("buildingMaterialId", CreateGuidObjectState (GetAttributeGuidFromIndex (API_BuildingMaterialID, segment.buildingMaterial)));
     } else if (segment.modelElemStructureType == API_ProfileStructure) {
         os.Add ("profileId", CreateGuidObjectState (GetAttributeGuidFromIndex (API_ProfileID, segment.profileAttr)));
+    }
+
+    const auto& segments = os.AddList<GS::ObjectState> ("segments");
+    for (GSSize i = 0; i < nSegments; ++i) {
+        const API_BeamSegmentType& beamSegment = memo.beamSegments[i];
+        const API_AssemblySegmentData& data = beamSegment.assemblySegmentData;
+        GS::ObjectState segmentOs;
+        segmentOs.Add ("index", static_cast<Int32> (i));
+        segmentOs.Add ("segmentId", CreateGuidObjectState (beamSegment.head.guid));
+        segmentOs.Add ("structureType", data.modelElemStructureType == API_ProfileStructure ? GS::UniString ("Profile") : GS::UniString ("Basic"));
+        if (data.modelElemStructureType == API_ProfileStructure) {
+            segmentOs.Add ("profileId", CreateGuidObjectState (GetAttributeGuidFromIndex (API_ProfileID, data.profileAttr)));
+            segmentOs.Add ("profileType", static_cast<Int32> (data.profileType));
+        } else {
+            segmentOs.Add ("buildingMaterialId", CreateGuidObjectState (GetAttributeGuidFromIndex (API_BuildingMaterialID, data.buildingMaterial)));
+        }
+        segmentOs.Add ("circleBased", data.circleBased);
+        segmentOs.Add ("width", data.nominalWidth);
+        segmentOs.Add ("height", data.nominalHeight);
+        segmentOs.Add ("isWidthAndHeightLinked", data.isWidthAndHeightLinked);
+        segmentOs.Add ("isHomogeneous", data.isHomogeneous);
+        segmentOs.Add ("endWidth", data.endWidth);
+        segmentOs.Add ("endHeight", data.endHeight);
+        segmentOs.Add ("isEndWidthAndHeightLinked", data.isEndWidthAndHeightLinked);
+        segmentOs.Add ("relativeHomeStoryLevel", data.relativeHomeStoryLevel);
+        segmentOs.Add ("leftMaterial", CreateOverriddenMaterialObjectState (beamSegment.leftMaterial));
+        segmentOs.Add ("topMaterial", CreateOverriddenMaterialObjectState (beamSegment.topMaterial));
+        segmentOs.Add ("rightMaterial", CreateOverriddenMaterialObjectState (beamSegment.rightMaterial));
+        segmentOs.Add ("bottomMaterial", CreateOverriddenMaterialObjectState (beamSegment.bottomMaterial));
+        segmentOs.Add ("endsMaterial", CreateOverriddenMaterialObjectState (beamSegment.endsMaterial));
+        segmentOs.Add ("extrusionMaterial", CreateOverriddenMaterialObjectState (beamSegment.extrusionMaterial));
+        segmentOs.Add ("materialsChained", beamSegment.materialsChained);
+        segments (segmentOs);
+    }
+
+    if (memo.assemblySegmentCuts != nullptr) {
+        const auto& cuts = os.AddList<GS::ObjectState> ("cuts");
+        const GSSize nCuts = BMGetPtrSize (reinterpret_cast<GSPtr> (memo.assemblySegmentCuts)) / sizeof (API_AssemblySegmentCutData);
+        for (GSSize i = 0; i < nCuts; ++i) {
+            const API_AssemblySegmentCutData& cut = memo.assemblySegmentCuts[i];
+            const char* type = cut.cutType == APIAssemblySegmentCut_Vertical ? "Vertical" : (cut.cutType == APIAssemblySegmentCut_Custom ? "Custom" : "Horizontal");
+            cuts (GS::ObjectState ("type", GS::UniString (type), "customAngle", cut.customAngle));
+        }
+    }
+
+    if (memo.assemblySegmentSchemes != nullptr) {
+        const auto& schemes = os.AddList<GS::ObjectState> ("schemes");
+        const GSSize nSchemes = BMGetPtrSize (reinterpret_cast<GSPtr> (memo.assemblySegmentSchemes)) / sizeof (API_AssemblySegmentSchemeData);
+        for (GSSize i = 0; i < nSchemes; ++i) {
+            const API_AssemblySegmentSchemeData& scheme = memo.assemblySegmentSchemes[i];
+            schemes (GS::ObjectState (
+                "lengthType", scheme.lengthType == APIAssemblySegment_Fixed ? GS::UniString ("Fixed") : GS::UniString ("Proportional"),
+                "fixedLength", scheme.fixedLength,
+                "lengthProportion", scheme.lengthProportion));
+        }
+    }
+
+    if (memo.gables != nullptr) {
+        const auto& gables = os.AddList<GS::ObjectState> ("gables");
+        const GSSize nGables = BMhGetSize (reinterpret_cast<GSHandle> (memo.gables)) / sizeof (API_Gable);
+        for (GSIndex i = 0; i < nGables; ++i) {
+            const API_Gable& gable = (*memo.gables)[i];
+            gables (GS::ObjectState ("a", gable.a, "b", gable.b, "c", gable.c, "d", gable.d,
+                "xb", gable.xb, "xe", gable.xe, "nx", gable.nx, "ny", gable.ny));
+        }
     }
 }
 

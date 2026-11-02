@@ -2683,7 +2683,7 @@ CreateMeshesCommand::CreateMeshesCommand () :
 
 GS::Optional<GS::UniString> CreateMeshesCommand::GetInputParametersSchema () const
 {
-    return R"({
+    return GS::UniString (R"({
     "type": "object",
     "properties": {
         "meshesData": {
@@ -2759,7 +2759,7 @@ GS::Optional<GS::UniString> CreateMeshesCommand::GetInputParametersSchema () con
                             "$ref": "#/MeshSubline"
                         },
                         "minItems": 1
-                    }
+                    },)") + GS::UniString (MeshSettingsSchemaProperties) + R"(
                 },
                 "additionalProperties": false,
                 "required": [
@@ -2852,6 +2852,57 @@ GS::Optional<GS::ObjectState> CreateMeshesCommand::SetTypeSpecificParameters (AP
         element.mesh.botMat = API_OverriddenAttribute ();
     }
 
+    API_Element mask = {};
+    ACAPI_ELEMENT_MASK_CLEAR (mask);
+    bool changed = false;
+    const GS::Optional<GS::UniString> settingsError = ApplyMeshSettings (element, mask, parameters, changed);
+    if (settingsError.HasValue ()) {
+        return CreateErrorResponse (APIERR_BADPARS, settingsError.Get ());
+    }
+
+    return {};
+}
+
+// Same as CreateBeamsCommand::ChangeAfterCreation: what ACAPI_Element_Create did not keep from the
+// settings is written again with a masked change. No extra call for a request without settings.
+GS::Optional<GS::ObjectState> CreateMeshesCommand::ChangeAfterCreation (API_Element& element, const Stories& /*stories*/, const GS::ObjectState& parameters) const
+{
+    API_Element mask = {};
+    ACAPI_ELEMENT_MASK_CLEAR (mask);
+    bool hasSettings = false;
+    {
+        API_Element dryRun = element;
+        ApplyMeshSettings (dryRun, mask, parameters, hasSettings);
+        ACAPI_ELEMENT_MASK_CLEAR (mask);
+    }
+    if (!hasSettings) {
+        return {};
+    }
+
+    API_Element fresh = {};
+    fresh.header.guid = element.header.guid;
+    GSErrCode err = ACAPI_Element_Get (&fresh);
+    if (err != NoError) {
+        return CreateErrorResponse (err, "The mesh was created, but it could not be read back to check its settings.");
+    }
+
+    const API_Element before = fresh;
+    bool changed = false;
+    const GS::Optional<GS::UniString> settingsError = ApplyMeshSettings (fresh, mask, parameters, changed);
+    if (settingsError.HasValue ()) {
+        return CreateErrorResponse (APIERR_BADPARS, GS::UniString ("The mesh was created, but: ") + settingsError.Get ());
+    }
+    // A creation instruction, not a setting: writing it again could move the mesh to another story.
+    fresh.mesh.linkToSettings = before.mesh.linkToSettings;
+
+    if (std::memcmp (static_cast<const void*> (&before), static_cast<const void*> (&fresh), sizeof (API_Element)) == 0) {
+        return {};
+    }
+    err = ACAPI_Element_Change (&fresh, &mask, nullptr, 0, true);
+    if (err != NoError) {
+        return CreateErrorResponse (err, "The mesh was created, but Archicad refused to apply its settings.");
+    }
+    element.header = fresh.header;
     return {};
 }
 
