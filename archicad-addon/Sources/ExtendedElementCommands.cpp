@@ -1749,6 +1749,8 @@ GS::Optional<GS::UniString> ApplySlabStructure (
 
 namespace {
 
+static void MergeStoryVisibility (const GS::ObjectState& os, API_StoryVisibility& visibility);
+
 bool ApplyWallDetails (API_Element& element, API_Element& mask, const GS::ObjectState& details)
 {
     bool changed = false;
@@ -1870,8 +1872,9 @@ bool ApplyWallDetails (API_Element& element, API_Element& mask, const GS::Object
     }
     GS::ObjectState visibilityOs;
     if (details.Get ("visibility", visibilityOs)) {
-        element.wall.visibility = GetStoryVisibilityFromObjectState (visibilityOs);
-        ACAPI_ELEMENT_MASK_SET (mask, API_WallType, visibility);
+        MergeStoryVisibility (visibilityOs, element.wall.visibility);
+        // ACAPI_ELEMENT_MASK_SET would mark only the first member of the structure (showOnHome).
+        std::memset (&reinterpret_cast<API_WallType*> (&mask)->visibility, 0xFF, sizeof (API_StoryVisibility));
         changed = true;
         if (!details.Contains ("isAutoOnStoryVisibility")) {
             // isAutoOnStoryVisibility defaults to true on a wall, in which case Archicad
@@ -3570,11 +3573,12 @@ bool ApplyMorphCosmeticDetails (const GS::ObjectState& details, API_Element& ele
     };
     applyStoryVisibility ("showContour", element.morph.showContour);
     if (details.Get ("showContour") != nullptr && mask != nullptr) {
-        ACAPI_ELEMENT_MASK_SET (*mask, API_MorphType, showContour);
+        // ACAPI_ELEMENT_MASK_SET would mark only the first member of the structure (showOnHome).
+        std::memset (&reinterpret_cast<API_MorphType*> (mask)->showContour, 0xFF, sizeof (API_StoryVisibility));
     }
     applyStoryVisibility ("showFill", element.morph.showFill);
     if (details.Get ("showFill") != nullptr && mask != nullptr) {
-        ACAPI_ELEMENT_MASK_SET (*mask, API_MorphType, showFill);
+        std::memset (&reinterpret_cast<API_MorphType*> (mask)->showFill, 0xFF, sizeof (API_StoryVisibility));
     }
 
     {

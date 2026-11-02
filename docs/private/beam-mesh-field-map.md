@@ -129,7 +129,7 @@ Položka `BeamSegment` (`API_BeamSegmentType`): `width` (`nominalWidth`), `heigh
 
 Od tohto buildu `warnings` (zoznam textov) vracia `ModifyBeams`, `ModifyMeshes`, `CreateBeams`, `CreateMeshes`, keď ArchiCAD zadanú hodnotu nezachoval. Pole je len pri výskyte, staré skripty ho môžu ignorovať.
 
-Rovnaká chyba masky je aj v `ModifyWalls` (`visibility`) a v Morph (`showContour`, `showFill`); mimo rozsahu tejto úlohy, neopravené.
+Rovnaká chyba masky bola aj v `ModifyWalls` (`visibility`) a `ModifyMorphs` (`showContour`, `showFill`); opravené rovnako, NEOVERENÉ živo. Wall teraz mení len zadané členy `visibility`.
 
 ## Čo sa pokryť nedá a NEOVERENÉ
 
